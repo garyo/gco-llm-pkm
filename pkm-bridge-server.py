@@ -16,8 +16,10 @@ system via Claude API with tools.
 import os
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Any
+from contextlib import contextmanager
 
 from anthropic import Anthropic
 from flask import Flask, request, jsonify, render_template
@@ -30,6 +32,8 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 if not ANTHROPIC_API_KEY:
     raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
+
+MODEL = os.getenv("MODEL", "claude-haiku-4-5")
 
 ORG_DIR = Path(os.getenv("ORG_DIR", "~/Documents/org-agenda")).expanduser()
 if not ORG_DIR.exists():
@@ -50,7 +54,7 @@ PORT = int(os.getenv("PORT", "8000"))
 HOST = os.getenv("HOST", "127.0.0.1")
 
 ALLOWED_COMMANDS = set(
-    os.getenv("ALLOWED_COMMANDS", "rg,ripgrep,grep,find,cat,ls,emacs,git").split(",")
+    os.getenv("ALLOWED_COMMANDS", "rg,ripgrep,grep,fd,find,cat,ls,emacs,git").split(",")
 )
 
 # Initialize Flask and Anthropic client
@@ -59,6 +63,17 @@ client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # Session storage (in-memory for now; use Redis for production)
 sessions: Dict[str, Dict[str, Any]] = {}
+
+
+@contextmanager
+def timer(label: str):
+    """Context manager for timing operations"""
+    start = time.time()
+    try:
+        yield
+    finally:
+        elapsed = time.time() - start
+        print(f"[TIMER] {label}: {elapsed:.3f}s")
 
 
 def get_system_prompt() -> str:
@@ -127,9 +142,18 @@ def get_tools() -> List[Dict[str, Any]]:
 - Search org-mode only: rg -i '#emacs' {org_dir}
 - Search Logseq only: rg -i '#emacs' {logseq_dir}
 - Search both: rg -i '#emacs' {org_dir} {logseq_dir}
-- Find recent files: find {org_dir} -type f -mtime -7
+- Find .org files: fd -e org . {org_dir}
+- Find recent files: fd --changed-within 7d . {org_dir}
+- Find by name: fd journal {org_dir}
 - Run org-ql: emacs --batch --eval '(progn (require \\'org-ql) ...)'
-- Count entries: rg -c '^\\*\\*\\*' journal.org"""
+- Count entries: rg -c '^\\*\\*\\*' journal.org
+
+fd usage tips:
+- fd uses regex patterns (not globs like find)
+- fd is case-insensitive by default (use -s for case-sensitive)
+- fd ignores hidden/git-ignored files by default (use -H/-I to include)
+- fd -e ext: filter by extension
+- fd --changed-within TIME: filter by modification time"""
 
     if LOGSEQ_DIR:
         search_examples = search_examples.format(
@@ -149,8 +173,8 @@ def get_tools() -> List[Dict[str, Any]]:
 
 Available tools:
 - ripgrep (rg): Fast text search with PCRE regex
+- fd: Fast, user-friendly alternative to find (uses regex patterns, smart case)
 - emacs: Batch mode for org-ql queries and file manipulation
-- find: Locate files by name, date, etc.
 - cat, head, tail: Read files
 - git: Version control operations (log, diff, etc.)
 
@@ -240,20 +264,21 @@ Available directories:
 
 def execute_shell_command(command: str, working_dir: str = None) -> str:
     """Execute shell command with safety checks"""
-    
+
     # Use default working directory if not specified
     if working_dir is None:
         working_dir = str(ORG_DIR)
-    
+
     # Security: Check if command starts with allowed binary
     cmd_binary = command.split()[0]
     if cmd_binary not in ALLOWED_COMMANDS:
         return f"❌ Command not allowed: {cmd_binary}\nAllowed: {', '.join(sorted(ALLOWED_COMMANDS))}"
-    
+
     # Log the command (important for debugging and security)
     print(f"[EXEC] {command} (cwd: {working_dir})")
-    
+
     try:
+        start_time = time.time()
         result = subprocess.run(
             command,
             shell=True,
@@ -262,19 +287,21 @@ def execute_shell_command(command: str, working_dir: str = None) -> str:
             text=True,
             timeout=30  # Prevent hanging
         )
-        
+        elapsed = time.time() - start_time
+        print(f"[TIMER] Shell command: {elapsed:.3f}s")
+
         output = result.stdout
         if result.stderr:
             output += f"\n[stderr]: {result.stderr}"
         if result.returncode != 0:
             output += f"\n[exit code: {result.returncode}]"
-        
+
         # Truncate very long output
         if len(output) > 20000:
             output = output[:20000] + "\n\n... (output truncated, too long)"
-        
+
         return output if output else "[No output]"
-    
+
     except subprocess.TimeoutExpired:
         return "❌ Command timed out after 30 seconds"
     except Exception as e:
@@ -309,11 +336,25 @@ def list_org_files(pattern: str = "*", show_stats: bool = False, directory: str 
                 # Non-recursive glob
                 files = list(base_dir.glob(pattern))
 
+            # Filter out .git directories and hidden files by default
+            files = [f for f in files if '.git' not in f.parts and not any(part.startswith('.') for part in f.parts)]
+
             if not files:
                 return []
 
-            # Sort by name
-            files.sort()
+            # Sort by modification time (most recent first) if showing stats, otherwise by name
+            if show_stats:
+                files.sort(key=lambda f: f.stat().st_mtime if f.is_file() else 0, reverse=True)
+            else:
+                files.sort()
+
+            # Limit to prevent token overflow
+            MAX_FILES = 100
+            if len(files) > MAX_FILES:
+                files = files[:MAX_FILES]
+                truncated = True
+            else:
+                truncated = False
 
             # Format output
             output = []
@@ -323,10 +364,13 @@ def list_org_files(pattern: str = "*", show_stats: bool = False, directory: str 
                     size = f.stat().st_size
                     size_str = f"{size:,} bytes" if size < 1024 else f"{size/1024:.1f} KB"
                     mtime = f.stat().st_mtime
-                    mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+                    mtime_str = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
                     output.append(f"[{dir_label}] {rel_path} ({size_str}, modified {mtime_str})")
                 else:
                     output.append(f"[{dir_label}] {rel_path}")
+
+            if truncated:
+                output.append(f"\n... (showing {MAX_FILES} of {len(files) + len(output)} files)")
 
             return output
 
@@ -380,52 +424,68 @@ def index():
 @app.route('/query', methods=['POST'])
 def query():
     """Handle user queries"""
+    request_start = time.time()
+
     data = request.json
     session_id = data.get('session_id', 'default')
     user_message = data['message']
-    
+    # Allow per-request model override
+    model = data.get('model', MODEL)
+
     # Get or create session
     if session_id not in sessions:
         sessions[session_id] = {
             'history': [],
             'system_prompt': get_system_prompt()
         }
-    
+
     session = sessions[session_id]
-    
+
     # Add user message to history
     session['history'].append({
         "role": "user",
         "content": user_message
     })
-    
+
     print(f"[USER] {user_message}")
-    
+
     try:
-        # Call Claude with tools
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=8192,
-            system=session['system_prompt'],
-            messages=session['history'],
-            tools=get_tools()
-        )
-        
+        # Call Claude with tools (with prompt caching for system prompt)
+        with timer(f"Initial Claude API call ({model})"):
+            response = client.messages.create(
+                model=model,
+                max_tokens=8192,
+                system=[
+                    {
+                        "type": "text",
+                        "text": session['system_prompt'],
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
+                messages=session['history'],
+                tools=get_tools()
+            )
+
+        api_call_count = 1
+        tool_call_count = 0
+
         # Handle tool use loop
         while response.stop_reason == "tool_use":
             # Extract tool calls and execute them
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
+                    tool_call_count += 1
                     print(f"[TOOL] {block.name} with params: {block.input}")
-                    result = execute_tool(block.name, block.input)
+                    with timer(f"Tool execution: {block.name}"):
+                        result = execute_tool(block.name, block.input)
                     print(f"[RESULT] {result[:200]}{'...' if len(result) > 200 else ''}")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": result
                     })
-            
+
             # Add assistant message and tool results to history
             session['history'].append({
                 "role": "assistant",
@@ -435,35 +495,45 @@ def query():
                 "role": "user",
                 "content": tool_results
             })
-            
-            # Continue conversation
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=8192,
-                system=session['system_prompt'],
-                messages=session['history'],
-                tools=get_tools()
-            )
-        
+
+            # Continue conversation (with prompt caching)
+            api_call_count += 1
+            with timer(f"Claude API call #{api_call_count} ({model})"):
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=8192,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": session['system_prompt'],
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ],
+                    messages=session['history'],
+                    tools=get_tools()
+                )
+
         # Extract final text response
         assistant_text = ""
         for block in response.content:
             if block.type == "text":
                 assistant_text += block.text
-        
+
         # Add to history
         session['history'].append({
             "role": "assistant",
             "content": response.content
         })
-        
+
+        total_elapsed = time.time() - request_start
         print(f"[ASSISTANT] {assistant_text[:200]}{'...' if len(assistant_text) > 200 else ''}")
-        
+        print(f"[TIMER] Total request: {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
+
         return jsonify({
             "response": assistant_text,
             "session_id": session_id
         })
-    
+
     except Exception as e:
         print(f"[ERROR] {str(e)}")
         return jsonify({
@@ -532,6 +602,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print("gco-pkm-llm Bridge Server")
     print("=" * 60)
+    print(f"Model: {MODEL}")
     print(f"Org files (primary): {ORG_DIR}")
     if LOGSEQ_DIR:
         print(f"Logseq notes (archival): {LOGSEQ_DIR}")

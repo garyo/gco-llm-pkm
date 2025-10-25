@@ -88,6 +88,15 @@ else
     echo "✓ ripgrep found"
 fi
 
+# Check for fd
+if ! command -v fd &> /dev/null; then
+    echo "⚠️  fd not found"
+    echo "   Install with: brew install fd (macOS)"
+    echo "   Or: https://github.com/sharkdp/fd#installation"
+else
+    echo "✓ fd found"
+fi
+
 # Check for emacs
 if ! command -v emacs &> /dev/null; then
     echo "⚠️  emacs not found"

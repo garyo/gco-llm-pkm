@@ -1,3 +1,8 @@
+---
+name: journal-navigation
+description: Journal Navigation Skill
+---
+
 # Journal Navigation Skill
 
 This skill provides guidance on working with the hierarchical journal structure used in the user's PKM system.
@@ -71,7 +76,7 @@ rg "^\\*\\*\\* <$YEAR" journal.org
 
 ## Adding Content to Journal
 
-**IMPORTANT**: The user has a custom Emacs function `gco-pkm-journal-today` that properly handles journal structure using org-ml. Prefer using Emacs batch mode over manual text manipulation.
+**IMPORTANT**: The user has a custom Emacs function `gco-pkm-journal-today` that properly handles journal structure using org-ml. Prefer using Emacs batch mode over manual text manipulation. All journal additions **must** respect the date hierarchy, and be added under the proper date.
 
 ### Using Emacs Batch Mode (Recommended)
 
@@ -82,7 +87,6 @@ emacs --batch \
     (require 'gco-pkm)
     (find-file \"$ORG_DIR/journal.org\")
     (gco-pkm-journal-today)
-    (goto-char (point-max))
     (insert \"\n- New entry here\n\")
     (save-buffer)
     (message \"Added to journal\"))"
@@ -96,15 +100,7 @@ This approach:
 
 ### Quick Append (Simple Cases Only)
 
-For very simple appends when you KNOW today's entry exists:
-
-```bash
-TODAY=$(date +"%Y-%m-%d")
-
-# Find today's entry and append
-# WARNING: This is fragile - prefer Emacs batch mode
-echo "- Added via script $(date)" >> journal.org
-```
+Do NOT attempt to just append to the org journal file. Always use Emacs.
 
 ## Extracting Information
 

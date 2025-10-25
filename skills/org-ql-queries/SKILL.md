@@ -1,3 +1,8 @@
+---
+name: org-ql-queries
+description: Org-QL Queries Skill
+---
+
 # Org-QL Queries Skill
 
 This skill provides guidance on constructing and executing org-ql queries via Emacs batch mode.

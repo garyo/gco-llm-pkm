@@ -1,3 +1,8 @@
+---
+name: search-patterns
+description: Search Patterns Skill
+---
+
 # Search Patterns Skill
 
 This skill provides guidance on effective searching in org-mode files using ripgrep.

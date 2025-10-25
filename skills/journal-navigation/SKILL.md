@@ -76,31 +76,9 @@ rg "^\\*\\*\\* <$YEAR" journal.org
 
 ## Adding Content to Journal
 
-**IMPORTANT**: The user has a custom Emacs function `gco-pkm-journal-today` that properly handles journal structure using org-ml. Prefer using Emacs batch mode over manual text manipulation. All journal additions **must** respect the date hierarchy, and be added under the proper date.
+**IMPORTANT**: The user has a custom Emacs function `gco-pkm-journal-today` that properly handles journal structure using org-ml. All journal additions **must** respect the date hierarchy and be added under the proper date.
 
-### Using Emacs Batch Mode (Recommended)
-
-```bash
-emacs --batch \
-  --eval "(progn
-    (add-to-list 'load-path \"~/.config/emacs/lisp\")
-    (require 'gco-pkm)
-    (find-file \"$ORG_DIR/journal.org\")
-    (gco-pkm-journal-today)
-    (insert \"\n- New entry here\n\")
-    (save-buffer)
-    (message \"Added to journal\"))"
-```
-
-This approach:
-- Handles creating today's entry if it doesn't exist
-- Creates parent year/month structure if needed
-- Uses reliable AST-based manipulation (org-ml)
-- Properly formats timestamps and property drawers
-
-### Quick Append (Simple Cases Only)
-
-Do NOT attempt to just append to the org journal file. Always use Emacs.
+Always use the add_journal_note tool to add journal notes; do not attempt to use shell tools because the file structure is very specific and sensitive.
 
 ## Extracting Information
 

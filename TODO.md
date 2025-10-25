@@ -3,14 +3,11 @@
 ## Phase 1: Initial Setup ⏳
 
 ### Environment Setup
-- [ ] Create virtual environment: `python3 -m venv venv`
-- [ ] Install dependencies: `pip install -r requirements.txt`
 - [ ] Copy `.env.example` to `.env`
 - [ ] Add Anthropic API key to `.env`
 - [ ] Set `ORG_DIR` to your org-agenda directory in `.env`
 - [ ] Verify ripgrep is installed: `which rg`
 - [ ] Verify Emacs is installed: `which emacs`
-- [ ] Test Emacs can load org-ql: `emacs --batch --eval "(require 'org-ql)"`
 
 ### Directory Structure
 - [ ] Create `templates/` directory

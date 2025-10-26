@@ -9,7 +9,7 @@ from .base import BaseTool
 class ListFilesTool(BaseTool):
     """List files in PKM directories with optional stats."""
 
-    def __init__(self, logger, org_dir: Path, logseq_dir: Path = None):
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
         """Initialize file listing tool.
 
         Args:
@@ -105,7 +105,7 @@ class ListFilesTool(BaseTool):
             if directory in ["logseq", "both"] and self.logseq_dir:
                 all_output.extend(list_from_dir(self.logseq_dir, "logseq"))
             elif directory == "logseq" and not self.logseq_dir:
-                error_msg = "❌ Logseq directory not configured or does not exist"
+                error_msg = "Logseq directory not configured or does not exist"
                 self.logger.error(error_msg)
                 return error_msg
 
@@ -115,6 +115,6 @@ class ListFilesTool(BaseTool):
             return "\n".join(all_output)
 
         except Exception as e:
-            error_msg = f"❌ Error listing files: {str(e)}"
+            error_msg = f"Error listing files: {str(e)}"
             self.logger.error(f"{error_msg} (pattern: {pattern}, directory: {directory})")
             return error_msg

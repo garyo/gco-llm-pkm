@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PKM Assistant</title>
+  <title>GCO PKM Assistant</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * {
       box-sizing: border-box;
@@ -41,10 +42,9 @@
     }
 
     .message {
-      padding: 0.75rem 1rem;
+      padding: 0.75rem 1.5rem;
       border-radius: 12px;
       max-width: 80%;
-      line-height: 1.5;
       white-space: pre-wrap;
       word-wrap: break-word;
     }
@@ -74,6 +74,109 @@
 
     .message.user code {
       background: rgba(255,255,255,0.2);
+    }
+
+    /* Markdown styling for assistant messages */
+    .message.assistant h1,
+    .message.assistant h2,
+    .message.assistant h3,
+    .message.assistant h4,
+    .message.assistant h5,
+    .message.assistant h6 {
+      margin-top: 0.3em;
+      margin-bottom: 0.15em;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .message.assistant h1 { font-size: 1.4em; }
+    .message.assistant h2 { font-size: 1.25em; }
+    .message.assistant h3 { font-size: 1.1em; }
+    .message.assistant h4 { font-size: 1em; }
+
+    .message.assistant h1:first-child,
+    .message.assistant h2:first-child,
+    .message.assistant h3:first-child {
+      margin-top: 0;
+    }
+
+    .message.assistant p {
+      margin-bottom: 0.35em;
+    }
+
+    .message.assistant p:last-child {
+      margin-bottom: 0;
+    }
+
+    .message.assistant ul,
+    .message.assistant ol {
+      margin: 0.15em 0 0.35em 1.5em;
+    }
+
+    .message.assistant li {
+      margin-bottom: 0.0em;
+    }
+
+    .message.assistant pre {
+      background: #f6f8fa;
+      padding: 0.5rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 0.2em 0 0.35em 0;
+    }
+
+    .message.assistant pre code {
+      background: transparent;
+      padding: 0;
+      font-size: 0.85em;
+    }
+
+    .message.assistant blockquote {
+      border-left: 3px solid #007aff;
+      padding-left: 1em;
+      margin: 0.35em 0;
+      color: #666;
+    }
+
+    .message.assistant hr {
+      border: none;
+      border-top: 1px solid #e0e0e0;
+      margin: 0.35em 0;
+    }
+
+    .message.assistant a {
+      color: #007aff;
+      text-decoration: none;
+    }
+
+    .message.assistant a:hover {
+      text-decoration: underline;
+    }
+
+    .message.assistant table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1em 0;
+    }
+
+    .message.assistant th,
+    .message.assistant td {
+      border: 1px solid #ddd;
+      padding: 0.5em;
+      text-align: left;
+    }
+
+    .message.assistant th {
+      background: #f6f8fa;
+      font-weight: 600;
+    }
+
+    .message.assistant strong {
+      font-weight: 600;
+    }
+
+    .message.assistant em {
+      font-style: italic;
     }
 
     #input-area {
@@ -227,7 +330,7 @@
 </head>
 <body>
   <div id="header">
-    <h1>PKM Assistant</h1>
+    <h1>GCO PKM Assistant</h1>
   </div>
 
   <div id="chat">
@@ -340,8 +443,14 @@
     function appendMessage(role, text) {
       const div = document.createElement('div');
       div.className = `message ${role}`;
-      div.textContent = text;
-      
+
+      // Render markdown for assistant messages, plain text for user messages
+      if (role === 'assistant') {
+        div.innerHTML = marked.parse(text);
+      } else {
+        div.textContent = text;
+      }
+
       // Insert before loading indicator
       chat.insertBefore(div, loading);
       chat.scrollTop = chat.scrollHeight;

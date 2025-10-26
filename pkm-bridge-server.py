@@ -5,6 +5,7 @@
 #   "flask>=3.0.0",
 #   "python-dotenv>=1.0.0",
 #   "pyyaml>=6.0.2",
+#   "flask-hot-reload>=0.3.0",
 # ]
 # ///
 """
@@ -19,6 +20,7 @@ from typing import Dict, Any
 
 from anthropic import Anthropic
 from flask import Flask, request, jsonify, render_template
+from flask_hot_reload import HotReload
 
 # Import configuration and logging
 from config.settings import Config
@@ -28,6 +30,7 @@ from pkm_bridge.logging_config import setup_logging
 from pkm_bridge.tools.registry import ToolRegistry
 from pkm_bridge.tools.shell import ExecuteShellTool
 from pkm_bridge.tools.files import ListFilesTool
+from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.journal import JournalNoteTool
 from pkm_bridge.tools.skills import SkillRegistry, LoadSkillTool, RunSkillTool
 
@@ -46,6 +49,10 @@ client = Anthropic(api_key=config.anthropic_api_key)
 
 # Flask app
 app = Flask(__name__)
+
+# Enable browser hot-reload in debug mode
+if config.debug:
+    HotReload(app, includes=['templates', 'static'])
 
 # In-memory sessions
 sessions: Dict[str, Dict[str, Any]] = {}
@@ -67,6 +74,7 @@ execute_shell_tool = ExecuteShellTool(
 tool_registry.register(execute_shell_tool)
 
 tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
+tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(JournalNoteTool(logger, config.org_dir))
 tool_registry.register(LoadSkillTool(logger, skill_registry))
 tool_registry.register(RunSkillTool(logger, skill_registry, execute_shell_tool))
@@ -265,6 +273,8 @@ if __name__ == '__main__':
     logger.info(f"Tools: {', '.join(tool_registry.list_tools())}")
     logger.info(f"Server starting at http://{config.host}:{config.port}")
     logger.info(f"Log level: {config.log_level}")
+    if config.debug:
+        logger.info("Browser hot-reload enabled")
     logger.info("=" * 60)
 
     # In production, use proper WSGI server (gunicorn, waitress, etc.)

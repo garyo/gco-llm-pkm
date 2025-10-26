@@ -74,18 +74,10 @@ class Config:
         """
         template = self.system_prompt_file.read_text(encoding="utf-8")
 
-        # Build logseq info string
-        logseq_info = ""
-        logseq_constraint = ""
-        if self.logseq_dir:
-            logseq_info = f"\nLogseq notes (archival, read-only): {self.logseq_dir}"
-            logseq_constraint = f"- {self.logseq_dir} (SECONDARY - read-only)\n"
-
         # Replace placeholders
         return template.format(
             ORG_DIR=self.org_dir,
-            LOGSEQ_INFO=logseq_info,
-            LOGSEQ_CONSTRAINT=logseq_constraint
+            LOGSEQ_DIR=self.logseq_dir
         )
 
     def __repr__(self) -> str:

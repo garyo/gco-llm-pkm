@@ -1,4 +1,4 @@
-"""Shell command execution tool."""
+"""Note-searching tool."""
 
 import subprocess
 import time
@@ -7,26 +7,26 @@ from typing import Dict, Any, Set
 from .base import BaseTool
 
 
-class ExecuteShellTool(BaseTool):
-    """Execute whitelisted shell commands in PKM directories."""
+class SearchNotesTool(BaseTool):
+    """Search all notes in PKM directories."""
 
-    def __init__(self, logger, allowed_commands: Set[str], org_dir: Path, logseq_dir: Path|None = None):
-        """Initialize shell execution tool.
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
+        """Initialize search_notes tool.
 
         Args:
             logger: Logger instance
-            allowed_commands: Set of allowed command names
             org_dir: Primary org-mode directory
             logseq_dir: Optional Logseq directory
         """
         super().__init__(logger)
-        self.allowed_commands = allowed_commands
         self.org_dir = org_dir
         self.logseq_dir = logseq_dir
+        self.context = 3
+        self.limit = 10000
 
     @property
     def name(self) -> str:
-        return "execute_shell"
+        return "search_notes"
 
     @property
     def description(self) -> str:
@@ -34,18 +34,13 @@ class ExecuteShellTool(BaseTool):
         if self.logseq_dir:
             dirs_info += f"\nSECONDARY (Logseq, read-only): {self.logseq_dir}"
 
-        return f"""Execute a shell command with access to PKM files and tools.
-
-Available tools:
-- ripgrep (rg): fast PCRE2 search
-- fd: better find replacement (faster, regex patterns, smart case; always prefer this over find)
-- emacs: batch mode for org-ql, etc.
-- cat/head/tail, git
+        return f"""Search for a pattern in the PKM dirs.
+pattern: regex pattern to search for
+context: lines of context to return on each side
+limit: approx size limit of returned string
 
 Directories:
 {dirs_info}
-
-Security: Only whitelisted commands allowed: {', '.join(sorted(self.allowed_commands))}
 """
 
     @property
@@ -53,59 +48,56 @@ Security: Only whitelisted commands allowed: {', '.join(sorted(self.allowed_comm
         return {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command to execute"},
-                "working_dir": {"type": "string", "description": f"Working directory (defaults to {self.org_dir})"}
+                "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                "context": {"type": "number", "default": 3, "description": "Lines of context to return on each side of each match"},
+                "limit": {"type": "number", "default": "10000", "description": "Approx length limit of returned strign"},
             },
-            "required": ["command"]
+            "required": ["pattern"]
         }
 
     def execute(self, params: Dict[str, Any]) -> str:
         """Execute a whitelisted shell command.
 
         Args:
-            params: Dict with 'command' and optional 'working_dir'
+            params: Dict with args
 
         Returns:
             Command output or error message
         """
-        command = params["command"]
-        working_dir = params.get("working_dir") or str(self.org_dir)
+        pattern = params["pattern"]
+        context = params.get("context", self.context)
+        limit = params.get("limit", self.limit)
+        org_dir = params.get("org_dir", self.org_dir)
+        logseq_dir = params.get("logseq_dir", self.logseq_dir)
 
-        # Check if command is whitelisted
-        cmd_binary = (command.split() or [""])[0]
-        if cmd_binary not in self.allowed_commands:
-            return f"❌ Command not allowed: {cmd_binary}\nAllowed: {', '.join(sorted(self.allowed_commands))}"
+        self.logger.info(f"Searching for \"{pattern}\", context={context}, limit={limit}")
 
-        self.logger.info(f"Executing: {command} (cwd: {working_dir})")
-
+        command = ["rg", "-i", f"-C{context}", pattern, org_dir, logseq_dir]
         try:
             start_time = time.time()
+            self.logger.debug(f"Running command: {command}")
             result = subprocess.run(
                 command,
-                shell=True,
-                cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout = 15
             )
             elapsed = time.time() - start_time
             self.logger.debug(f"Shell command completed in {elapsed:.3f}s")
 
-            output = result.stdout or ""
+            output = result.stdout[:limit]
+
             if result.stderr:
                 self.logger.error(f"Shell command stderr: {result.stderr}")
                 output += f"\n[stderr]: {result.stderr}"
             if result.returncode != 0:
-                self.logger.error(f"Shell command failed with exit code {result.returncode}: {command}")
+                self.logger.error(f"Search (rg) command failed with exit code {result.returncode}: {command}")
                 output += f"\n[exit code: {result.returncode}]"
-
-            if len(output) > 20000:
-                output = output[:20000] + "\n\n... (output truncated)"
 
             return output if output else "[No output]"
 
         except subprocess.TimeoutExpired:
-            error_msg = "❌ Command timed out after 60 seconds"
+            error_msg = "❌ Command timed out"
             self.logger.error(f"{error_msg}: {command}")
             return error_msg
         except Exception as e:

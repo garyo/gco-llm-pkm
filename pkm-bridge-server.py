@@ -6,6 +6,9 @@
 #   "python-dotenv>=1.0.0",
 #   "pyyaml>=6.0.2",
 #   "flask-hot-reload>=0.3.0",
+#   "pyjwt>=2.8.0",
+#   "bcrypt>=4.1.0",
+#   "flask-limiter>=3.5.0",
 # ]
 # ///
 """
@@ -21,10 +24,15 @@ from typing import Dict, Any
 from anthropic import Anthropic
 from flask import Flask, request, jsonify, render_template
 from flask_hot_reload import HotReload
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # Import configuration and logging
 from config.settings import Config
 from pkm_bridge.logging_config import setup_logging
+
+# Import auth
+from pkm_bridge.auth import AuthManager
 
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
@@ -53,6 +61,25 @@ app = Flask(__name__)
 # Enable browser hot-reload in debug mode
 if config.debug:
     HotReload(app, includes=['templates', 'static'])
+
+# Initialize rate limiter
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per hour"],  # Global default
+    storage_uri="memory://",
+)
+
+# Initialize auth manager if enabled
+auth_manager = None
+if config.auth_enabled:
+    auth_manager = AuthManager(
+        secret_key=config.jwt_secret,
+        password_hash=config.password_hash,
+        token_expiry_hours=config.token_expiry_hours,
+        logger=logger
+    )
+    logger.info("Authentication enabled with rate limiting")
 
 # In-memory sessions
 sessions: Dict[str, Dict[str, Any]] = {}
@@ -105,9 +132,93 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/login', methods=['POST'])
+@limiter.limit("5 per minute")  # Strict rate limit on login attempts
+def login():
+    """Authenticate user and return JWT token.
+
+    Request body:
+        {"password": "user-password"}
+
+    Response:
+        {"token": "jwt-token-string", "expires_in": hours}
+        or {"error": "message"} with 401 status
+    """
+    client_ip = request.remote_addr
+    user_agent = request.headers.get('User-Agent', 'Unknown')
+
+    if not config.auth_enabled:
+        logger.warning(f"Login attempted from {client_ip} but auth is disabled")
+        return jsonify({"error": "Authentication is disabled"}), 400
+
+    data = request.json
+    password = data.get('password', '')
+
+    if not password:
+        logger.warning(f"Login attempt from {client_ip} with empty password")
+        return jsonify({"error": "Password is required"}), 400
+
+    logger.info(f"Login attempt from {client_ip} (User-Agent: {user_agent[:50]}...)")
+
+    if auth_manager.verify_password(password):
+        token = auth_manager.generate_token()
+        logger.info(f"✅ Successful login from {client_ip}")
+        return jsonify({
+            "token": token,
+            "expires_in": config.token_expiry_hours
+        })
+    else:
+        logger.warning(f"❌ Failed login attempt from {client_ip} - invalid password")
+        return jsonify({"error": "Invalid password"}), 401
+
+
+@app.route('/verify-token', methods=['POST'])
+@limiter.limit("30 per minute")  # Allow reasonable token verification rate
+def verify_token():
+    """Verify if a token is still valid.
+
+    Request body:
+        {"token": "jwt-token-string"}
+
+    Response:
+        {"valid": true} or {"valid": false}
+    """
+    if not config.auth_enabled:
+        return jsonify({"valid": True})  # No auth = always valid
+
+    data = request.json
+    token = data.get('token', '')
+
+    if not token:
+        logger.debug(f"Token verification from {request.remote_addr}: no token provided")
+        return jsonify({"valid": False})
+
+    payload = auth_manager.verify_token(token)
+    is_valid = payload is not None
+
+    if is_valid:
+        logger.debug(f"Token verification from {request.remote_addr}: valid")
+    else:
+        logger.info(f"Token verification from {request.remote_addr}: invalid/expired")
+
+    return jsonify({"valid": is_valid})
+
+
 @app.route('/query', methods=['POST'])
+@limiter.limit("60 per minute")  # Reasonable limit for queries
 def query():
     """Main query endpoint with tool-use loop."""
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Unauthorized query attempt from {request.remote_addr}: missing auth header")
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized query attempt from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid or expired token"}), 401
+
     request_start = time.time()
 
     data = request.json
@@ -200,8 +311,20 @@ def query():
 
 
 @app.route('/sessions/<session_id>/history', methods=['GET'])
+@limiter.limit("30 per minute")
 def get_history(session_id):
     """Return a simplified text-only history for debugging UI."""
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Unauthorized history access from {request.remote_addr}")
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized history access from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid or expired token"}), 401
+
     if session_id not in sessions:
         return jsonify([])
 
@@ -224,8 +347,20 @@ def get_history(session_id):
 
 
 @app.route('/sessions/<session_id>', methods=['DELETE'])
+@limiter.limit("10 per minute")
 def clear_session(session_id):
     """Clear a conversation session."""
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Unauthorized session delete from {request.remote_addr}")
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized session delete from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid or expired token"}), 401
+
     if session_id in sessions:
         del sessions[session_id]
         logger.info(f"Cleared session: {session_id}")
@@ -233,9 +368,22 @@ def clear_session(session_id):
 
 
 @app.route('/skills/refresh', methods=['POST'])
+@limiter.limit("10 per minute")
 def refresh_skills():
     """Re-scan skills/<name>/SKILL.md without restarting the server."""
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Unauthorized skills refresh from {request.remote_addr}")
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized skills refresh from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid or expired token"}), 401
+
     skill_registry.discover_skills()
+    logger.info(f"Skills refreshed from {request.remote_addr}")
     return jsonify({"skills": sorted(skill_registry.skills.keys())})
 
 

@@ -61,6 +61,25 @@ class Config:
         )
         self.allowed_commands: Set[str] = set(allowed_commands_str.split(","))
 
+        # Authentication Configuration
+        self.auth_enabled = os.getenv("AUTH_ENABLED", "true").lower() == "true"
+        self.jwt_secret = os.getenv("JWT_SECRET", "")
+        self.password_hash = os.getenv("PASSWORD_HASH", "")
+        self.token_expiry_hours = int(os.getenv("TOKEN_EXPIRY_HOURS", "168"))
+
+        # Validate auth config if enabled
+        if self.auth_enabled:
+            if not self.jwt_secret or self.jwt_secret == "change-this-to-a-random-secret-key":
+                raise ValueError(
+                    "JWT_SECRET must be set to a secure random value. "
+                    "Generate one with: python3 -c \"import secrets; print(secrets.token_hex(32))\""
+                )
+            if not self.password_hash:
+                raise ValueError(
+                    "PASSWORD_HASH must be set. "
+                    "Generate one with: python3 -c \"import hashlib; print(hashlib.sha256(b'your-password').hexdigest())\""
+                )
+
         # System Prompt
         self.system_prompt_file = Path(__file__).parent / "system_prompt.txt"
         if not self.system_prompt_file.exists():

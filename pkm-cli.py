@@ -17,6 +17,8 @@ import sys
 import os
 import requests
 import json
+import getpass
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -27,6 +29,8 @@ load_dotenv()
 DEFAULT_HOST = os.getenv("HOST", "127.0.0.1")
 DEFAULT_PORT = os.getenv("PORT", "8000")
 BASE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+TOKEN_FILE = Path.home() / ".pkm-cli-token"
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 
 
 class PKMClient:
@@ -35,6 +39,105 @@ class PKMClient:
     def __init__(self, base_url: str = BASE_URL):
         self.base_url = base_url
         self.session_id = None
+        self.token = None
+
+        # Load token if auth is enabled
+        if AUTH_ENABLED:
+            self._load_token()
+
+    def _load_token(self):
+        """Load authentication token from file or environment"""
+        # Try loading from file first
+        if TOKEN_FILE.exists():
+            try:
+                self.token = TOKEN_FILE.read_text().strip()
+                # Verify token is still valid
+                if not self._verify_token():
+                    self.token = None
+                    TOKEN_FILE.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # If no valid token, try to authenticate
+        if not self.token:
+            self._authenticate()
+
+    def _save_token(self, token: str):
+        """Save authentication token to file"""
+        try:
+            TOKEN_FILE.write_text(token)
+            TOKEN_FILE.chmod(0o600)  # Readable only by owner
+            self.token = token
+        except Exception as e:
+            print(f"Warning: Could not save token: {e}", file=sys.stderr)
+
+    def _verify_token(self) -> bool:
+        """Check if current token is valid"""
+        if not self.token:
+            return False
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/verify-token",
+                json={"token": self.token},
+                timeout=5
+            )
+            return response.status_code == 200 and response.json().get("valid", False)
+        except Exception:
+            return False
+
+    def _authenticate(self):
+        """Authenticate with the server"""
+        # Try environment variable first
+        password = os.getenv("PKM_PASSWORD")
+
+        # If no env var, prompt user
+        if not password:
+            print("Authentication required.", file=sys.stderr)
+            try:
+                password = getpass.getpass("Password: ")
+            except (KeyboardInterrupt, EOFError):
+                print("\nAuthentication cancelled.", file=sys.stderr)
+                sys.exit(1)
+
+        # Login
+        try:
+            response = requests.post(
+                f"{self.base_url}/login",
+                json={"password": password},
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                token = data.get("token")
+                if token:
+                    self._save_token(token)
+                    print("✓ Authenticated successfully", file=sys.stderr)
+                    return
+            elif response.status_code == 429:
+                print("❌ Too many login attempts. Please wait a minute.", file=sys.stderr)
+            else:
+                print("❌ Authentication failed: Invalid password", file=sys.stderr)
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Authentication error: {e}", file=sys.stderr)
+
+        sys.exit(1)
+
+    def _get_headers(self) -> dict:
+        """Get request headers with authentication if needed"""
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    def _handle_401(self):
+        """Handle 401 Unauthorized by re-authenticating"""
+        print("Token expired. Re-authenticating...", file=sys.stderr)
+        self.token = None
+        TOKEN_FILE.unlink(missing_ok=True)
+        self._authenticate()
 
     def query(self, message: str, session_id: Optional[str] = None, model: Optional[str] = None) -> dict:
         """Send a query to the server"""
@@ -49,8 +152,20 @@ class PKMClient:
             response = requests.post(
                 f"{self.base_url}/query",
                 json=payload,
+                headers=self._get_headers(),
                 timeout=60
             )
+
+            # Handle 401 and retry once
+            if response.status_code == 401 and AUTH_ENABLED:
+                self._handle_401()
+                response = requests.post(
+                    f"{self.base_url}/query",
+                    json=payload,
+                    headers=self._get_headers(),
+                    timeout=60
+                )
+
             response.raise_for_status()
             data = response.json()
 
@@ -78,8 +193,19 @@ class PKMClient:
         try:
             response = requests.delete(
                 f"{self.base_url}/sessions/{session_id}",
+                headers=self._get_headers(),
                 timeout=5
             )
+
+            # Handle 401 and retry once
+            if response.status_code == 401 and AUTH_ENABLED:
+                self._handle_401()
+                response = requests.delete(
+                    f"{self.base_url}/sessions/{session_id}",
+                    headers=self._get_headers(),
+                    timeout=5
+                )
+
             response.raise_for_status()
             self.session_id = None
         except requests.exceptions.RequestException as e:

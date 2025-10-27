@@ -42,7 +42,6 @@ from pkm_bridge.tools.shell import ExecuteShellTool
 from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.journal import JournalNoteTool
-from pkm_bridge.tools.skills import SkillRegistry, LoadSkillTool, RunSkillTool
 
 # -------------------------
 # Setup & Configuration
@@ -90,23 +89,17 @@ sessions: Dict[str, Dict[str, Any]] = {}
 # Initialize Tools
 # -------------------------
 
-# Create skill registry
-skill_registry = SkillRegistry(config.skills_dir, logger)
-
 # Create tool registry and register all tools
 tool_registry = ToolRegistry()
 
-# Register tools (order doesn't matter, but logical grouping helps)
+# Register tools
 execute_shell_tool = ExecuteShellTool(
     logger, config.allowed_commands, config.org_dir, config.logseq_dir
 )
 tool_registry.register(execute_shell_tool)
-
 tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(JournalNoteTool(logger, config.org_dir))
-tool_registry.register(LoadSkillTool(logger, skill_registry))
-tool_registry.register(RunSkillTool(logger, skill_registry, execute_shell_tool))
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
@@ -302,7 +295,7 @@ def query():
         session['history'].append({"role": "assistant", "content": response.content})
 
         total_elapsed = time.time() - request_start
-        logger.info(f"Assistant: {assistant_text[:200]}{'...' if len(assistant_text) > 200 else ''}")
+        logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
         logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
 
         return jsonify({"response": assistant_text, "session_id": session_id})
@@ -367,26 +360,6 @@ def clear_session(session_id):
         del sessions[session_id]
         logger.info(f"Cleared session: {session_id}")
     return jsonify({"status": "ok"})
-
-
-@app.route('/skills/refresh', methods=['POST'])
-@limiter.limit("10 per minute")
-def refresh_skills():
-    """Re-scan skills/<name>/SKILL.md without restarting the server."""
-    # Check auth if enabled
-    if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            logger.warning(f"Unauthorized skills refresh from {request.remote_addr}")
-            return jsonify({"error": "Missing or invalid authorization header"}), 401
-        token = auth_header[7:]
-        if not auth_manager.verify_token(token):
-            logger.warning(f"Unauthorized skills refresh from {request.remote_addr}: invalid token")
-            return jsonify({"error": "Invalid or expired token"}), 401
-
-    skill_registry.discover_skills()
-    logger.info(f"Skills refreshed from {request.remote_addr}")
-    return jsonify({"skills": sorted(skill_registry.skills.keys())})
 
 
 @app.route('/assets/<path:filepath>', methods=['GET'])
@@ -502,14 +475,12 @@ def serve_asset(filepath):
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Basic health info + local skills list."""
+    """Basic health info."""
     health_data = {
         "status": "ok",
         "org_dir": str(config.org_dir),
         "org_dir_exists": config.org_dir.exists(),
-        "skills_dir": str(config.skills_dir),
         "allowed_commands": sorted(config.allowed_commands),
-        "local_skills": sorted(skill_registry.skills.keys()),
         "tools": tool_registry.list_tools(),
     }
     if config.logseq_dir:
@@ -528,8 +499,6 @@ if __name__ == '__main__':
     logger.info(f"Org files (primary): {config.org_dir}")
     if config.logseq_dir:
         logger.info(f"Logseq notes (archival): {config.logseq_dir}")
-    logger.info(f"Skills dir: {config.skills_dir}")
-    logger.info(f"Local skills: {', '.join(sorted(skill_registry.skills.keys())) or '(none)'}")
     logger.info(f"Allowed commands: {', '.join(sorted(config.allowed_commands))}")
     logger.info(f"Tools: {', '.join(tool_registry.list_tools())}")
     logger.info(f"Server starting at http://{config.host}:{config.port}")

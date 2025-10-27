@@ -22,7 +22,7 @@ class SearchNotesTool(BaseTool):
         self.org_dir = org_dir
         self.logseq_dir = logseq_dir
         self.context = 3
-        self.limit = 10000
+        self.limit = 50000
 
     @property
     def name(self) -> str:

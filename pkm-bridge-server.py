@@ -22,10 +22,12 @@ from contextlib import contextmanager
 from typing import Dict, Any
 
 from anthropic import Anthropic
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_hot_reload import HotReload
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+import os
+from pathlib import Path
 
 # Import configuration and logging
 from config.settings import Config
@@ -385,6 +387,117 @@ def refresh_skills():
     skill_registry.discover_skills()
     logger.info(f"Skills refreshed from {request.remote_addr}")
     return jsonify({"skills": sorted(skill_registry.skills.keys())})
+
+
+@app.route('/assets/<path:filepath>', methods=['GET'])
+@limiter.limit("100 per minute")
+def serve_asset(filepath):
+    """Serve image and asset files from ORG_DIR or LOGSEQ_DIR.
+
+    This endpoint allows the frontend to display images referenced in org-mode and Logseq files.
+    Searches for assets in the following locations (in order):
+    1. ORG_DIR/{filepath}
+    2. ORG_DIR/assets/{filepath}
+    3. LOGSEQ_DIR/{filepath}
+    4. LOGSEQ_DIR/Personal/assets/{filepath}
+    5. LOGSEQ_DIR/DSS/assets/{filepath}
+
+    Includes path traversal protection to prevent accessing files outside allowed directories.
+
+    Args:
+        filepath: Relative path to the asset file
+
+    Returns:
+        The requested file or 404 if not found/invalid
+    """
+    # Check auth if enabled (accept token from header or query parameter)
+    if config.auth_enabled:
+        token = None
+
+        # Try Authorization header first
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+
+        # Fall back to query parameter (for browser <img> tags)
+        if not token:
+            token = request.args.get('token', '')
+
+        if not token:
+            logger.warning(f"Unauthorized asset access from {request.remote_addr}: no token provided")
+            return jsonify({"error": "Missing authorization token"}), 401
+
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized asset access from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid or expired token"}), 401
+
+    # Security: Validate and resolve the path to prevent directory traversal
+    try:
+        # Try multiple locations for the asset
+        search_paths = [
+            config.org_dir / filepath,
+            config.org_dir / "assets" / filepath,  # Org-mode assets subdirectory
+        ]
+
+        # Add Logseq paths if configured
+        if config.logseq_dir:
+            search_paths.extend([
+                config.logseq_dir / filepath,
+                config.logseq_dir / "Personal" / "assets" / filepath,
+                config.logseq_dir / "DSS" / "assets" / filepath,
+            ])
+
+        found_path = None
+        allowed_roots = [config.org_dir.resolve()]
+        if config.logseq_dir:
+            allowed_roots.append(config.logseq_dir.resolve())
+
+        for candidate_path in search_paths:
+            try:
+                resolved_path = candidate_path.resolve()
+
+                # Check if path is within allowed directories
+                is_allowed = any(
+                    str(resolved_path).startswith(str(root))
+                    for root in allowed_roots
+                )
+
+                if not is_allowed:
+                    continue
+
+                # Check if file exists
+                if resolved_path.is_file():
+                    found_path = resolved_path
+                    break
+
+            except (ValueError, OSError):
+                # Skip invalid paths
+                continue
+
+        if not found_path:
+            logger.debug(f"Asset not found: {filepath}")
+            return jsonify({"error": "File not found"}), 404
+
+        # Final security check: ensure resolved path is within allowed directories
+        is_safe = any(
+            str(found_path).startswith(str(root))
+            for root in allowed_roots
+        )
+
+        if not is_safe:
+            logger.warning(f"Path traversal attempt from {request.remote_addr}: {filepath}")
+            return jsonify({"error": "Invalid file path"}), 403
+
+        # Get the directory and filename
+        directory = found_path.parent
+        filename = found_path.name
+
+        logger.debug(f"Serving asset: {filepath} from {found_path}")
+        return send_from_directory(directory, filename)
+
+    except Exception as e:
+        logger.error(f"Error serving asset {filepath}: {str(e)}")
+        return jsonify({"error": "Error serving file"}), 500
 
 
 @app.route('/health', methods=['GET'])

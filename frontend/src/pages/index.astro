@@ -10,12 +10,84 @@ import ChatInterface from '../components/ChatInterface.astro';
 </Layout>
 
 <script>
-  // Initialize markdown-it
+  // Initialize markdown-it with task-lists plugin
   const md = (window as any).markdownit({
     html: false,
     linkify: true,
     typographer: true
-  });
+  }).use((window as any).markdownitTaskLists, {enabled: true});
+
+  // Post-process HTML to convert "DONE" items to checked checkboxes
+  function processDoneItems(html: string): string {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    // Find all list items
+    const listItems = div.querySelectorAll('li');
+
+    listItems.forEach(li => {
+      // Skip if already a task-list-item (handled by markdown-it-task-lists)
+      if (li.classList.contains('task-list-item')) {
+        return;
+      }
+
+      // Get the text content
+      const text = li.textContent?.trim() || '';
+
+      // Check if it starts with "DONE" (with : or space)
+      if (text.match(/^DONE[:\s]/i)) {
+        // Convert to task-list-item
+        li.classList.add('task-list-item');
+
+        // Create checkbox
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'task-list-item-checkbox';
+        checkbox.checked = true;
+        checkbox.disabled = true;
+
+        // Wrap remaining text in span with strikethrough
+        const span = document.createElement('span');
+        span.style.textDecoration = 'line-through';
+
+        // Get the text without "DONE" prefix
+        const remainingText = text.replace(/^DONE[:\s]\s*/i, '');
+        span.textContent = remainingText;
+
+        // Clear and rebuild the li
+        li.innerHTML = '';
+        li.appendChild(checkbox);
+        li.appendChild(document.createTextNode(' '));
+        li.appendChild(span);
+      }
+    });
+
+    return div.innerHTML;
+  }
+
+  // Post-process HTML to add auth tokens to asset image URLs
+  function addTokensToImages(html: string): string {
+    if (!authToken) {
+      return html;
+    }
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    // Find all images that point to /assets/
+    const images = div.querySelectorAll('img[src^="http://localhost:8000/assets/"], img[src^="/assets/"]');
+
+    images.forEach(img => {
+      const src = img.getAttribute('src');
+      if (src && !src.includes('?token=')) {
+        // Add token as query parameter
+        const separator = src.includes('?') ? '&' : '?';
+        img.setAttribute('src', `${src}${separator}token=${authToken}`);
+      }
+    });
+
+    return div.innerHTML;
+  }
 
   // Auth token management
   let authToken = localStorage.getItem('pkm-authToken');
@@ -202,7 +274,10 @@ import ChatInterface from '../components/ChatInterface.astro';
     div.className = `message ${role}`;
 
     if (role === 'assistant') {
-      div.innerHTML = md.render(text);
+      let rendered = md.render(text);
+      rendered = processDoneItems(rendered);
+      rendered = addTokensToImages(rendered);
+      div.innerHTML = rendered;
     } else {
       div.textContent = text;
     }

@@ -97,8 +97,8 @@
     padding: 1.5rem;
     border-radius: 0.75rem;
     max-width: 80%;
-    white-space: pre-wrap;
     word-wrap: break-word;
+    line-height: 1.6;
   }
 
   .message.user {
@@ -106,6 +106,7 @@
     color: white;
     margin-left: auto;
     border-bottom-right-radius: 0.25rem;
+    white-space: pre-wrap;
   }
 
   .message.assistant {
@@ -116,13 +117,98 @@
     box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 
-  /* Code styling in messages */
+  /* Typography - tighter spacing */
+  .message.assistant > *:first-child {
+    margin-top: 0;
+  }
+
+  .message.assistant > *:last-child {
+    margin-bottom: 0;
+  }
+
+  .message.assistant p {
+    margin: 0.5em 0;
+  }
+
+  /* Headings */
+  .message.assistant h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0.75em 0 0.5em 0;
+    color: rgb(17 24 39);
+    line-height: 1.3;
+  }
+
+  .message.assistant h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 0.75em 0 0.5em 0;
+    color: rgb(17 24 39);
+    line-height: 1.3;
+  }
+
+  .message.assistant h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0.75em 0 0.5em 0;
+    color: rgb(31 41 55);
+    line-height: 1.3;
+  }
+
+  .message.assistant h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0.75em 0 0.5em 0;
+    color: rgb(31 41 55);
+    line-height: 1.3;
+  }
+
+  .message.assistant h5,
+  .message.assistant h6 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0.75em 0 0.5em 0;
+    color: rgb(55 65 81);
+    line-height: 1.3;
+  }
+
+  /* Lists - tighter spacing */
+  .message.assistant ul {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+    list-style-type: disc;
+  }
+
+  .message.assistant ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+    list-style-type: decimal;
+  }
+
+  .message.assistant li {
+    margin: 0.25em 0;
+    display: list-item;
+  }
+
+  .message.assistant li > p {
+    margin: 0.25em 0;
+  }
+
+  /* Nested lists */
+  .message.assistant ul ul,
+  .message.assistant ol ol,
+  .message.assistant ul ol,
+  .message.assistant ol ul {
+    margin: 0.25em 0;
+  }
+
+  /* Code styling */
   .message code {
     background-color: rgb(243 244 246);
     padding: 0.125rem 0.375rem;
     border-radius: 0.25rem;
     font-family: ui-monospace, monospace;
-    font-size: 0.875rem;
+    font-size: 0.875em;
   }
 
   .message.user code {
@@ -131,30 +217,39 @@
 
   .message.assistant pre {
     background-color: rgb(243 244 246);
-    padding: 0.5rem;
+    padding: 0.75rem;
     border-radius: 0.375rem;
     overflow-x: auto;
-    margin: 0.5rem 0;
+    margin: 0.75em 0;
   }
 
   .message.assistant pre code {
     background-color: transparent;
     padding: 0;
-    font-size: 0.875rem;
+    font-size: 0.875em;
   }
 
+  /* Blockquotes */
   .message.assistant blockquote {
     border-left: 4px solid rgb(59 130 246);
     padding-left: 1rem;
-    margin: 0.5rem 0;
+    margin: 0.75em 0;
     color: rgb(75 85 99);
+    font-style: italic;
   }
 
+  .message.assistant blockquote p {
+    margin: 0.25em 0;
+  }
+
+  /* Horizontal rules */
   .message.assistant hr {
+    border: none;
     border-top: 1px solid rgb(229 231 235);
-    margin: 0.5rem 0;
+    margin: 1em 0;
   }
 
+  /* Links */
   .message.assistant a {
     color: rgb(59 130 246);
     text-decoration: none;
@@ -164,16 +259,18 @@
     text-decoration: underline;
   }
 
+  /* Tables */
   .message.assistant table {
     border-collapse: collapse;
     width: 100%;
-    margin: 1rem 0;
+    margin: 0.75em 0;
+    font-size: 0.925em;
   }
 
   .message.assistant th,
   .message.assistant td {
     border: 1px solid rgb(209 213 219);
-    padding: 0.5rem;
+    padding: 0.5rem 0.75rem;
     text-align: left;
   }
 
@@ -182,18 +279,44 @@
     font-weight: 600;
   }
 
+  /* Text formatting */
   .message.assistant strong {
     font-weight: 600;
+    color: rgb(17 24 39);
   }
 
   .message.assistant em {
     font-style: italic;
   }
 
+  /* Task list items (checkboxes) */
+  .message.assistant .task-list-item {
+    list-style-type: none;
+    position: relative;
+  }
+
+  .message.assistant .task-list-item-checkbox {
+    margin-right: 0.5em;
+    cursor: default;
+  }
+
+  .message.assistant .task-list-item input[type="checkbox"]:checked + span {
+    text-decoration: line-through;
+    color: rgb(107 114 128);
+  }
+
   /* Mobile optimizations */
   @media (max-width: 640px) {
     .message {
       max-width: 90%;
+    }
+
+    .message.assistant h1 {
+      font-size: 1.375rem;
+    }
+
+    .message.assistant h2 {
+      font-size: 1.125rem;
     }
   }
 </style>

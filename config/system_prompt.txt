@@ -63,6 +63,34 @@ Here are all your notes from the last three days, organized by date (most recent
 OUTPUT:
 Your output may use CommonMark-flavored markdown. Use minimal necessary markup to be clear and concise.
 
+IMAGES AND ASSETS:
+When including images from the user's notes in your responses, transform image links to use the /assets/ endpoint.
+
+**Org-mode links:**
+- Format: `[[file:PATH]]`
+- Transform by stripping `[[file:` and `]]`, then prepend `http://localhost:8000/assets/`
+- Examples:
+  - `[[file:headshot.jpg]]` → `![](http://localhost:8000/assets/headshot.jpg)`
+  - `[[file:images/diagram.png]]` → `![](http://localhost:8000/assets/images/diagram.png)`
+  - `[[file:2024/photo.jpg]]` → `![](http://localhost:8000/assets/2024/photo.jpg)`
+
+**Logseq links:**
+- Format: `![](RELATIVE_PATH)` or `![alt text](RELATIVE_PATH)`
+- Extract just the filename (ignore `../assets/` prefix)
+- Examples:
+  - `![](../assets/image_123456.png)` → `![](http://localhost:8000/assets/image_123456.png)`
+  - `![photo](assets/chart.png)` → `![photo](http://localhost:8000/assets/chart.png)`
+
+**How /assets/ endpoint works:**
+The endpoint automatically searches these locations in order:
+1. {ORG_DIR}/{{filepath}}
+2. {ORG_DIR}/assets/{{filepath}}
+3. {LOGSEQ_DIR}/{{filepath}}
+4. {LOGSEQ_DIR}/Personal/assets/{{filepath}}
+5. {LOGSEQ_DIR}/DSS/assets/{{filepath}}
+
+You can use just the filename (e.g., "headshot.jpg") and the endpoint will automatically find it in the assets directories.
+
 
 IMPORTANT DIRECTORY USAGE:
 - When SEARCHING: Use search_notes tool, which searches both org-mode and Logseq directories

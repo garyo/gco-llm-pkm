@@ -89,7 +89,7 @@ Security: Only whitelisted commands allowed: {', '.join(sorted(self.allowed_comm
                 timeout=60
             )
             elapsed = time.time() - start_time
-            self.logger.debug(f"Shell command completed in {elapsed:.3f}s")
+            self.logger.debug(f"Shell command completed in {elapsed:.3f}s, stdout={len(result.stdout or '')}b")
 
             output = result.stdout or ""
             if result.stderr:

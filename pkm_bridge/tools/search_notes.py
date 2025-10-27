@@ -22,7 +22,7 @@ class SearchNotesTool(BaseTool):
         self.org_dir = org_dir
         self.logseq_dir = logseq_dir
         self.context = 3
-        self.limit = 50000
+        self.limit = 100000
 
     @property
     def name(self) -> str:
@@ -83,7 +83,7 @@ Directories:
                 timeout = 15
             )
             elapsed = time.time() - start_time
-            self.logger.debug(f"Shell command completed in {elapsed:.3f}s")
+            self.logger.debug(f"Search command completed in {elapsed:.3f}s, stdout={len(result.stdout or '')}b")
 
             output = result.stdout[:limit]
 

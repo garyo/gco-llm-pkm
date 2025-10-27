@@ -1,0 +1,30 @@
+---
+// Login form component
+---
+
+<div id="login-screen" class="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-500 to-purple-600">
+  <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md mx-4">
+    <h1 class="text-3xl font-bold mb-2 text-gray-800">GCO PKM Assistant</h1>
+    <p class="text-gray-600 mb-6">Enter your password to continue</p>
+
+    <form id="login-form" class="space-y-4">
+      <input
+        type="password"
+        id="password-input"
+        placeholder="Password"
+        autocomplete="current-password"
+        autofocus
+        required
+        class="w-full px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+      />
+      <button
+        type="submit"
+        id="login-btn"
+        class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+      >
+        Login
+      </button>
+      <div id="login-error" class="text-red-600 text-sm hidden"></div>
+    </form>
+  </div>
+</div>

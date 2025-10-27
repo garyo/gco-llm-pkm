@@ -1,0 +1,199 @@
+---
+// Main chat interface component
+---
+
+<div id="app" class="hidden flex flex-col h-screen">
+  <!-- Header -->
+  <div class="bg-blue-500 text-white px-4 py-4 shadow-md">
+    <h1 class="text-xl font-semibold">GCO PKM Assistant</h1>
+  </div>
+
+  <!-- Chat Area -->
+  <div id="chat" class="flex-1 overflow-y-auto p-4 space-y-4">
+    <!-- Empty State -->
+    <div class="empty-state text-center py-12" id="empty-state">
+      <h2 class="text-2xl font-semibold text-gray-800 mb-2">Welcome to your PKM Assistant</h2>
+      <p class="text-gray-600 mb-8">Ask me anything about your notes</p>
+
+      <div class="max-w-md mx-auto space-y-2">
+        <button
+          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          onclick="sendExample('What did I write about music this summer?')"
+        >
+          What did I write about music this summer?
+        </button>
+        <button
+          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          onclick="sendExample('Show me all my active TODOs')"
+        >
+          Show me all my active TODOs
+        </button>
+        <button
+          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          onclick="sendExample('When was the last time I mentioned sailing?')"
+        >
+          When was the last time I mentioned sailing?
+        </button>
+        <button
+          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          onclick="sendExample('List all my org files')"
+        >
+          List all my org files
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading" class="hidden items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-xl max-w-[80%]">
+      <div class="w-4 h-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
+      <span class="text-gray-600">Thinking...</span>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="flex flex-wrap gap-2 px-4 py-2 bg-white border-t border-gray-200 text-sm">
+    <button
+      onclick="clearConversation()"
+      class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
+    >
+      Clear Conversation
+    </button>
+    <button
+      onclick="newSession()"
+      class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
+    >
+      New Session
+    </button>
+    <button
+      onclick="logout()"
+      class="ml-auto px-4 py-2 bg-white hover:bg-red-50 text-red-600 border border-red-600 rounded-lg transition-colors"
+    >
+      Logout
+    </button>
+  </div>
+
+  <!-- Input Area -->
+  <div class="flex gap-2 p-4 bg-white border-t border-gray-200 shadow-lg">
+    <input
+      id="input"
+      type="text"
+      placeholder="Ask about your notes..."
+      autocomplete="off"
+      class="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
+    />
+    <button
+      id="send-btn"
+      onclick="send()"
+      class="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+    >
+      Send
+    </button>
+  </div>
+</div>
+
+<style is:global>
+  /* Message bubbles */
+  .message {
+    padding: 1.5rem;
+    border-radius: 0.75rem;
+    max-width: 80%;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .message.user {
+    background-color: rgb(59 130 246);
+    color: white;
+    margin-left: auto;
+    border-bottom-right-radius: 0.25rem;
+  }
+
+  .message.assistant {
+    background-color: white;
+    color: rgb(31 41 55);
+    border: 1px solid rgb(229 231 235);
+    border-bottom-left-radius: 0.25rem;
+    box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* Code styling in messages */
+  .message code {
+    background-color: rgb(243 244 246);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.875rem;
+  }
+
+  .message.user code {
+    background-color: rgba(255 255 255 / 0.2);
+  }
+
+  .message.assistant pre {
+    background-color: rgb(243 244 246);
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+  }
+
+  .message.assistant pre code {
+    background-color: transparent;
+    padding: 0;
+    font-size: 0.875rem;
+  }
+
+  .message.assistant blockquote {
+    border-left: 4px solid rgb(59 130 246);
+    padding-left: 1rem;
+    margin: 0.5rem 0;
+    color: rgb(75 85 99);
+  }
+
+  .message.assistant hr {
+    border-top: 1px solid rgb(229 231 235);
+    margin: 0.5rem 0;
+  }
+
+  .message.assistant a {
+    color: rgb(59 130 246);
+    text-decoration: none;
+  }
+
+  .message.assistant a:hover {
+    text-decoration: underline;
+  }
+
+  .message.assistant table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+  }
+
+  .message.assistant th,
+  .message.assistant td {
+    border: 1px solid rgb(209 213 219);
+    padding: 0.5rem;
+    text-align: left;
+  }
+
+  .message.assistant th {
+    background-color: rgb(243 244 246);
+    font-weight: 600;
+  }
+
+  .message.assistant strong {
+    font-weight: 600;
+  }
+
+  .message.assistant em {
+    font-style: italic;
+  }
+
+  /* Mobile optimizations */
+  @media (max-width: 640px) {
+    .message {
+      max-width: 90%;
+    }
+  }
+</style>

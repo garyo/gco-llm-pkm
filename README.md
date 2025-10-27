@@ -46,15 +46,29 @@ Note: Dependencies are managed via PEP-723 inline metadata in the script. No sep
 
 ### Run Locally
 
+**Production Mode** (single server):
 ```bash
+# Build frontend (one time, or after UI changes)
+cd frontend && bun run build && cd ..
+
 # Start server (uv handles dependencies automatically)
 ./pkm-bridge-server.py
 
-# Or explicitly:
-uv run pkm-bridge-server.py
-
 # Open browser to http://localhost:8000
 ```
+
+**Development Mode** (dual servers with hot reload):
+```bash
+# Terminal 1: Start Flask backend
+./pkm-bridge-server.py
+
+# Terminal 2: Start Astro frontend (in frontend/ directory)
+cd frontend && bun run dev
+
+# Open browser to http://localhost:4321 (instant hot reload!)
+```
+
+**See `FRONTEND_DEVELOPMENT.md` for details on the modern Astro + Tailwind frontend.**
 
 ## Configuration
 

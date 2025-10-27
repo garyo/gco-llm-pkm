@@ -1,0 +1,303 @@
+---
+import Layout from '../layouts/Layout.astro';
+import LoginForm from '../components/LoginForm.astro';
+import ChatInterface from '../components/ChatInterface.astro';
+---
+
+<Layout title="GCO PKM Assistant">
+  <LoginForm />
+  <ChatInterface />
+</Layout>
+
+<script>
+  // Initialize markdown-it
+  const md = (window as any).markdownit({
+    html: false,
+    linkify: true,
+    typographer: true
+  });
+
+  // Auth token management
+  let authToken = localStorage.getItem('pkm-authToken');
+
+  // Session management
+  let sessionId = localStorage.getItem('pkm-sessionId') ||
+                  'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+  localStorage.setItem('pkm-sessionId', sessionId);
+
+  // DOM elements
+  const loginScreen = document.getElementById('login-screen')!;
+  const appDiv = document.getElementById('app')!;
+  const passwordInput = document.getElementById('password-input') as HTMLInputElement;
+  const loginBtn = document.getElementById('login-btn') as HTMLButtonElement;
+  const loginError = document.getElementById('login-error')!;
+  const chat = document.getElementById('chat')!;
+  const input = document.getElementById('input') as HTMLInputElement;
+  const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+  const loading = document.getElementById('loading')!;
+  const emptyState = document.getElementById('empty-state')!;
+
+  // Handle login
+  async function handleLogin(event: Event) {
+    event.preventDefault();
+    const password = passwordInput.value;
+
+    loginBtn.disabled = true;
+    loginError.classList.add('hidden');
+
+    try {
+      const res = await fetch('/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password})
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        authToken = data.token;
+        localStorage.setItem('pkm-authToken', authToken);
+        showApp();
+      } else {
+        loginError.textContent = data.error || 'Invalid password';
+        loginError.classList.remove('hidden');
+        passwordInput.value = '';
+        passwordInput.focus();
+      }
+    } catch (e: any) {
+      loginError.textContent = 'Connection error: ' + e.message;
+      loginError.classList.remove('hidden');
+    } finally {
+      loginBtn.disabled = false;
+    }
+  }
+
+  // Show app (hide login)
+  function showApp() {
+    loginScreen.classList.add('hidden');
+    appDiv.classList.remove('hidden');
+    input.focus();
+    loadHistory();
+  }
+
+  // Show login (hide app)
+  function showLogin() {
+    loginScreen.classList.remove('hidden');
+    appDiv.classList.add('hidden');
+    passwordInput.value = '';
+    passwordInput.focus();
+  }
+
+  // Logout
+  function logout() {
+    authToken = null;
+    localStorage.removeItem('pkm-authToken');
+    showLogin();
+  }
+
+  // Verify token on page load
+  async function verifyToken() {
+    if (!authToken) {
+      showLogin();
+      return;
+    }
+
+    try {
+      const res = await fetch('/verify-token', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token: authToken})
+      });
+
+      const data = await res.json();
+
+      if (data.valid) {
+        showApp();
+      } else {
+        authToken = null;
+        localStorage.removeItem('pkm-authToken');
+        showLogin();
+      }
+    } catch (e) {
+      console.error('Token verification error:', e);
+      showLogin();
+    }
+  }
+
+  // Get auth headers
+  function getAuthHeaders(): HeadersInit {
+    const headers: HeadersInit = {'Content-Type': 'application/json'};
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    return headers;
+  }
+
+  // Handle 401 errors
+  function handle401() {
+    authToken = null;
+    localStorage.removeItem('pkm-authToken');
+    showLogin();
+    alert('Your session has expired. Please log in again.');
+  }
+
+  // Send message
+  async function send() {
+    const message = input.value.trim();
+    if (!message) return;
+
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+
+    emptyState.style.display = 'none';
+
+    appendMessage('user', message);
+
+    loading.classList.remove('hidden');
+    loading.classList.add('flex');
+    chat.scrollTop = chat.scrollHeight;
+
+    try {
+      const res = await fetch('/query', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          message: message,
+          session_id: sessionId
+        })
+      });
+
+      if (res.status === 401) {
+        handle401();
+        return;
+      }
+
+      const data = await res.json();
+
+      loading.classList.add('hidden');
+      loading.classList.remove('flex');
+
+      appendMessage('assistant', data.response);
+    } catch (e: any) {
+      loading.classList.add('hidden');
+      loading.classList.remove('flex');
+      appendMessage('assistant', '❌ Error: ' + e.message);
+    } finally {
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  // Send example query
+  function sendExample(text: string) {
+    input.value = text;
+    send();
+  }
+
+  // Append message to chat
+  function appendMessage(role: string, text: string) {
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+
+    if (role === 'assistant') {
+      div.innerHTML = md.render(text);
+    } else {
+      div.textContent = text;
+    }
+
+    chat.insertBefore(div, loading);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  // Clear conversation
+  async function clearConversation() {
+    if (!confirm('Clear conversation history?')) return;
+
+    try {
+      const res = await fetch(`/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+
+      if (res.status === 401) {
+        handle401();
+        return;
+      }
+
+      const messages = chat.querySelectorAll('.message');
+      messages.forEach(msg => msg.remove());
+
+      emptyState.style.display = 'block';
+
+      console.log('Conversation cleared');
+    } catch (e: any) {
+      alert('Error clearing conversation: ' + e.message);
+    }
+  }
+
+  // Start new session
+  function newSession() {
+    sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('pkm-sessionId', sessionId);
+
+    const messages = chat.querySelectorAll('.message');
+    messages.forEach(msg => msg.remove());
+
+    emptyState.style.display = 'block';
+
+    console.log('New session started:', sessionId);
+  }
+
+  // Load conversation history
+  async function loadHistory() {
+    try {
+      const res = await fetch(`/sessions/${sessionId}/history`, {
+        headers: getAuthHeaders()
+      });
+
+      if (res.status === 401) {
+        handle401();
+        return;
+      }
+
+      const history = await res.json();
+
+      if (history.length > 0) {
+        emptyState.style.display = 'none';
+        history.forEach((msg: any) => appendMessage(msg.role, msg.text));
+      }
+    } catch (e) {
+      console.error('Error loading history:', e);
+    }
+  }
+
+  // Keyboard shortcuts
+  input.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      input.focus();
+    }
+  });
+
+  // Set up login form handler
+  document.getElementById('login-form')?.addEventListener('submit', handleLogin);
+
+  // Verify token and load app on page load
+  verifyToken();
+
+  // Make functions globally available
+  (window as any).send = send;
+  (window as any).sendExample = sendExample;
+  (window as any).clearConversation = clearConversation;
+  (window as any).newSession = newSession;
+  (window as any).logout = logout;
+</script>

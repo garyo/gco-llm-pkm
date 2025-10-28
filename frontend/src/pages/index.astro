@@ -97,6 +97,10 @@ import ChatInterface from '../components/ChatInterface.astro';
                   'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
   localStorage.setItem('pkm-sessionId', sessionId);
 
+  // Model and thinking preferences
+  let selectedModel = localStorage.getItem('pkm-model') || 'claude-haiku-4-5';
+  let thinkingEnabled = localStorage.getItem('pkm-thinking') === 'true';
+
   // DOM elements
   const loginScreen = document.getElementById('login-screen')!;
   const appDiv = document.getElementById('app')!;
@@ -108,6 +112,8 @@ import ChatInterface from '../components/ChatInterface.astro';
   const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
   const loading = document.getElementById('loading')!;
   const emptyState = document.getElementById('empty-state')!;
+  const modelSelect = document.getElementById('model-select') as HTMLSelectElement;
+  const thinkingToggle = document.getElementById('thinking-toggle') as HTMLInputElement;
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -148,6 +154,11 @@ import ChatInterface from '../components/ChatInterface.astro';
   function showApp() {
     loginScreen.classList.add('hidden');
     appDiv.classList.remove('hidden');
+
+    // Initialize UI controls from saved preferences
+    modelSelect.value = selectedModel;
+    thinkingToggle.checked = thinkingEnabled;
+
     input.focus();
     loadHistory();
   }
@@ -165,6 +176,20 @@ import ChatInterface from '../components/ChatInterface.astro';
     authToken = null;
     localStorage.removeItem('pkm-authToken');
     showLogin();
+  }
+
+  // Update model selection
+  function updateModel() {
+    selectedModel = modelSelect.value;
+    localStorage.setItem('pkm-model', selectedModel);
+    console.log('Model changed to:', selectedModel);
+  }
+
+  // Update thinking toggle
+  function updateThinking() {
+    thinkingEnabled = thinkingToggle.checked;
+    localStorage.setItem('pkm-thinking', thinkingEnabled.toString());
+    console.log('Deep thinking:', thinkingEnabled);
   }
 
   // Verify token on page load
@@ -231,13 +256,20 @@ import ChatInterface from '../components/ChatInterface.astro';
     chat.scrollTop = chat.scrollHeight;
 
     try {
+      const requestBody: any = {
+        message: message,
+        session_id: sessionId,
+        model: selectedModel
+      };
+
+      if (thinkingEnabled) {
+        requestBody.thinking = { type: 'enabled', budget_tokens: 10000 };
+      }
+
       const res = await fetch('/query', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          message: message,
-          session_id: sessionId
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (res.status === 401) {
@@ -375,4 +407,6 @@ import ChatInterface from '../components/ChatInterface.astro';
   (window as any).clearConversation = clearConversation;
   (window as any).newSession = newSession;
   (window as any).logout = logout;
+  (window as any).updateModel = updateModel;
+  (window as any).updateThinking = updateThinking;
 </script>

@@ -1,10 +1,10 @@
 """Note-searching tool."""
 
-import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Any, Set
+from typing import Dict, Any
 from .base import BaseTool
+from .utils import run_command_with_error_handling
 
 
 class SearchNotesTool(BaseTool):
@@ -22,7 +22,7 @@ class SearchNotesTool(BaseTool):
         self.org_dir = org_dir
         self.logseq_dir = logseq_dir
         self.context = 3
-        self.limit = 100000
+        self.limit = 200000  # Increased from 100k to 200k
 
     @property
     def name(self) -> str:
@@ -56,51 +56,103 @@ Directories:
         }
 
     def execute(self, params: Dict[str, Any]) -> str:
-        """Execute a whitelisted shell command.
+        """Execute search with date-sorted results.
 
         Args:
             params: Dict with args
 
         Returns:
-            Command output or error message
+            Search results (newest files first) or error message
         """
         pattern = params["pattern"]
         context = params.get("context", self.context)
         limit = params.get("limit", self.limit)
+        if limit < self.limit:
+            limit = self.limit  # Allow client to add more, but not less.
         org_dir = params.get("org_dir", self.org_dir)
         logseq_dir = params.get("logseq_dir", self.logseq_dir)
 
         self.logger.info(f"Searching for \"{pattern}\", context={context}, limit={limit}")
 
-        command = ["rg", "-i", f"-C{context}", pattern, org_dir, logseq_dir]
         try:
             start_time = time.time()
-            self.logger.debug(f"Running command: {command}")
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout = 15
-            )
+            output_parts = []
+            total_size = 0
+
+            # Search Logseq journals (newest first via --sortr path on date-named files)
+            if logseq_dir:
+                logseq_journals = [f"{logseq_dir}/Personal/journals", f"{logseq_dir}/DSS/journals"]
+                logseq_cmd = ["rg", "-i", "--sortr", "path", f"-C{context}", pattern, *logseq_journals]
+                self.logger.debug(f"Searching Logseq journals: {logseq_cmd}")
+
+                stdout, stderr, returncode = run_command_with_error_handling(
+                    logseq_cmd,
+                    timeout=15,
+                    logger=self.logger
+                )
+
+                self.logger.debug(f"... returns {len(stdout)}b, exit code {returncode}")
+
+                # Handle errors
+                if returncode > 1:  # 0=matches, 1=no matches, 2+=error
+                    error_msg = f"⚠️ Logseq search error (exit {returncode})"
+                    if stderr:
+                        error_msg += f": {stderr}"
+                    output_parts.append(error_msg + "\n")
+                    self.logger.error(error_msg)
+
+                if stdout:
+                    result_size = len(stdout)
+                    if total_size + result_size > limit:
+                        # Truncate to fit
+                        remaining = limit - total_size
+                        output_parts.append(f"⚠️ LOGSEQ RESULTS TRUNCATED at {limit} chars\n")
+                        if remaining > 0:
+                            output_parts.append(stdout[:remaining])
+                        total_size = limit
+                    else:
+                        output_parts.append(stdout)
+                        total_size += result_size
+
+            # Search org-mode (chronological order - oldest first in file)
+            # TODO: Reverse org results in future iteration
+            if total_size < limit and org_dir:
+                remaining_space = limit - total_size
+                org_cmd = ["rg", "-i", f"-C{context}", pattern, str(org_dir)]
+                self.logger.debug(f"Searching org-mode: {org_cmd}")
+
+                stdout, stderr, returncode = run_command_with_error_handling(
+                    org_cmd,
+                    timeout=15,
+                    logger=self.logger
+                )
+
+                # Handle errors
+                if returncode > 1:  # 0=matches, 1=no matches, 2+=error
+                    error_msg = f"⚠️ Org-mode search error (exit {returncode})"
+                    if stderr:
+                        error_msg += f": {stderr}"
+                    output_parts.append(error_msg + "\n")
+                    self.logger.error(error_msg)
+
+                if stdout:
+                    result_size = len(stdout)
+                    if result_size > remaining_space:
+                        output_parts.append(f"\n⚠️ ORG RESULTS TRUNCATED (chronological, oldest first)\n")
+                        output_parts.append(stdout[:remaining_space])
+                        total_size = limit
+                    else:
+                        if output_parts:
+                            output_parts.append("\n--- ORG-MODE RESULTS (chronological, oldest first) ---\n")
+                        output_parts.append(stdout)
+                        total_size += result_size
+
             elapsed = time.time() - start_time
-            self.logger.debug(f"Search command completed in {elapsed:.3f}s, stdout={len(result.stdout or '')}b")
+            self.logger.debug(f"Search completed in {elapsed:.3f}s, {total_size} bytes")
 
-            output = result.stdout[:limit]
+            return ''.join(output_parts) if output_parts else f"[No matches found for pattern '{pattern}']"
 
-            if result.stderr:
-                self.logger.error(f"Shell command stderr: {result.stderr}")
-                output += f"\n[stderr]: {result.stderr}"
-            if result.returncode != 0:
-                self.logger.error(f"Search (rg) command failed with exit code {result.returncode}: {command}")
-                output += f"\n[exit code: {result.returncode}]"
-
-            return output if output else "[No output]"
-
-        except subprocess.TimeoutExpired:
-            error_msg = "❌ Command timed out"
-            self.logger.error(f"{error_msg}: {command}")
-            return error_msg
         except Exception as e:
-            error_msg = f"❌ Error executing command: {str(e)}"
-            self.logger.error(f"{error_msg} (command: {command})")
+            error_msg = f"❌ Error executing search: {str(e)}"
+            self.logger.error(f"{error_msg}")
             return error_msg

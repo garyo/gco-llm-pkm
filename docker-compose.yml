@@ -1,0 +1,66 @@
+services:
+  pkm-bridge:
+    build: .
+    container_name: pkm-bridge-server
+    restart: unless-stopped
+
+    # No ports exposed - Traefik handles all external access
+    # Uncomment if you need direct access for debugging:
+    # ports:
+    #   - "127.0.0.1:8000:8000"
+
+    # Load environment variables from .env file (no variable interpolation)
+    env_file:
+      - .env
+
+    # Override specific values that need defaults or container paths
+    environment:
+      # Directories (container paths - different from host paths)
+      - ORG_DIR=/data/org-agenda
+      - LOGSEQ_DIR=/data/logseq
+
+      # Server Configuration
+      - PORT=8000
+      - HOST=0.0.0.0  # Listen on all interfaces inside container
+      - DEBUG=false
+
+    volumes:
+      # Mount your org files (read/write)
+      - ${ORG_DIR}:/data/org-agenda:rw
+
+      # Mount Logseq files (read-only)
+      - ${LOGSEQ_DIR}:/data/logseq:ro
+
+      # Optional: Persist session data (if we add Redis/DB later)
+      # - ./data/sessions:/app/data/sessions
+
+    networks:
+      - traefik-net
+
+    # Traefik labels for reverse proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.yourdomain.com`)||Host(`pkm`)"
+      - "traefik.http.services.pkm-bridge.loadbalancer.server.port=8000"
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  traefik-net:
+    external: true    # This tells Docker this network already exists
+    name: traefik-net # Must match the name in traefik's compose file

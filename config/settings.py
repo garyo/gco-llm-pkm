@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional, Set
 from dotenv import load_dotenv
-
+from datetime import datetime
 
 class Config:
     """Configuration manager for PKM Bridge Server.
@@ -16,12 +16,16 @@ class Config:
         """Initialize configuration from environment variables.
 
         Args:
-            env_file: Optional path to .env file. If None, uses default .env in cwd.
+            env_file: Optional path to .env file. If None, prefers .env.local, then .env
         """
         if env_file:
             load_dotenv(env_file)
         else:
-            load_dotenv()
+            # Prefer .env.local (local dev) over .env (Docker/production)
+            if Path('.env.local').exists():
+                load_dotenv('.env.local')
+            else:
+                load_dotenv('.env')
 
         # API Configuration
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -91,9 +95,11 @@ class Config:
         template = self.system_prompt_file.read_text(encoding="utf-8")
 
         # Replace placeholders
+        today = datetime.today()
         return template.format(
             ORG_DIR=self.org_dir,
-            LOGSEQ_DIR=self.logseq_dir
+            LOGSEQ_DIR=self.logseq_dir,
+            TODAY=today.strftime("%YYYY-%MM-%DD")
         )
 
     def __repr__(self) -> str:

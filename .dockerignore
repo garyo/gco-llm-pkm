@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Frontend development files (we copy built output only)
+frontend/node_modules/
+frontend/.astro/
+frontend/dist/
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts
+templates/_astro/
+templates/index.html
+
+# Development scripts
+test-tool.py
+generate-auth-config.py
+pkm-cli.py
+
+# Logs
+*.log
+
+# Reference docs
+ORG-QL-QUERIES.md
+FRONTEND_DEVELOPMENT.md
+TODO.md
+PROJECT.md
+CLI_AUTH_GUIDE.md

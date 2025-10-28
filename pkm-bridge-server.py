@@ -23,11 +23,17 @@ from typing import Dict, Any
 
 from anthropic import Anthropic
 from flask import Flask, request, jsonify, render_template, send_from_directory
-from flask_hot_reload import HotReload
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import os
 from pathlib import Path
+
+# Optional: flask_hot_reload (dev only)
+try:
+    from flask_hot_reload import HotReload
+    HOT_RELOAD_AVAILABLE = True
+except ImportError:
+    HOT_RELOAD_AVAILABLE = False
 
 # Import configuration and logging
 from config.settings import Config
@@ -59,9 +65,10 @@ client = Anthropic(api_key=config.anthropic_api_key)
 # Flask app
 app = Flask(__name__)
 
-# Enable browser hot-reload in debug mode
-if config.debug:
+# Enable browser hot-reload in debug mode (if available)
+if config.debug and HOT_RELOAD_AVAILABLE:
     HotReload(app, includes=['templates', 'static'])
+    logger.info("Hot reload enabled")
 
 # Initialize rate limiter
 limiter = Limiter(
@@ -125,6 +132,13 @@ def timer(label: str):
 def index():
     """Serve the main web interface."""
     return render_template('index.html')
+
+
+@app.route('/_astro/<path:filename>')
+def serve_astro_assets(filename):
+    """Serve Astro build assets (JS, CSS, etc)."""
+    templates_dir = Path(app.template_folder)
+    return send_from_directory(templates_dir / '_astro', filename)
 
 
 @app.route('/login', methods=['POST'])
@@ -220,6 +234,7 @@ def query():
     session_id = data.get('session_id', 'default')
     user_message = data['message']
     model = data.get('model', config.model)
+    thinking = data.get('thinking')
 
     # Create session
     if session_id not in sessions:
@@ -238,17 +253,32 @@ def query():
     logger.info(f"User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
     try:
+        # Build beta headers
+        beta_features = ["context-management-2025-06-27"]
+        if thinking:
+            beta_features.append("interleaved-thinking-2025-05-14")
+
+        # Build API call parameters
+        api_params = {
+            "model": model,
+            "max_tokens": 8192,
+            "system": [
+                {"type": "text", "text": session['system_prompt'], "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": session['history'],
+            "tools": tool_registry.get_anthropic_tools(),
+            "extra_headers": {
+                "anthropic-beta": ",".join(beta_features)
+            }
+        }
+
+        # Add thinking parameter if enabled
+        if thinking:
+            api_params["thinking"] = thinking
+
         # Initial call
         with timer(f"Claude API call (initial, {model})"):
-            response = client.messages.create(
-                model=model,
-                max_tokens=8192,
-                system=[
-                    {"type": "text", "text": session['system_prompt'], "cache_control": {"type": "ephemeral"}}
-                ],
-                messages=session['history'],
-                tools=tool_registry.get_anthropic_tools()
-            )
+            response = client.messages.create(**api_params)
 
         api_call_count = 1
         tool_call_count = 0
@@ -274,17 +304,12 @@ def query():
             session['history'].append({"role": "assistant", "content": response.content})
             session['history'].append({"role": "user", "content": tool_results})
 
+            # Update API params with new history
+            api_params["messages"] = session['history']
+
             api_call_count += 1
             with timer(f"Claude API call #{api_call_count} ({model})"):
-                response = client.messages.create(
-                    model=model,
-                    max_tokens=8192,
-                    system=[
-                        {"type": "text", "text": session['system_prompt'], "cache_control": {"type": "ephemeral"}}
-                    ],
-                    messages=session['history'],
-                    tools=tool_registry.get_anthropic_tools()
-                )
+                response = client.messages.create(**api_params)
 
         # Final text
         assistant_text = ""
@@ -508,4 +533,5 @@ if __name__ == '__main__':
     logger.info("=" * 60)
 
     # In production, use proper WSGI server (gunicorn, waitress, etc.)
-    app.run(host=config.host, port=config.port, debug=config.debug)
+    # Enable threaded mode to handle concurrent requests (e.g., context loading + user queries)
+    app.run(host=config.host, port=config.port, debug=config.debug, threaded=True)

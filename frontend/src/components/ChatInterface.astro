@@ -51,7 +51,29 @@
   </div>
 
   <!-- Controls -->
-  <div class="flex flex-wrap gap-2 px-4 py-2 bg-white border-t border-gray-200 text-sm">
+  <div class="flex flex-wrap items-center gap-2 px-4 py-2 bg-white border-t border-gray-200 text-sm">
+    <!-- Model Selection -->
+    <select
+      id="model-select"
+      class="px-3 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      onchange="updateModel()"
+    >
+      <option value="claude-haiku-4-5">Haiku 4.5 (Fast)</option>
+      <option value="claude-sonnet-4-5">Sonnet 4.5 (Balanced)</option>
+      <option value="claude-opus-4-1">Opus 4.1 (Best)</option>
+    </select>
+
+    <!-- Deep Thinking Toggle -->
+    <label class="flex items-center gap-2 px-3 py-2 cursor-pointer">
+      <input
+        type="checkbox"
+        id="thinking-toggle"
+        class="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+        onchange="updateThinking()"
+      />
+      <span class="text-gray-700">Deep Thinking</span>
+    </label>
+
     <button
       onclick="clearConversation()"
       class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"

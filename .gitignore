@@ -13,6 +13,10 @@ build/
 
 # Environment variables
 .env
+.env.local
+
+# Docker local overrides
+docker-compose.override.yml
 
 # IDE
 .vscode/

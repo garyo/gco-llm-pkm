@@ -1,0 +1,24 @@
+# Local Development Override Example
+# Copy this to docker-compose.override.yml for local testing without Traefik
+#
+# Usage:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker-compose up -d
+#   Access at: http://localhost:8000
+#
+# NOTE: docker-compose.override.yml is gitignored and won't be deployed
+
+services:
+  pkm-bridge:
+    # Expose port directly for local access
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    # Remove Traefik labels (not needed locally)
+    labels: []
+
+# Override traefik-net to be a local network instead of external
+networks:
+  traefik-net:
+    external: false
+    driver: bridge

@@ -37,7 +37,7 @@ When searching for notes, always prefer search_notes tool to filesystem or shell
 When adding a note to ORG, ONLY use add_journal_note. Never write to ORG otherwise.
 When adding notes to LOGSEQ, follow the pattern in the existing files.
 
-When starting each session, read user's entire ORG journal.org, and the last two months of LOGSEQ files to gain context and understand the user's workflows.
+When starting each session, read two months of user's ORG journals, and the last two months of LOGSEQ files to gain context and understand the user's workflows.
 
 
 EXAMPLES:
@@ -161,17 +161,12 @@ IMPORTANT DIRECTORY USAGE:
 
 # Directory Structures:
 ORG Structure:
-- journal.org is primary journal. 
-  - Hierarchical journal: Year > Month > Day
-  - Active timestamps: <2025-10-24 Thu>
-  - Property drawers with IDs
+- journal files are in {ORG_DIR}/journals/YYYY-MM-DD.org, one day per file
+  - They have #+title, an active timestamp headers, and property drawers with IDs
   - Inline hashtags: #emacs #music
   - Wiki links: [[wiki:topic]]
   - TODO items with priorities
 - other .org files are individual topics.
-NOTE: do NOT use fd to find journal notes in ORG dir, because all notes are in one file, journal.org. Instead use rg (ripgrep) for given dates.
-A good search pattern is "^[*]+ <YYYY-MM-DD"
-
 
 LOGSEQ Structure:
 - Toplevel dirs are Personal and DSS (which is work-related)

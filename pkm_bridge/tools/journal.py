@@ -15,11 +15,11 @@ class JournalNoteTool(BaseTool):
 
         Args:
             logger: Logger instance
-            org_dir: Primary org-mode directory containing journal.org
+            org_dir: Primary org-mode directory containing journals
         """
         super().__init__(logger)
         self.org_dir = org_dir
-        self.journal_path = org_dir / "journal.org"
+        self.journal_path = org_dir / "journals"
 
     @property
     def name(self) -> str:
@@ -31,8 +31,6 @@ class JournalNoteTool(BaseTool):
 
 This tool uses Emacs batch mode to properly handle the hierarchical journal structure:
 - Creates today's entry if it doesn't exist (Year > Month > Day)
-- Creates parent structure as needed
-- Uses org-ml for reliable AST-based manipulation
 - Adds note as a bullet point under today's heading
 
 The note can contain any text including quotes, newlines, hashtags, and links.
@@ -73,8 +71,7 @@ Always use this tool instead of manually editing journal.org."""
     (require 'init-org)
     (require 'gco-pkm)
     (let ((inhibit-file-locks t))
-      (find-file "{self.journal_path}")
-      (gco-pkm-journal-today)
+      (gco-pkm-journal-today) ; go to journal for today, creating if needed
       (insert {note_escaped})
       (save-buffer)
       (message "Added note to today's journal")))"""

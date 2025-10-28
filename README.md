@@ -97,7 +97,7 @@ SKILLS_DIR=./skills     # Location of skill files
 
 **You:** "Show me my journal entries from last week"
 
-**Assistant:** [Searches journal.org for recent entries, summarizes]
+**Assistant:** [Searches org journals for recent entries, summarizes]
 
 ### TODO Management
 

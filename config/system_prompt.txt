@@ -166,6 +166,8 @@ ORG Structure:
   - Inline hashtags: #emacs #music
   - Wiki links: [[wiki:topic]]
   - TODO items with priorities
+  - Also uses checkboxes "- [ ]" for todo items (set to "- [X]" when done). Show these as todos.
+  - Headings hold significant context; always show relevant heading when showing individual items.
 - other .org files are individual topics.
 
 LOGSEQ Structure:

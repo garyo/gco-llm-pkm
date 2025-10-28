@@ -56,6 +56,22 @@ chmod 600 .env  # Secure the file
 nano .env
 ```
 
+### 2. Create User Context File (Optional)
+
+Add your personal information to help Claude understand your context:
+
+```bash
+cp config/user_context.txt.example config/user_context.txt
+chmod 600 config/user_context.txt  # Keep it private
+nano config/user_context.txt
+```
+
+This file contains personal details like your profession, interests, and family information. It's gitignored to keep your privacy when pushing to GitHub.
+
+**If you skip this step**, the system will work fine but Claude won't have personal context about you.
+
+### 3. Environment Variables
+
 **Required variables:**
 
 ```bash
@@ -72,7 +88,7 @@ JWT_SECRET=<generate-this>
 PASSWORD_HASH=<generate-this>
 ```
 
-### 2. Generate Secrets
+### 4. Generate Secrets
 
 **JWT Secret:**
 ```bash
@@ -90,7 +106,7 @@ python3 -c "import bcrypt; print(bcrypt.hashpw(b'your-secure-password', bcrypt.g
 
 Store your plaintext password in a password manager - you'll need it to log in!
 
-### 3. Verify Volume Mounts
+### 5. Verify Volume Mounts
 
 Ensure the directories exist and are accessible:
 
@@ -109,7 +125,7 @@ chmod -R 775 /path/to/your/org-agenda
 
 **Important:** org-agenda needs **write** access (for journal tool), Logseq only needs **read** access.
 
-### 4. Configure Traefik Domain
+### 6. Configure Traefik Domain
 
 Edit `docker-compose.yml` and update the Traefik labels with your domain:
 

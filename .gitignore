@@ -18,6 +18,9 @@ build/
 # Docker local overrides
 docker-compose.override.yml
 
+# Personal user context (kept private)
+config/user_context.txt
+
 # IDE
 .vscode/
 .idea/

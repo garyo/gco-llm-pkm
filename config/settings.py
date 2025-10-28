@@ -89,17 +89,30 @@ class Config:
     def get_system_prompt(self) -> str:
         """Load and render the system prompt template with configuration values.
 
+        Loads system_prompt.txt and optionally user_context.txt (if present).
+        Personal information in user_context.txt is kept separate for privacy.
+
         Returns:
             Rendered system prompt string.
         """
         template = self.system_prompt_file.read_text(encoding="utf-8")
+
+        # Load optional user context (personal information)
+        user_context_file = Path(__file__).parent / "user_context.txt"
+        if user_context_file.exists():
+            user_context = user_context_file.read_text(encoding="utf-8")
+            # Insert user context after the placeholder comment
+            template = template.replace(
+                "# USER CONTEXT loaded from user_context.txt (if present)",
+                user_context
+            )
 
         # Replace placeholders
         today = datetime.today()
         return template.format(
             ORG_DIR=self.org_dir,
             LOGSEQ_DIR=self.logseq_dir,
-            TODAY=today.strftime("%YYYY-%MM-%DD")
+            TODAY=today.strftime("%Y-%m-%d")
         )
 
     def __repr__(self) -> str:

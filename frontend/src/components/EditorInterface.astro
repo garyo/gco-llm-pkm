@@ -88,6 +88,77 @@
   import { EditorView, basicSetup } from 'codemirror';
   import { markdown } from '@codemirror/lang-markdown';
   import { oneDark } from '@codemirror/theme-one-dark';
+  import { StreamLanguage } from '@codemirror/language';
+  import { emacs } from '@replit/codemirror-emacs';
+
+  // Simple org-mode syntax highlighting
+  const orgMode = StreamLanguage.define({
+    startState: () => ({ inSourceBlock: false }),
+    token: (stream, state) => {
+      // Check for source block delimiters
+      if (stream.sol() && stream.match(/^[\s]*#\+begin_src/i)) {
+        state.inSourceBlock = true;
+        stream.skipToEnd();
+        return "keyword";
+      }
+
+      if (stream.sol() && stream.match(/^[\s]*#\+end_src/i)) {
+        state.inSourceBlock = false;
+        stream.skipToEnd();
+        return "keyword";
+      }
+
+      // Inside source block - treat as code
+      if (state.inSourceBlock) {
+        stream.skipToEnd();
+        return "comment";  // CodeMirror uses "comment" for code blocks in some themes
+      }
+
+      // Headings (*, **, ***, etc.)
+      if (stream.sol() && stream.match(/^\*+\s/)) {
+        stream.skipToEnd();
+        return "heading";
+      }
+
+      // Bold **text**
+      if (stream.match(/\*\*[^\*]+\*\*/)) {
+        return "strong";
+      }
+
+      // Italic /text/
+      if (stream.match(/\/[^\/]+\//)) {
+        return "emphasis";
+      }
+
+      // Code =text= or ~text~
+      if (stream.match(/[=~][^=~]+[=~]/)) {
+        return "monospace";
+      }
+
+      // Links [[url][description]]
+      if (stream.match(/\[\[[^\]]+\]\[[^\]]+\]\]/)) {
+        return "link";
+      }
+
+      // Simple links [[url]]
+      if (stream.match(/\[\[[^\]]+\]\]/)) {
+        return "link";
+      }
+
+      // List items
+      if (stream.sol() && stream.match(/^[\s]*[-+]\s/)) {
+        return "list";
+      }
+
+      // Other #+... directives
+      if (stream.sol() && stream.match(/^#\+.*/)) {
+        return "meta";
+      }
+
+      stream.next();
+      return null;
+    }
+  });
 
   // State
   let editorView: EditorView | null = null;
@@ -115,13 +186,23 @@
     return headers;
   }
 
+  // Get language mode based on file extension
+  function getLanguageMode(filepath: string) {
+    if (filepath.endsWith('.org')) {
+      return orgMode;
+    } else {
+      return markdown();
+    }
+  }
+
   // Initialize CodeMirror
-  function initEditor() {
+  function initEditor(filepath: string = '') {
     editorView = new EditorView({
       extensions: [
         basicSetup,
-        markdown(),
+        getLanguageMode(filepath),
         oneDark,
+        emacs(),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             isDirty = true;
@@ -216,8 +297,6 @@
 
   // Load file content
   async function loadFile(filepath: string) {
-    if (!editorView) return;
-
     // Check for unsaved changes
     if (isDirty && currentFile) {
       if (!confirm('You have unsaved changes. Discard them?')) {
@@ -240,21 +319,30 @@
 
       const data = await res.json();
 
-      // Update editor
-      editorView.dispatch({
-        changes: {
-          from: 0,
-          to: editorView.state.doc.length,
-          insert: data.content
-        }
-      });
+      // Reinitialize editor with correct language mode for this file type
+      if (editorView) {
+        editorView.destroy();
+      }
+      initEditor(filepath);
+
+      // Set content
+      if (editorView) {
+        editorView.dispatch({
+          changes: {
+            from: 0,
+            to: 0,
+            insert: data.content
+          }
+        });
+      }
 
       currentFile = filepath;
       isDirty = false;
       saveButton.disabled = true;
 
       const size = (data.size / 1024).toFixed(1);
-      updateStatus(`Loaded ${data.path} (${size} KB)`);
+      const fileType = filepath.endsWith('.org') ? 'Org' : 'Markdown';
+      updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
     } catch (e: any) {
       updateStatus(`Error loading file: ${e.message}`, true);
       console.error('Failed to load file:', e);
@@ -345,7 +433,8 @@
       const editorApp = document.getElementById('editor-app');
       if (editorApp && !editorApp.classList.contains('hidden')) {
         if (!editorView) {
-          initEditor();
+          // Don't initialize editor until a file is loaded
+          // This way we can set the correct language mode
           loadFileList();
         }
         observer.disconnect();

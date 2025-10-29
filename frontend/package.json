@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/legacy-modes": "^6.5.2",
     "@codemirror/theme-one-dark": "^6.1.3",
+    "@replit/codemirror-emacs": "^6.1.0",
     "@tailwindcss/vite": "^4.1.16",
     "astro": "^5.15.1",
     "codemirror": "^6.0.2",

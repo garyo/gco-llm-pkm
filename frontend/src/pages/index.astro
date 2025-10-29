@@ -2,11 +2,38 @@
 import Layout from '../layouts/Layout.astro';
 import LoginForm from '../components/LoginForm.astro';
 import ChatInterface from '../components/ChatInterface.astro';
+import EditorInterface from '../components/EditorInterface.astro';
 ---
 
 <Layout title="GCO PKM Assistant">
   <LoginForm />
-  <ChatInterface />
+
+  <!-- App Container -->
+  <div id="app-container" class="hidden h-screen flex flex-col">
+    <!-- Tab Navigation -->
+    <div id="tab-nav" class="bg-gray-100 p-2 flex-shrink-0">
+      <button
+        id="chat-tab"
+        class="px-4 py-2 mr-2 bg-blue-500 text-white rounded"
+        onclick="switchTab('chat')"
+      >
+        Chat
+      </button>
+      <button
+        id="editor-tab"
+        class="px-4 py-2 bg-gray-300 text-gray-700 rounded"
+        onclick="switchTab('editor')"
+      >
+        Editor
+      </button>
+    </div>
+
+    <!-- Content Area -->
+    <div class="flex-1 overflow-hidden">
+      <ChatInterface />
+      <EditorInterface />
+    </div>
+  </div>
 </Layout>
 
 <script>
@@ -153,20 +180,32 @@ import ChatInterface from '../components/ChatInterface.astro';
   // Show app (hide login)
   function showApp() {
     loginScreen.classList.add('hidden');
-    appDiv.classList.remove('hidden');
+
+    const appContainer = document.getElementById('app-container');
+    if (appContainer) {
+      appContainer.classList.remove('hidden');
+    }
 
     // Initialize UI controls from saved preferences
     modelSelect.value = selectedModel;
     thinkingToggle.checked = thinkingEnabled;
 
-    input.focus();
+    // Restore last active tab (default to chat)
+    const savedTab = localStorage.getItem('pkm-currentTab') as 'chat' | 'editor' || 'chat';
+    switchTab(savedTab);
+
     loadHistory();
   }
 
   // Show login (hide app)
   function showLogin() {
     loginScreen.classList.remove('hidden');
-    appDiv.classList.add('hidden');
+
+    const appContainer = document.getElementById('app-container');
+    if (appContainer) {
+      appContainer.classList.add('hidden');
+    }
+
     passwordInput.value = '';
     passwordInput.focus();
   }
@@ -176,6 +215,34 @@ import ChatInterface from '../components/ChatInterface.astro';
     authToken = null;
     localStorage.removeItem('pkm-authToken');
     showLogin();
+  }
+
+  // Switch between tabs
+  function switchTab(tab: 'chat' | 'editor') {
+    const chatApp = document.getElementById('app');
+    const editorApp = document.getElementById('editor-app');
+    const chatTab = document.getElementById('chat-tab');
+    const editorTab = document.getElementById('editor-tab');
+
+    if (tab === 'chat') {
+      chatApp?.classList.remove('hidden');
+      editorApp?.classList.add('hidden');
+      chatTab?.classList.remove('bg-gray-300', 'text-gray-700');
+      chatTab?.classList.add('bg-blue-500', 'text-white');
+      editorTab?.classList.remove('bg-green-500', 'text-white');
+      editorTab?.classList.add('bg-gray-300', 'text-gray-700');
+      input.focus();
+    } else {
+      chatApp?.classList.add('hidden');
+      editorApp?.classList.remove('hidden');
+      editorTab?.classList.remove('bg-gray-300', 'text-gray-700');
+      editorTab?.classList.add('bg-green-500', 'text-white');
+      chatTab?.classList.remove('bg-blue-500', 'text-white');
+      chatTab?.classList.add('bg-gray-300', 'text-gray-700');
+    }
+
+    // Save current tab preference
+    localStorage.setItem('pkm-currentTab', tab);
   }
 
   // Update model selection
@@ -409,4 +476,5 @@ import ChatInterface from '../components/ChatInterface.astro';
   (window as any).logout = logout;
   (window as any).updateModel = updateModel;
   (window as any).updateThinking = updateThinking;
+  (window as any).switchTab = switchTab;
 </script>

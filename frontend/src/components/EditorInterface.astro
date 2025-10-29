@@ -1,0 +1,297 @@
+---
+// File editor component
+---
+
+<div id="editor-app" class="hidden flex flex-col h-full">
+  <!-- Header -->
+  <div class="bg-green-500 text-white px-4 py-4 shadow-md flex items-center justify-between">
+    <h1 class="text-xl font-semibold">File Editor</h1>
+    <div class="flex items-center gap-4">
+      <span id="editor-status" class="text-sm"></span>
+      <button
+        id="save-button"
+        class="px-4 py-2 bg-white text-green-600 rounded-lg hover:bg-gray-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Save
+      </button>
+    </div>
+  </div>
+
+  <!-- File Selector -->
+  <div class="bg-gray-50 px-4 py-3 border-b flex items-center gap-4">
+    <label for="file-selector" class="text-sm font-medium text-gray-700">File:</label>
+    <select
+      id="file-selector"
+      class="flex-1 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+    >
+      <option value="">Select a file...</option>
+    </select>
+  </div>
+
+  <!-- Editor Container -->
+  <div id="editor-container" class="flex-1 overflow-hidden">
+    <!-- CodeMirror will be mounted here -->
+  </div>
+</div>
+
+<style>
+  /* CodeMirror styling */
+  #editor-container {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    overflow: auto;
+  }
+
+  #editor-container .cm-editor {
+    height: 100%;
+  }
+
+  #editor-container .cm-scroller {
+    font-size: 14px;
+    line-height: 1.6;
+    overflow: auto;
+  }
+</style>
+
+<script>
+  import { EditorView, basicSetup } from 'codemirror';
+  import { markdown } from '@codemirror/lang-markdown';
+  import { oneDark } from '@codemirror/theme-one-dark';
+
+  // State
+  let editorView: EditorView | null = null;
+  let currentFile: string | null = null;
+  let isDirty = false;
+
+  // DOM elements
+  const editorContainer = document.getElementById('editor-container')!;
+  const fileSelector = document.getElementById('file-selector') as HTMLSelectElement;
+  const saveButton = document.getElementById('save-button') as HTMLButtonElement;
+  const editorStatus = document.getElementById('editor-status')!;
+
+  // Get auth headers from parent context
+  function getAuthHeaders(): HeadersInit {
+    const authToken = localStorage.getItem('pkm-authToken');
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    return headers;
+  }
+
+  // Initialize CodeMirror
+  function initEditor() {
+    editorView = new EditorView({
+      extensions: [
+        basicSetup,
+        markdown(),
+        oneDark,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            isDirty = true;
+            updateStatus('Modified (unsaved)');
+            saveButton.disabled = false;
+          }
+        })
+      ],
+      parent: editorContainer,
+      doc: ''
+    });
+  }
+
+  // Load file list
+  async function loadFileList() {
+    try {
+      const res = await fetch('/api/files', {
+        headers: getAuthHeaders()
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to load files: ${res.status}`);
+      }
+
+      const files = await res.json();
+
+      // Clear existing options except first
+      fileSelector.innerHTML = '<option value="">Select a file...</option>';
+
+      // Add files grouped by directory
+      const orgFiles = files.filter((f: any) => f.dir === 'org');
+      const logseqFiles = files.filter((f: any) => f.dir === 'logseq');
+
+      if (orgFiles.length > 0) {
+        const orgGroup = document.createElement('optgroup');
+        orgGroup.label = 'Org Files';
+        orgFiles.forEach((file: any) => {
+          const option = document.createElement('option');
+          option.value = file.full_path;
+          option.textContent = file.path;
+          orgGroup.appendChild(option);
+        });
+        fileSelector.appendChild(orgGroup);
+      }
+
+      if (logseqFiles.length > 0) {
+        const logseqGroup = document.createElement('optgroup');
+        logseqGroup.label = 'Logseq Files';
+        logseqFiles.forEach((file: any) => {
+          const option = document.createElement('option');
+          option.value = file.full_path;
+          option.textContent = file.path;
+          logseqGroup.appendChild(option);
+        });
+        fileSelector.appendChild(logseqGroup);
+      }
+
+      updateStatus(`Loaded ${files.length} files`);
+    } catch (e: any) {
+      updateStatus(`Error loading files: ${e.message}`, true);
+      console.error('Failed to load file list:', e);
+    }
+  }
+
+  // Load file content
+  async function loadFile(filepath: string) {
+    if (!editorView) return;
+
+    // Check for unsaved changes
+    if (isDirty && currentFile) {
+      if (!confirm('You have unsaved changes. Discard them?')) {
+        // Revert selector to current file
+        fileSelector.value = currentFile;
+        return;
+      }
+    }
+
+    try {
+      updateStatus('Loading...');
+
+      const res = await fetch(`/api/file/${encodeURIComponent(filepath)}`, {
+        headers: getAuthHeaders()
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to load file: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      // Update editor
+      editorView.dispatch({
+        changes: {
+          from: 0,
+          to: editorView.state.doc.length,
+          insert: data.content
+        }
+      });
+
+      currentFile = filepath;
+      isDirty = false;
+      saveButton.disabled = true;
+
+      const size = (data.size / 1024).toFixed(1);
+      updateStatus(`Loaded ${data.path} (${size} KB)`);
+    } catch (e: any) {
+      updateStatus(`Error loading file: ${e.message}`, true);
+      console.error('Failed to load file:', e);
+    }
+  }
+
+  // Save file
+  async function saveFile() {
+    if (!editorView || !currentFile) return;
+
+    try {
+      saveButton.disabled = true;
+      updateStatus('Saving...');
+
+      const content = editorView.state.doc.toString();
+
+      const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ content })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to save file: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      isDirty = false;
+      const size = (data.size / 1024).toFixed(1);
+      updateStatus(`Saved ${data.path} (${size} KB)`);
+
+      // Re-enable after a moment if there are changes
+      setTimeout(() => {
+        if (!isDirty) {
+          saveButton.disabled = true;
+        }
+      }, 500);
+    } catch (e: any) {
+      updateStatus(`Error saving file: ${e.message}`, true);
+      console.error('Failed to save file:', e);
+      saveButton.disabled = false;
+    }
+  }
+
+  // Update status message
+  function updateStatus(message: string, isError: boolean = false) {
+    editorStatus.textContent = message;
+    if (isError) {
+      editorStatus.style.color = '#ef4444';
+    } else {
+      editorStatus.style.color = 'inherit';
+    }
+  }
+
+  // Event handlers
+  fileSelector.addEventListener('change', () => {
+    const filepath = fileSelector.value;
+    if (filepath) {
+      loadFile(filepath);
+    }
+  });
+
+  saveButton.addEventListener('click', saveFile);
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    const editorApp = document.getElementById('editor-app');
+    if (!editorApp || editorApp.classList.contains('hidden')) return;
+
+    // Cmd/Ctrl + S to save
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      if (currentFile && isDirty) {
+        saveFile();
+      }
+    }
+  });
+
+  // Initialize when editor becomes visible
+  function initEditorWhenVisible() {
+    const observer = new MutationObserver(() => {
+      const editorApp = document.getElementById('editor-app');
+      if (editorApp && !editorApp.classList.contains('hidden')) {
+        if (!editorView) {
+          initEditor();
+          loadFileList();
+        }
+        observer.disconnect();
+      }
+    });
+
+    observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class']
+    });
+  }
+
+  // Start observing
+  initEditorWhenVisible();
+
+  // Make functions globally available for tab switching
+  (window as any).refreshFileList = loadFileList;
+</script>

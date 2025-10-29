@@ -8,3 +8,6 @@
 - [ ] Enhance org journal add to allow inline tasks (no leading "- ", instead 15x *)
 - [ ] Notes search tool should have sep cases for logseq journals, pages, org pages, and org journals (needs emacs or parser)
   - [ ] Maybe I should store my org notes using the same scheme as logseq, one file per day! Then I'd just need a context/recent view within Emacs.
+- [ ] Add a full note-editing interface
+- [ ] Connect to ticktick
+- [ ] Connect to Google calendar

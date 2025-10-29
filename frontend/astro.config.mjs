@@ -23,6 +23,10 @@ export default defineConfig({
     server: {
       // Proxy API calls to Flask backend
       proxy: {
+        '/api': {
+          target: 'http://localhost:8000',
+          changeOrigin: true,
+        },
         '/query': {
           target: 'http://localhost:8000',
           changeOrigin: true,

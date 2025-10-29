@@ -110,6 +110,10 @@ tool_registry.register(JournalNoteTool(logger, config.org_dir))
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
+# Initialize file editor
+from pkm_bridge.file_editor import FileEditor
+file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
+
 # -------------------------
 # Utilities
 # -------------------------
@@ -496,6 +500,80 @@ def serve_asset(filepath):
     except Exception as e:
         logger.error(f"Error serving asset {filepath}: {str(e)}")
         return jsonify({"error": "Error serving file"}), 500
+
+
+# -------------------------
+# File Editor Endpoints
+# -------------------------
+
+@app.route('/api/files', methods=['GET'])
+@auth_manager.require_auth
+@limiter.limit("60 per minute")
+def list_files():
+    """List all editable files (.org and .md) in PKM directories.
+
+    Returns:
+        JSON list of files with path, name, dir, modified timestamp
+    """
+    try:
+        files = file_editor.list_files()
+        return jsonify(files)
+    except Exception as e:
+        logger.error(f"Error listing files: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/file/<path:filepath>', methods=['GET'])
+@auth_manager.require_auth
+@limiter.limit("60 per minute")
+def get_file(filepath):
+    """Read file content.
+
+    Args:
+        filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
+
+    Returns:
+        JSON with content, path, modified timestamp
+    """
+    try:
+        file_data = file_editor.read_file(filepath)
+        return jsonify(file_data)
+    except ValueError as e:
+        logger.warning(f"Invalid file path requested: {filepath} - {str(e)}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error reading file {filepath}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/file/<path:filepath>', methods=['PUT'])
+@auth_manager.require_auth
+@limiter.limit("60 per minute")
+def save_file(filepath):
+    """Save file content.
+
+    Args:
+        filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
+
+    Request body:
+        {"content": "file content here"}
+
+    Returns:
+        JSON with status, path, modified timestamp
+    """
+    try:
+        data = request.json
+        if not data or 'content' not in data:
+            return jsonify({"error": "Missing 'content' in request body"}), 400
+
+        result = file_editor.write_file(filepath, data['content'])
+        return jsonify(result)
+    except ValueError as e:
+        logger.warning(f"Invalid file path for save: {filepath} - {str(e)}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error saving file {filepath}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/health', methods=['GET'])

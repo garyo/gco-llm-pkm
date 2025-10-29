@@ -45,3 +45,4 @@ frontend/dist/
 frontend/.astro/
 templates/_astro/
 templates/index.html
+templates/data-store.json

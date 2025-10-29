@@ -50,39 +50,67 @@ class FileEditor:
         """List all .org and .md files in allowed directories.
 
         Returns:
-            List of dicts with file info: {path, name, dir, modified}
+            List of dicts with file info: {path, name, dir, type, modified}
+            where type is 'journal', 'page', or 'other'
         """
         files = []
-        
+
         # Scan org directory for .org files
         if self.org_dir and self.org_dir.exists():
             for file_path in self.org_dir.rglob("*.org"):
                 if file_path.is_file():
                     rel_path = file_path.relative_to(self.org_dir)
+                    parts_lower = [part.lower() for part in rel_path.parts]
+
+                    # Classify: journals, pages (default), or other (bak)
+                    if 'bak' in parts_lower:
+                        file_type = 'other'
+                    elif 'journals' in parts_lower:
+                        file_type = 'journal'
+                    elif 'assets' in parts_lower:
+                        file_type = 'other'
+                    else:
+                        file_type = 'page'
+
                     files.append({
                         'path': str(rel_path),
-                        'full_path': f"org:{rel_path}",  # Prefix to indicate dir
+                        'full_path': f"org:{rel_path}",
                         'name': file_path.name,
                         'dir': 'org',
+                        'type': file_type,
                         'modified': file_path.stat().st_mtime
                     })
-        
+
         # Scan Logseq directory for .md files
         if self.logseq_dir and self.logseq_dir.exists():
             for file_path in self.logseq_dir.rglob("*.md"):
                 if file_path.is_file():
                     rel_path = file_path.relative_to(self.logseq_dir)
+                    parts_lower = [part.lower() for part in rel_path.parts]
+
+                    # Classify: journals (*/journals/), pages (*/pages/), or other
+                    if 'bak' in parts_lower:
+                        file_type = 'other'
+                    elif 'version-files' in parts_lower:
+                        file_type = 'other'
+                    elif 'sync-conflict' in str(rel_path):
+                        file_type = 'other'
+                    elif 'journals' in parts_lower:
+                        file_type = 'journal'
+                    elif 'pages' in parts_lower:
+                        file_type = 'page'
+                    else:
+                        file_type = 'other'
+
                     files.append({
                         'path': str(rel_path),
-                        'full_path': f"logseq:{rel_path}",  # Prefix to indicate dir
+                        'full_path': f"logseq:{rel_path}",
                         'name': file_path.name,
                         'dir': 'logseq',
+                        'type': file_type,
                         'modified': file_path.stat().st_mtime
                     })
-        
-        # Sort by modified time, newest first
-        files.sort(key=lambda f: f['modified'], reverse=True)
-        
+
         return files
 
     def read_file(self, filepath: str) -> Dict[str, any]:

@@ -17,15 +17,47 @@
     </div>
   </div>
 
-  <!-- File Selector -->
-  <div class="bg-gray-50 px-4 py-3 border-b flex items-center gap-4">
-    <label for="file-selector" class="text-sm font-medium text-gray-700">File:</label>
-    <select
-      id="file-selector"
-      class="flex-1 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-    >
-      <option value="">Select a file...</option>
-    </select>
+  <!-- File Selector with Filters -->
+  <div class="bg-gray-50 px-4 py-3 border-b">
+    <div class="flex flex-wrap items-center gap-3">
+      <label class="text-sm font-medium text-gray-700">Source:</label>
+      <select
+        id="source-filter"
+        class="px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      >
+        <option value="all">All</option>
+        <option value="org">Org</option>
+        <option value="logseq">Logseq</option>
+      </select>
+
+      <label class="text-sm font-medium text-gray-700">Type:</label>
+      <select
+        id="type-filter"
+        class="px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      >
+        <option value="all">All</option>
+        <option value="journal">Journals</option>
+        <option value="page">Pages</option>
+        <option value="other">Other</option>
+      </select>
+
+      <input
+        id="search-filter"
+        type="text"
+        placeholder="Filter filenames..."
+        class="w-48 px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      />
+
+      <label for="file-selector" class="text-sm font-medium text-gray-700">File:</label>
+      <select
+        id="file-selector"
+        class="min-w-64 flex-1 px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+      >
+        <option value="">Select a file...</option>
+      </select>
+
+      <span id="file-count" class="text-sm text-gray-500 whitespace-nowrap"></span>
+    </div>
   </div>
 
   <!-- Editor Container -->
@@ -61,12 +93,17 @@
   let editorView: EditorView | null = null;
   let currentFile: string | null = null;
   let isDirty = false;
+  let allFiles: any[] = [];
 
   // DOM elements
   const editorContainer = document.getElementById('editor-container')!;
   const fileSelector = document.getElementById('file-selector') as HTMLSelectElement;
   const saveButton = document.getElementById('save-button') as HTMLButtonElement;
   const editorStatus = document.getElementById('editor-status')!;
+  const sourceFilter = document.getElementById('source-filter') as HTMLSelectElement;
+  const typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
+  const searchFilter = document.getElementById('search-filter') as HTMLInputElement;
+  const fileCount = document.getElementById('file-count')!;
 
   // Get auth headers from parent context
   function getAuthHeaders(): HeadersInit {
@@ -98,7 +135,7 @@
     });
   }
 
-  // Load file list
+  // Load all files from backend
   async function loadFileList() {
     try {
       const res = await fetch('/api/files', {
@@ -109,44 +146,72 @@
         throw new Error(`Failed to load files: ${res.status}`);
       }
 
-      const files = await res.json();
-
-      // Clear existing options except first
-      fileSelector.innerHTML = '<option value="">Select a file...</option>';
-
-      // Add files grouped by directory
-      const orgFiles = files.filter((f: any) => f.dir === 'org');
-      const logseqFiles = files.filter((f: any) => f.dir === 'logseq');
-
-      if (orgFiles.length > 0) {
-        const orgGroup = document.createElement('optgroup');
-        orgGroup.label = 'Org Files';
-        orgFiles.forEach((file: any) => {
-          const option = document.createElement('option');
-          option.value = file.full_path;
-          option.textContent = file.path;
-          orgGroup.appendChild(option);
-        });
-        fileSelector.appendChild(orgGroup);
-      }
-
-      if (logseqFiles.length > 0) {
-        const logseqGroup = document.createElement('optgroup');
-        logseqGroup.label = 'Logseq Files';
-        logseqFiles.forEach((file: any) => {
-          const option = document.createElement('option');
-          option.value = file.full_path;
-          option.textContent = file.path;
-          logseqGroup.appendChild(option);
-        });
-        fileSelector.appendChild(logseqGroup);
-      }
-
-      updateStatus(`Loaded ${files.length} files`);
+      allFiles = await res.json();
+      updateStatus(`Loaded ${allFiles.length} files`);
+      filterAndPopulateFiles();
     } catch (e: any) {
       updateStatus(`Error loading files: ${e.message}`, true);
       console.error('Failed to load file list:', e);
     }
+  }
+
+  // Filter and populate file selector based on current filters
+  function filterAndPopulateFiles() {
+    const sourceValue = sourceFilter.value;
+    const typeValue = typeFilter.value;
+    const searchValue = searchFilter.value.toLowerCase();
+
+    // Filter files
+    let filtered = allFiles.filter((f: any) => {
+      if (sourceValue !== 'all' && f.dir !== sourceValue) return false;
+      if (typeValue !== 'all' && f.type !== typeValue) return false;
+      if (searchValue && !f.name.toLowerCase().includes(searchValue) && !f.path.toLowerCase().includes(searchValue)) return false;
+      return true;
+    });
+
+    // Sort: journals by date (newest first), pages and other alphabetically
+    const journals = filtered.filter((f: any) => f.type === 'journal');
+    const pages = filtered.filter((f: any) => f.type === 'page');
+    const other = filtered.filter((f: any) => f.type === 'other');
+
+    journals.sort((a: any, b: any) => b.modified - a.modified);
+    pages.sort((a: any, b: any) => a.name.localeCompare(b.name));
+    other.sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+    const sorted = [...journals, ...pages, ...other];
+
+    // Clear and populate dropdown
+    fileSelector.innerHTML = '<option value="">Select a file...</option>';
+
+    // Group by source and type
+    const orgJournals = sorted.filter((f: any) => f.dir === 'org' && f.type === 'journal');
+    const orgPages = sorted.filter((f: any) => f.dir === 'org' && f.type === 'page');
+    const orgOther = sorted.filter((f: any) => f.dir === 'org' && f.type === 'other');
+    const logseqJournals = sorted.filter((f: any) => f.dir === 'logseq' && f.type === 'journal');
+    const logseqPages = sorted.filter((f: any) => f.dir === 'logseq' && f.type === 'page');
+    const logseqOther = sorted.filter((f: any) => f.dir === 'logseq' && f.type === 'other');
+
+    function addGroup(label: string, files: any[]) {
+      if (files.length === 0) return;
+      const group = document.createElement('optgroup');
+      group.label = `${label} (${files.length})`;
+      files.forEach((file: any) => {
+        const option = document.createElement('option');
+        option.value = file.full_path;
+        option.textContent = file.path;
+        group.appendChild(option);
+      });
+      fileSelector.appendChild(group);
+    }
+
+    addGroup('Org Journals', orgJournals);
+    addGroup('Org Pages', orgPages);
+    addGroup('Org Other', orgOther);
+    addGroup('Logseq Journals', logseqJournals);
+    addGroup('Logseq Pages', logseqPages);
+    addGroup('Logseq Other', logseqOther);
+
+    fileCount.textContent = `${sorted.length} file${sorted.length !== 1 ? 's' : ''}`;
   }
 
   // Load file content
@@ -254,6 +319,11 @@
   });
 
   saveButton.addEventListener('click', saveFile);
+
+  // Filter event listeners
+  sourceFilter.addEventListener('change', filterAndPopulateFiles);
+  typeFilter.addEventListener('change', filterAndPopulateFiles);
+  searchFilter.addEventListener('input', filterAndPopulateFiles);
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {

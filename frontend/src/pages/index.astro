@@ -10,22 +10,38 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   <!-- App Container -->
   <div id="app-container" class="hidden h-screen flex flex-col">
-    <!-- Tab Navigation -->
-    <div id="tab-nav" class="bg-gray-100 p-2 flex-shrink-0">
-      <button
-        id="chat-tab"
-        class="px-4 py-2 mr-2 bg-blue-500 text-white rounded"
-        onclick="switchTab('chat')"
-      >
-        Chat
-      </button>
-      <button
-        id="editor-tab"
-        class="px-4 py-2 bg-gray-300 text-gray-700 rounded"
-        onclick="switchTab('editor')"
-      >
-        Editor
-      </button>
+    <!-- Unified Header -->
+    <div class="bg-blue-500 text-white px-4 py-3 shadow-md flex items-center gap-4 flex-shrink-0 min-h-[56px]">
+      <h1 class="text-xl font-semibold">GCO PKM Assistant</h1>
+
+      <!-- Tab buttons -->
+      <div class="flex gap-2">
+        <button
+          id="chat-tab"
+          class="px-3 py-1.5 bg-white/20 rounded text-sm"
+          onclick="switchTab('chat')"
+        >
+          Chat
+        </button>
+        <button
+          id="editor-tab"
+          class="px-3 py-1.5 bg-white/0 rounded text-sm"
+          onclick="switchTab('editor')"
+        >
+          Editor
+        </button>
+      </div>
+
+      <!-- Editor status (shown only when in editor tab) -->
+      <div id="editor-header-status" class="hidden flex items-center gap-4 ml-auto">
+        <span id="editor-status" class="text-sm"></span>
+        <button
+          id="save-button"
+          class="px-4 py-1.5 bg-white text-blue-600 rounded-lg hover:bg-gray-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Save
+        </button>
+      </div>
     </div>
 
     <!-- Content Area -->
@@ -223,22 +239,30 @@ import EditorInterface from '../components/EditorInterface.astro';
     const editorApp = document.getElementById('editor-app');
     const chatTab = document.getElementById('chat-tab');
     const editorTab = document.getElementById('editor-tab');
+    const editorHeaderStatus = document.getElementById('editor-header-status');
 
     if (tab === 'chat') {
       chatApp?.classList.remove('hidden');
       editorApp?.classList.add('hidden');
-      chatTab?.classList.remove('bg-gray-300', 'text-gray-700');
-      chatTab?.classList.add('bg-blue-500', 'text-white');
-      editorTab?.classList.remove('bg-green-500', 'text-white');
-      editorTab?.classList.add('bg-gray-300', 'text-gray-700');
+      editorHeaderStatus?.classList.add('hidden');
+      editorHeaderStatus?.classList.remove('flex');
+
+      chatTab?.classList.remove('bg-white/0');
+      chatTab?.classList.add('bg-white/20');
+      editorTab?.classList.remove('bg-white/20');
+      editorTab?.classList.add('bg-white/0');
+
       input.focus();
     } else {
       chatApp?.classList.add('hidden');
       editorApp?.classList.remove('hidden');
-      editorTab?.classList.remove('bg-gray-300', 'text-gray-700');
-      editorTab?.classList.add('bg-green-500', 'text-white');
-      chatTab?.classList.remove('bg-blue-500', 'text-white');
-      chatTab?.classList.add('bg-gray-300', 'text-gray-700');
+      editorHeaderStatus?.classList.remove('hidden');
+      editorHeaderStatus?.classList.add('flex');
+
+      editorTab?.classList.remove('bg-white/0');
+      editorTab?.classList.add('bg-white/20');
+      chatTab?.classList.remove('bg-white/20');
+      chatTab?.classList.add('bg-white/0');
     }
 
     // Save current tab preference

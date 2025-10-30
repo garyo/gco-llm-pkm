@@ -47,6 +47,10 @@ from pkm_bridge.logging_config import setup_logging
 # Import auth
 from pkm_bridge.auth import AuthManager
 
+# Import database
+from pkm_bridge.database import init_db, get_db
+from pkm_bridge.db_repository import SessionRepository
+
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
 from pkm_bridge.tools.shell import ExecuteShellTool
@@ -121,9 +125,6 @@ if config.auth_enabled:
     )
     logger.info("Authentication enabled with rate limiting")
 
-# In-memory sessions
-sessions: Dict[str, Dict[str, Any]] = {}
-
 # -------------------------
 # Initialize Tools
 # -------------------------
@@ -163,6 +164,26 @@ def timer(label: str):
         yield
     finally:
         logger.debug(f"{label}: {time.time() - start:.3f}s")
+
+
+def serialize_message_content(content):
+    """Convert Anthropic message content to JSON-serializable format."""
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, list):
+        serialized = []
+        for item in content:
+            if hasattr(item, 'model_dump'):
+                # Anthropic SDK objects have model_dump()
+                serialized.append(item.model_dump())
+            elif isinstance(item, dict):
+                serialized.append(item)
+            else:
+                # Fallback: convert to dict manually
+                serialized.append({"type": getattr(item, "type", "unknown"), "data": str(item)})
+        return serialized
+    else:
+        return str(content)
 
 
 # -------------------------
@@ -283,16 +304,19 @@ def query():
     model = data.get('model', config.model)
     thinking = data.get('thinking')
 
-    # Create session
-    if session_id not in sessions:
-        sessions[session_id] = {
-            'history': [],
-            'system_prompt': config.get_system_prompt()
-        }
-    session = sessions[session_id]
+    # Get or create session from database
+    db = get_db()
+    try:
+        db_session = SessionRepository.get_or_create_session(
+            db, session_id, system_prompt=config.get_system_prompt()
+        )
+        history = db_session.history if db_session.history else []
+        system_prompt = db_session.system_prompt or config.get_system_prompt()
+    finally:
+        db.close()
 
     # Append user message
-    session['history'].append({
+    history.append({
         "role": "user",
         "content": user_message
     })
@@ -310,9 +334,9 @@ def query():
             "model": model,
             "max_tokens": 8192,
             "system": [
-                {"type": "text", "text": session['system_prompt'], "cache_control": {"type": "ephemeral"}}
+                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
             ],
-            "messages": session['history'],
+            "messages": history,
             "tools": tool_registry.get_anthropic_tools(),
             "extra_headers": {
                 "anthropic-beta": ",".join(beta_features)
@@ -348,11 +372,11 @@ def query():
                         "content": result
                     })
 
-            session['history'].append({"role": "assistant", "content": response.content})
-            session['history'].append({"role": "user", "content": tool_results})
+            history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+            history.append({"role": "user", "content": tool_results})
 
             # Update API params with new history
-            api_params["messages"] = session['history']
+            api_params["messages"] = history
 
             api_call_count += 1
             with timer(f"Claude API call #{api_call_count} ({model})"):
@@ -364,7 +388,14 @@ def query():
             if getattr(block, "type", "") == "text":
                 assistant_text += block.text
 
-        session['history'].append({"role": "assistant", "content": response.content})
+        history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+
+        # Save updated history to database
+        db = get_db()
+        try:
+            SessionRepository.update_history(db, session_id, history)
+        finally:
+            db.close()
 
         total_elapsed = time.time() - request_start
         logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
@@ -392,25 +423,31 @@ def get_history(session_id):
             logger.warning(f"Unauthorized history access from {request.remote_addr}: invalid token")
             return jsonify({"error": "Invalid or expired token"}), 401
 
-    if session_id not in sessions:
-        return jsonify([])
+    # Get session from database
+    db = get_db()
+    try:
+        db_session = SessionRepository.get_session(db, session_id)
+        if not db_session:
+            return jsonify([])
 
-    history = []
-    for msg in sessions[session_id]['history']:
-        if msg['role'] in ['user', 'assistant']:
-            if isinstance(msg['content'], str):
-                history.append({"role": msg['role'], "text": msg['content']})
-            elif isinstance(msg['content'], list):
-                text = ""
-                for item in msg['content']:
-                    if hasattr(item, 'text'):
-                        text += item.text
-                    elif isinstance(item, dict) and 'text' in item:
-                        text += item['text']
-                if text:
-                    history.append({"role": msg['role'], "text": text})
+        history = []
+        for msg in db_session.history:
+            if msg['role'] in ['user', 'assistant']:
+                if isinstance(msg['content'], str):
+                    history.append({"role": msg['role'], "text": msg['content']})
+                elif isinstance(msg['content'], list):
+                    text = ""
+                    for item in msg['content']:
+                        if hasattr(item, 'text'):
+                            text += item.text
+                        elif isinstance(item, dict) and 'text' in item:
+                            text += item['text']
+                    if text:
+                        history.append({"role": msg['role'], "text": text})
 
-    return jsonify(history)
+        return jsonify(history)
+    finally:
+        db.close()
 
 
 @app.route('/sessions/<session_id>', methods=['DELETE'])
@@ -428,10 +465,15 @@ def clear_session(session_id):
             logger.warning(f"Unauthorized session delete from {request.remote_addr}: invalid token")
             return jsonify({"error": "Invalid or expired token"}), 401
 
-    if session_id in sessions:
-        del sessions[session_id]
-        logger.info(f"Cleared session: {session_id}")
-    return jsonify({"status": "ok"})
+    # Delete session from database
+    db = get_db()
+    try:
+        deleted = SessionRepository.delete_session(db, session_id)
+        if deleted:
+            logger.info(f"Cleared session: {session_id}")
+        return jsonify({"status": "ok"})
+    finally:
+        db.close()
 
 
 @app.route('/assets/<path:filepath>', methods=['GET'])

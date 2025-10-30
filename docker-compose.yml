@@ -12,7 +12,7 @@ services:
     networks:
       - traefik-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pkm}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pkm} -d pkm_db"]
       interval: 10s
       timeout: 5s
       retries: 5

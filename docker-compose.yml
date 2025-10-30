@@ -50,8 +50,8 @@ services:
       - HOST=0.0.0.0  # Listen on all interfaces inside container
       - DEBUG=false
 
-      # Database
-      - DATABASE_URL=postgresql://${DB_USER:-pkm}:${DB_PASSWORD}@postgres:5432/pkm_db
+      # Database - use placeholders so Python can URL-encode the password
+      - DATABASE_URL=postgresql://{DB_USER}:{DB_PASSWORD}@postgres:5432/pkm_db
 
     volumes:
       # Mount org files

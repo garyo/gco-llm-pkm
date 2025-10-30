@@ -171,6 +171,12 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/settings')
+def settings():
+    """Serve the settings page."""
+    return render_template('settings.html')
+
+
 @app.route('/_astro/<path:filename>')
 def serve_astro_assets(filename):
     """Serve Astro build assets (JS, CSS, etc)."""

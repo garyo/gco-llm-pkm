@@ -62,6 +62,9 @@ from pkm_bridge.db_repository import OAuthRepository
 from pkm_bridge.ticktick_oauth import TickTickOAuth
 from pkm_bridge.ticktick_client import TickTickClient
 
+# Import SSE event manager
+from pkm_bridge.events import event_manager
+
 # -------------------------
 # Setup & Configuration
 # -------------------------
@@ -786,6 +789,45 @@ def health():
     return jsonify(health_data)
 
 
+@app.route('/api/events')
+def sse_events():
+    """Server-Sent Events endpoint for real-time notifications."""
+    import json
+    import queue
+
+    def event_stream():
+        """Generator for SSE events."""
+        client_queue = event_manager.add_client()
+        try:
+            # Send initial connection event
+            yield f"data: {json.dumps({'type': 'connected', 'data': {}, 'timestamp': int(time.time())})}\n\n"
+
+            # Stream events from queue
+            while True:
+                try:
+                    # Wait for messages with timeout to allow checking connection
+                    message = client_queue.get(timeout=30)
+                    yield f"data: {json.dumps(message)}\n\n"
+                except queue.Empty:
+                    # Send keepalive comment every 30 seconds
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            # Client disconnected, clean up silently
+            pass
+        finally:
+            event_manager.remove_client(client_queue)
+
+    return app.response_class(
+        event_stream(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',  # Disable nginx buffering
+            'Connection': 'keep-alive'
+        }
+    )
+
+
 if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("gco-pkm-llm Bridge Server")
@@ -802,6 +844,18 @@ if __name__ == '__main__':
         logger.info("Browser hot-reload enabled")
     logger.info("=" * 60)
 
+    # Start file watcher for SSE notifications
+    watch_dirs = [config.org_dir]
+    if config.logseq_dir:
+        watch_dirs.append(config.logseq_dir)
+    event_manager.start_file_watcher(watch_dirs)
+    logger.info(f"File watcher started for {len(watch_dirs)} directories")
+
     # In production, use proper WSGI server (gunicorn, waitress, etc.)
     # Enable threaded mode to handle concurrent requests (e.g., context loading + user queries)
-    app.run(host=config.host, port=config.port, debug=config.debug, threaded=True)
+    try:
+        app.run(host=config.host, port=config.port, debug=config.debug, threaded=True)
+    finally:
+        # Clean up file watcher on shutdown
+        event_manager.stop_file_watcher()
+        logger.info("File watcher stopped")

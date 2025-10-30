@@ -11,3 +11,5 @@
 - [x] Add a full note-editing interface
 - [x] Connect to ticktick
 - [ ] Connect to Google calendar
+- [x] Auto-refresh in editor
+- [ ] Session management in db?

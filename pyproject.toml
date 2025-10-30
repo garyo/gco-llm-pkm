@@ -16,6 +16,7 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "alembic>=1.13.0",
     "requests>=2.31.0",
+    "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]

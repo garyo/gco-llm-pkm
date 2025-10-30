@@ -151,6 +151,8 @@
   let currentFile: string | null = null;
   let isDirty = false;
   let allFiles: any[] = [];
+  let currentFileMtime: number | null = null;  // Track file modification time
+  let eventSource: EventSource | null = null;  // SSE connection
 
   // DOM elements
   const editorContainer = document.getElementById('editor-container')!;
@@ -325,6 +327,7 @@
       }
 
       currentFile = filepath;
+      currentFileMtime = data.modified || null;  // Track modification time
       isDirty = false;
       saveButton.disabled = true;
 
@@ -401,6 +404,97 @@
     }
   }
 
+  // Connect to SSE for real-time file updates
+  function connectSSE() {
+    if (eventSource) {
+      return; // Already connected
+    }
+
+    try {
+      eventSource = new EventSource('/api/events');
+
+      eventSource.onopen = () => {
+        // Connection established
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleSSEEvent(message);
+        } catch (e) {
+          console.error('Failed to parse SSE event:', e, event.data);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error('SSE error:', error, 'ReadyState:', eventSource?.readyState);
+        eventSource?.close();
+        eventSource = null;
+        // Reconnect after 5 seconds
+        setTimeout(connectSSE, 5000);
+      };
+    } catch (e) {
+      console.error('Failed to connect SSE:', e);
+    }
+  }
+
+  // Handle SSE events
+  function handleSSEEvent(message: any) {
+    const { type, data } = message;
+
+    if (type === 'connected') {
+      return;
+    }
+
+    if (type === 'file_changed') {
+      handleFileChanged(data);
+      return;
+    }
+
+    if (type === 'open_file') {
+      // Future: handle "open file" command from chat
+      handleOpenFile(data);
+      return;
+    }
+  }
+
+  // Handle file change event
+  function handleFileChanged(data: any) {
+    const { path, mtime } = data;
+
+    if (!currentFile) {
+      return;
+    }
+
+    // Check if the absolute path ends with the relative path from currentFile
+    const currentRelPath = currentFile.includes(':') ? currentFile.split(':', 2)[1] : currentFile;
+    if (!path.endsWith(currentRelPath)) {
+      return;
+    }
+
+    if (isDirty) {
+      // File is modified, show notification but don't auto-reload
+      updateStatus('File changed on disk (unsaved changes)', true);
+      return;
+    }
+
+    if (currentFileMtime && mtime <= currentFileMtime) {
+      // Mtime hasn't changed (or is older), skip
+      return;
+    }
+
+    // Auto-reload the file
+    loadFile(currentFile);
+  }
+
+  // Handle open file event (for future use)
+  function handleOpenFile(data: any) {
+    const { path } = data;
+    // Future: switch to editor tab and load the file
+    console.log('Open file requested:', path);
+    // loadFile(path);
+  }
+
   // Event handlers
   fileSelector.addEventListener('change', () => {
     const filepath = fileSelector.value;
@@ -448,6 +542,8 @@
           // Don't initialize editor until a file is loaded
           // This way we can set the correct language mode
           loadFileList();
+          // Connect to SSE for real-time file updates
+          connectSSE();
         }
         observer.disconnect();
       }

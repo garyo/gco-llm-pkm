@@ -32,15 +32,23 @@ import EditorInterface from '../components/EditorInterface.astro';
         </button>
       </div>
 
-      <!-- Editor status (shown only when in editor tab) -->
-      <div id="editor-header-status" class="hidden flex items-center gap-4 ml-auto">
-        <span id="editor-status" class="text-sm"></span>
-        <button
-          id="save-button"
-          class="px-4 py-1.5 bg-white text-blue-600 rounded-lg hover:bg-gray-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          Save
-        </button>
+      <!-- Right side content -->
+      <div class="ml-auto flex items-center gap-4">
+        <!-- Editor status (shown only when in editor tab) -->
+        <div id="editor-header-status" class="hidden items-center gap-4">
+          <span id="editor-status" class="text-sm"></span>
+          <button
+            id="save-button"
+            class="px-4 py-1.5 bg-white text-blue-600 rounded-lg hover:bg-gray-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Save
+          </button>
+        </div>
+
+        <!-- Settings Link -->
+        <a href="/settings" class="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-sm transition-colors">
+          ⚙️ Settings
+        </a>
       </div>
     </div>
 

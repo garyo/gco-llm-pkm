@@ -9,6 +9,10 @@
 #   "pyjwt>=2.8.0",
 #   "bcrypt>=4.1.0",
 #   "flask-limiter>=3.5.0",
+#   "sqlalchemy>=2.0.23",
+#   "psycopg2-binary>=2.9.9",
+#   "alembic>=1.13.0",
+#   "requests>=2.31.0",
 # ]
 # ///
 """
@@ -22,7 +26,7 @@ from contextlib import contextmanager
 from typing import Dict, Any
 
 from anthropic import Anthropic
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template, send_from_directory, redirect
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import os
@@ -48,6 +52,15 @@ from pkm_bridge.tools.shell import ExecuteShellTool
 from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.journal import JournalNoteTool
+from pkm_bridge.tools.ticktick import TickTickTool
+
+# Import database components
+from pkm_bridge.database import init_db, get_db
+from pkm_bridge.db_repository import OAuthRepository
+
+# Import TickTick components
+from pkm_bridge.ticktick_oauth import TickTickOAuth
+from pkm_bridge.ticktick_client import TickTickClient
 
 # -------------------------
 # Setup & Configuration
@@ -69,6 +82,21 @@ app = Flask(__name__)
 if config.debug and HOT_RELOAD_AVAILABLE:
     HotReload(app, includes=['templates', 'static'])
     logger.info("Hot reload enabled")
+
+# Initialize database
+try:
+    init_db()
+    logger.info("Database initialized")
+except Exception as e:
+    logger.warning(f"Database initialization failed (will retry on use): {e}")
+
+# Initialize TickTick OAuth handler (optional - only if configured)
+ticktick_oauth = None
+try:
+    ticktick_oauth = TickTickOAuth()
+    logger.info("TickTick OAuth handler initialized")
+except ValueError as e:
+    logger.info(f"TickTick not configured: {e}")
 
 # Initialize rate limiter
 limiter = Limiter(
@@ -107,6 +135,11 @@ tool_registry.register(execute_shell_tool)
 tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(JournalNoteTool(logger, config.org_dir))
+
+# Register TickTick tool if configured
+if ticktick_oauth:
+    tool_registry.register(TickTickTool(logger, ticktick_oauth))
+    logger.info("TickTick tool registered")
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
@@ -576,6 +609,144 @@ def save_file(filepath):
         return jsonify({"error": str(e)}), 500
 
 
+# -------------------------
+# TickTick OAuth Routes
+# -------------------------
+
+@app.route('/auth/ticktick/authorize', methods=['GET'])
+def ticktick_authorize():
+    """Initiate TickTick OAuth flow.
+
+    This endpoint doesn't require authentication since it's part of the initial
+    setup flow. The actual authorization happens on TickTick's servers.
+    Redirects user to TickTick's authorization page.
+    """
+    if not ticktick_oauth:
+        return jsonify({"error": "TickTick not configured"}), 503
+
+    try:
+        auth_data = ticktick_oauth.get_authorization_url()
+        # Redirect user to TickTick authorization page
+        return redirect(auth_data['url'])
+    except Exception as e:
+        logger.error(f"Error initiating TickTick OAuth: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/auth/ticktick/callback', methods=['GET'])
+def ticktick_callback():
+    """Handle TickTick OAuth callback."""
+    if not ticktick_oauth:
+        return jsonify({"error": "TickTick not configured"}), 503
+
+    code = request.args.get('code')
+    state = request.args.get('state')
+    error = request.args.get('error')
+
+    if error:
+        logger.error(f"TickTick OAuth error: {error}")
+        return jsonify({"error": error}), 400
+
+    if not code:
+        return jsonify({"error": "No authorization code received"}), 400
+
+    try:
+        # Exchange code for tokens
+        token_data = ticktick_oauth.exchange_code(code)
+
+        # Store tokens in database
+        db = get_db()
+        OAuthRepository.save_token(
+            db=db,
+            service='ticktick',
+            access_token=token_data['access_token'],
+            refresh_token=token_data.get('refresh_token'),
+            expires_at=token_data['expires_at'],
+            scope=token_data.get('scope')
+        )
+        db.close()
+
+        logger.info("TickTick OAuth completed successfully")
+        return """
+        <html>
+            <head>
+                <title>TickTick Connected</title>
+                <meta http-equiv="refresh" content="3;url=/" />
+            </head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <h1 style="color: #4CAF50;">✓ TickTick Connected Successfully!</h1>
+                <p>Claude can now access your TickTick tasks.</p>
+                <p>Redirecting to home page... <a href="/">Click here</a> if not redirected.</p>
+            </body>
+        </html>
+        """
+
+    except Exception as e:
+        logger.error(f"Error completing TickTick OAuth: {e}")
+        return f"""
+        <html>
+            <head><title>TickTick Connection Error</title></head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <h1 style="color: #f44336;">✗ Connection Failed</h1>
+                <p>Error: {str(e)}</p>
+                <p><a href="/auth/ticktick/authorize">Try again</a></p>
+            </body>
+        </html>
+        """, 500
+
+
+@app.route('/auth/ticktick/status', methods=['GET'])
+def ticktick_status():
+    """Check TickTick connection status."""
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        db = get_db()
+        token = OAuthRepository.get_token(db, 'ticktick')
+        db.close()
+
+        if token:
+            is_expired = OAuthRepository.is_token_expired(token)
+            return jsonify({
+                "connected": True,
+                "expired": is_expired,
+                "expires_at": token.expires_at.isoformat() if token.expires_at else None
+            })
+        else:
+            return jsonify({"connected": False})
+
+    except Exception as e:
+        logger.error(f"Error checking TickTick status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/auth/ticktick/disconnect', methods=['POST'])
+def ticktick_disconnect():
+    """Disconnect TickTick."""
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        db = get_db()
+        deleted = OAuthRepository.delete_token(db, 'ticktick')
+        db.close()
+
+        if deleted:
+            logger.info("TickTick disconnected")
+            return jsonify({"status": "success", "message": "TickTick disconnected"})
+        else:
+            return jsonify({"error": "TickTick not connected"}), 404
+
+    except Exception as e:
+        logger.error(f"Error disconnecting TickTick: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Basic health info."""
@@ -585,6 +756,7 @@ def health():
         "org_dir_exists": config.org_dir.exists(),
         "allowed_commands": sorted(config.allowed_commands),
         "tools": tool_registry.list_tools(),
+        "ticktick_configured": ticktick_oauth is not None,
     }
     if config.logseq_dir:
         health_data["logseq_dir"] = str(config.logseq_dir)

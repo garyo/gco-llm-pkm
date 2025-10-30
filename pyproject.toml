@@ -1,0 +1,46 @@
+[project]
+name = "gco-pkm-llm"
+version = "0.1.0"
+description = "Personal Knowledge Management assistant with Claude integration"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.39.0",
+    "flask>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.2",
+    "pyjwt>=2.8.0",
+    "bcrypt>=4.1.0",
+    "flask-limiter>=3.5.0",
+    "sqlalchemy>=2.0.23",
+    "psycopg2-binary>=2.9.9",
+    "alembic>=1.13.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pkm_bridge"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.black]
+line-length = 100
+target-version = ['py311']

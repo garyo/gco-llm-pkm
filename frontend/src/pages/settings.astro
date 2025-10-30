@@ -1,0 +1,206 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Settings - PKM Bridge">
+    <div class="settings-container">
+        <h1>Settings</h1>
+
+        <section class="integrations-section">
+            <h2>Integrations</h2>
+
+            <div class="integration-card">
+                <div class="integration-header">
+                    <h3>TickTick</h3>
+                    <span id="ticktick-status" class="status-badge">Checking...</span>
+                </div>
+                <p>Connect your TickTick account to let Claude manage your tasks.</p>
+
+                <div id="ticktick-actions">
+                    <button id="connect-ticktick" class="btn btn-primary" style="display: none;">
+                        Connect TickTick
+                    </button>
+                    <button id="disconnect-ticktick" class="btn btn-danger" style="display: none;">
+                        Disconnect
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <a href="/" class="back-link">← Back to Chat</a>
+    </div>
+</Layout>
+
+<style>
+    .settings-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem;
+    }
+
+    h1 {
+        font-size: 2rem;
+        margin-bottom: 2rem;
+    }
+
+    .integrations-section {
+        margin-bottom: 3rem;
+    }
+
+    h2 {
+        font-size: 1.5rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e0e0e0;
+    }
+
+    .integration-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1.5rem;
+        background: white;
+    }
+
+    .integration-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .integration-header h3 {
+        margin: 0;
+        font-size: 1.25rem;
+    }
+
+    .status-badge {
+        padding: 0.25rem 0.75rem;
+        border-radius: 12px;
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .status-badge.connected {
+        background: #d4edda;
+        color: #155724;
+    }
+
+    .status-badge.disconnected {
+        background: #f8d7da;
+        color: #721c24;
+    }
+
+    .status-badge.checking {
+        background: #d1ecf1;
+        color: #0c5460;
+    }
+
+    .btn {
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 4px;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .btn-primary {
+        background: #007bff;
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background: #0056b3;
+    }
+
+    .btn-danger {
+        background: #dc3545;
+        color: white;
+    }
+
+    .btn-danger:hover {
+        background: #c82333;
+    }
+
+    .back-link {
+        display: inline-block;
+        margin-top: 2rem;
+        color: #007bff;
+        text-decoration: none;
+    }
+
+    .back-link:hover {
+        text-decoration: underline;
+    }
+</style>
+
+<script>
+    async function checkTickTickStatus() {
+        const token = localStorage.getItem('pkm-authToken');
+        const statusBadge = document.getElementById('ticktick-status');
+        const connectBtn = document.getElementById('connect-ticktick');
+        const disconnectBtn = document.getElementById('disconnect-ticktick');
+
+        try {
+            const response = await fetch('/auth/ticktick/status', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.connected) {
+                statusBadge.textContent = 'Connected';
+                statusBadge.className = 'status-badge connected';
+                disconnectBtn.style.display = 'inline-block';
+                connectBtn.style.display = 'none';
+            } else {
+                statusBadge.textContent = 'Not Connected';
+                statusBadge.className = 'status-badge disconnected';
+                connectBtn.style.display = 'inline-block';
+                disconnectBtn.style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Error checking TickTick status:', error);
+            statusBadge.textContent = 'Error';
+            statusBadge.className = 'status-badge disconnected';
+            connectBtn.style.display = 'inline-block';
+        }
+    }
+
+    document.getElementById('connect-ticktick')?.addEventListener('click', () => {
+        // Open authorization in same tab
+        window.location.href = '/auth/ticktick/authorize';
+    });
+
+    document.getElementById('disconnect-ticktick')?.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to disconnect TickTick?')) {
+            return;
+        }
+
+        const token = localStorage.getItem('pkm-authToken');
+
+        try {
+            const response = await fetch('/auth/ticktick/disconnect', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                alert('TickTick disconnected successfully');
+                checkTickTickStatus();
+            } else {
+                alert('Failed to disconnect TickTick');
+            }
+        } catch (error) {
+            console.error('Error disconnecting TickTick:', error);
+            alert('Error disconnecting TickTick');
+        }
+    });
+
+    // Check status on page load
+    checkTickTickStatus();
+</script>

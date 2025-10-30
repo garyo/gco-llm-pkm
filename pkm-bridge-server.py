@@ -202,11 +202,31 @@ def settings():
     return render_template('settings.html')
 
 
-@app.route('/_astro/<path:filename>')
-def serve_astro_assets(filename):
-    """Serve Astro build assets (JS, CSS, etc)."""
+@app.route('/<path:filename>')
+def serve_static(filename):
+    """Serve static files from templates directory (Astro build output).
+
+    This catches all paths not matched by other routes and serves them
+    from the templates/ directory. HTML files are excluded to ensure
+    they go through render_template() for proper handling.
+    """
+    # Don't serve .html files this way - they should use render_template()
+    if filename.endswith('.html'):
+        return "Not found", 404
+
     templates_dir = Path(app.template_folder)
-    return send_from_directory(templates_dir / '_astro', filename)
+    file_path = templates_dir / filename
+
+    # Security: ensure the file is actually within templates directory
+    try:
+        file_path.resolve().relative_to(templates_dir.resolve())
+    except ValueError:
+        return "Not found", 404
+
+    if not file_path.exists() or not file_path.is_file():
+        return "Not found", 404
+
+    return send_from_directory(templates_dir, filename)
 
 
 @app.route('/login', methods=['POST'])

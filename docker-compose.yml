@@ -54,11 +54,11 @@ services:
       - DATABASE_URL=postgresql://${DB_USER:-pkm}:${DB_PASSWORD}@postgres:5432/pkm_db
 
     volumes:
-      # Mount your org files (read/write)
+      # Mount org files
       - ${ORG_DIR}:/data/org-agenda:rw
 
-      # Mount Logseq files (read-only)
-      - ${LOGSEQ_DIR}:/data/logseq:ro
+      # Mount Logseq files
+      - ${LOGSEQ_DIR}:/data/logseq:rw
 
       # Optional: Persist session data (if we add Redis/DB later)
       # - ./data/sessions:/app/data/sessions
@@ -69,7 +69,7 @@ services:
     # Traefik labels for reverse proxy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.yourdomain.com`)||Host(`pkm`)"
+      - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.oberbrunner.com`)||Host(`pkm.home.oberbrunner.com`)||Host(`pkm`)"
       - "traefik.http.services.pkm-bridge.loadbalancer.server.port=8000"
 
     # Resource limits

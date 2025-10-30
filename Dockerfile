@@ -11,6 +11,7 @@ COPY frontend/package.json frontend/bun.lockb ./
 RUN bun install
 
 COPY frontend/ ./
+COPY config/ ../config/
 
 # Build frontend (outputs to ../templates/)
 RUN bun run build

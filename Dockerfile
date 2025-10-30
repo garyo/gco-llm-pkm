@@ -38,7 +38,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_SYSTEM_PYTHON=1
 
 # Install Python dependencies first (for better layer caching)
-COPY requirements.txt ./
+COPY pyproject.toml ./
+RUN uv pip compile pyproject.toml -o requirements.txt
 RUN uv pip install --no-cache -r requirements.txt
 
 # Copy Python application
@@ -63,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run server
-CMD ["python", "pkm-bridge-server.py"]
+CMD ["uv", "run", "--script", "pkm-bridge-server.py"]

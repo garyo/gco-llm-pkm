@@ -38,6 +38,13 @@ import EditorInterface from '../components/EditorInterface.astro';
         <div id="editor-header-status" class="hidden items-center gap-4">
           <span id="editor-status" class="text-sm"></span>
           <button
+            id="refresh-button"
+            class="px-4 py-1.5 bg-white text-gray-600 rounded-lg hover:bg-gray-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Reload file from server"
+          >
+            Refresh
+          </button>
+          <button
             id="save-button"
             class="px-4 py-1.5 bg-white text-blue-600 rounded-lg hover:bg-gray-100 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >

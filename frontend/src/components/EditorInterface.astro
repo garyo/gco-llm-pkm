@@ -156,6 +156,7 @@
   const editorContainer = document.getElementById('editor-container')!;
   const fileSelector = document.getElementById('file-selector') as HTMLSelectElement;
   const saveButton = document.getElementById('save-button') as HTMLButtonElement;
+  const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement;
   const editorStatus = document.getElementById('editor-status')!;
   const sourceFilter = document.getElementById('source-filter') as HTMLSelectElement;
   const typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
@@ -375,6 +376,21 @@
     }
   }
 
+  // Refresh file from server
+  async function refreshFile() {
+    if (!currentFile) return;
+
+    // Warn if there are unsaved changes
+    if (isDirty) {
+      if (!confirm('You have unsaved changes. Reloading will discard them. Continue?')) {
+        return;
+      }
+    }
+
+    // Reload the file
+    await loadFile(currentFile);
+  }
+
   // Update status message
   function updateStatus(message: string, isError: boolean = false) {
     editorStatus.textContent = message;
@@ -394,6 +410,7 @@
   });
 
   saveButton.addEventListener('click', saveFile);
+  refreshButton.addEventListener('click', refreshFile);
 
   // Filter event listeners
   sourceFilter.addEventListener('change', filterAndPopulateFiles);
@@ -410,6 +427,14 @@
       e.preventDefault();
       if (currentFile && isDirty) {
         saveFile();
+      }
+    }
+
+    // Cmd/Ctrl + R to refresh
+    if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+      e.preventDefault();
+      if (currentFile) {
+        refreshFile();
       }
     }
   });

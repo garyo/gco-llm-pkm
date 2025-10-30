@@ -91,6 +91,11 @@ def init_db() -> None:
 
     database_url = get_database_url()
 
+    # Debug: Log the database URL (mask password for security)
+    import re
+    masked_url = re.sub(r'://([^:]+):([^@]+)@', r'://\1:****@', database_url)
+    print(f"[DEBUG] Connecting to database: {masked_url}", flush=True)
+
     _engine = create_engine(
         database_url,
         poolclass=QueuePool,

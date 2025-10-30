@@ -450,6 +450,50 @@ def get_history(session_id):
         db.close()
 
 
+@app.route('/sessions', methods=['GET'])
+@limiter.limit("30 per minute")
+def list_sessions():
+    """List all conversation sessions for the user."""
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Unauthorized sessions list from {request.remote_addr}")
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized sessions list from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid or expired token"}), 401
+
+    # Get all sessions from database
+    db = get_db()
+    try:
+        db_sessions = SessionRepository.get_all_sessions(db, user_id='default')
+
+        sessions_list = []
+        for session in db_sessions:
+            # Get first user message as preview
+            preview = ""
+            for msg in session.history:
+                if msg.get('role') == 'user':
+                    content = msg.get('content', '')
+                    if isinstance(content, str):
+                        preview = content[:100]
+                    break
+
+            sessions_list.append({
+                "session_id": session.session_id,
+                "created_at": session.created_at.isoformat() + 'Z',  # Mark as UTC
+                "updated_at": session.updated_at.isoformat() + 'Z',  # Mark as UTC
+                "message_count": len(session.history),
+                "preview": preview
+            })
+
+        return jsonify(sessions_list)
+    finally:
+        db.close()
+
+
 @app.route('/sessions/<session_id>', methods=['DELETE'])
 @limiter.limit("10 per minute")
 def clear_session(session_id):

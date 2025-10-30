@@ -65,6 +65,23 @@ import EditorInterface from '../components/EditorInterface.astro';
       <EditorInterface />
     </div>
   </div>
+
+  <!-- Session History Modal -->
+  <div id="session-history-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onclick="if(event.target === this) hideSessionHistory()">
+    <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+      <div class="px-6 py-4 border-b flex justify-between items-center">
+        <h2 class="text-xl font-semibold text-gray-800">Session History</h2>
+        <button onclick="hideSessionHistory()" class="text-gray-500 hover:text-gray-700">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="session-list" class="flex-1 overflow-y-auto p-4">
+        <div class="text-center text-gray-500 py-8">Loading sessions...</div>
+      </div>
+    </div>
+  </div>
 </Layout>
 
 <script>
@@ -425,13 +442,16 @@ import EditorInterface from '../components/EditorInterface.astro';
     chat.scrollTop = chat.scrollHeight;
   }
 
-  // Clear conversation
-  async function clearConversation() {
-    if (!confirm('Clear conversation history?')) return;
+  // Show session history modal
+  async function showSessionHistory() {
+    const modal = document.getElementById('session-history-modal')!;
+    const sessionList = document.getElementById('session-list')!;
+
+    modal.classList.remove('hidden');
+    sessionList.innerHTML = '<div class="text-center text-gray-500 py-8">Loading sessions...</div>';
 
     try {
-      const res = await fetch(`/sessions/${sessionId}`, {
-        method: 'DELETE',
+      const res = await fetch('/sessions', {
         headers: getAuthHeaders()
       });
 
@@ -440,15 +460,63 @@ import EditorInterface from '../components/EditorInterface.astro';
         return;
       }
 
-      const messages = chat.querySelectorAll('.message');
-      messages.forEach(msg => msg.remove());
+      const sessions = await res.json();
 
-      emptyState.style.display = 'block';
+      if (sessions.length === 0) {
+        sessionList.innerHTML = '<div class="text-center text-gray-500 py-8">No sessions found</div>';
+        return;
+      }
 
-      console.log('Conversation cleared');
+      // Sort by updated_at descending
+      sessions.sort((a: any, b: any) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+      sessionList.innerHTML = sessions.map((session: any) => {
+        const isActive = session.session_id === sessionId;
+        const date = new Date(session.updated_at).toLocaleString();
+        const preview = session.preview || 'Empty session';
+
+        return `
+          <div class="border rounded-lg p-4 mb-3 hover:bg-gray-50 cursor-pointer ${isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}"
+               onclick="switchToSession('${session.session_id}')">
+            <div class="flex justify-between items-start mb-2">
+              <div class="text-sm text-gray-500">${date}</div>
+              ${isActive ? '<span class="text-xs px-2 py-1 bg-blue-500 text-white rounded">Current</span>' : ''}
+            </div>
+            <div class="text-gray-800 truncate mb-1">${preview}</div>
+            <div class="text-xs text-gray-500">${session.message_count} messages</div>
+          </div>
+        `;
+      }).join('');
     } catch (e: any) {
-      alert('Error clearing conversation: ' + e.message);
+      sessionList.innerHTML = `<div class="text-center text-red-500 py-8">Error loading sessions: ${e.message}</div>`;
     }
+  }
+
+  // Hide session history modal
+  function hideSessionHistory() {
+    const modal = document.getElementById('session-history-modal')!;
+    modal.classList.add('hidden');
+  }
+
+  // Switch to a different session
+  async function switchToSession(newSessionId: string) {
+    if (newSessionId === sessionId) {
+      hideSessionHistory();
+      return;
+    }
+
+    sessionId = newSessionId;
+    localStorage.setItem('pkm-sessionId', sessionId);
+
+    // Clear current chat
+    const messages = chat.querySelectorAll('.message');
+    messages.forEach(msg => msg.remove());
+
+    // Load new session history
+    await loadHistory();
+
+    hideSessionHistory();
+    console.log('Switched to session:', sessionId);
   }
 
   // Start new session
@@ -519,7 +587,9 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Make functions globally available
   (window as any).send = send;
   (window as any).sendExample = sendExample;
-  (window as any).clearConversation = clearConversation;
+  (window as any).showSessionHistory = showSessionHistory;
+  (window as any).hideSessionHistory = hideSessionHistory;
+  (window as any).switchToSession = switchToSession;
   (window as any).newSession = newSession;
   (window as any).logout = logout;
   (window as any).updateModel = updateModel;

@@ -17,7 +17,9 @@ When searching or listing, always use *both* dirs.
 When listing notes, show most recent dates first.
 When adding content, prefer adding to ORG unless user specifically requests LOGSEQ.
 
-User stores TODOs (aka Tasks) in Ticktick; use the ticktick_query tool to find and complete tasks there.
+User stores major TODOs (aka Tasks) in Ticktick; use the ticktick_query tool to find and complete tasks there.
+TODOs (also called tasks) are also often in ORG and LOGSEQ so look there too for checkbox and TODO items.
+Don't assume all TODOs are in Ticktick; look everywhere to avoid missing some.
 
 TOOLS:
 - search_notes: Regex-based search for notes, recursively in all PKM dirs. Returns most recent results first.

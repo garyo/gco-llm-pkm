@@ -1,5 +1,6 @@
 ---
 // Main chat interface component
+import examples from '../../../config/examples.json';
 ---
 
 <div id="app" class="hidden flex flex-col h-full">
@@ -11,30 +12,14 @@
       <p class="text-gray-600 mb-8">Ask me anything about your notes</p>
 
       <div class="max-w-md mx-auto space-y-2">
-        <button
-          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-          onclick="sendExample('What did I write about music this summer?')"
-        >
-          What did I write about music this summer?
-        </button>
-        <button
-          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-          onclick="sendExample('Show me all my active TODOs')"
-        >
-          Show me all my active TODOs
-        </button>
-        <button
-          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-          onclick="sendExample('When was the last time I mentioned sailing?')"
-        >
-          When was the last time I mentioned sailing?
-        </button>
-        <button
-          class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-          onclick="sendExample('List all my org files')"
-        >
-          List all my org files
-        </button>
+        {examples.map((example) => (
+          <button
+            class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            onclick={`sendExample('${example.replace(/'/g, "\\'")}')`}
+          >
+            {example}
+          </button>
+        ))}
       </div>
     </div>
 
@@ -70,10 +55,10 @@
     </label>
 
     <button
-      onclick="clearConversation()"
+      onclick="showSessionHistory()"
       class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
     >
-      Clear Conversation
+      Session History
     </button>
     <button
       onclick="newSession()"

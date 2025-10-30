@@ -189,6 +189,7 @@
         getLanguageMode(filepath),
         oneDark,
         emacs(),
+        EditorView.lineWrapping,  // Enable word wrap
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             isDirty = true;

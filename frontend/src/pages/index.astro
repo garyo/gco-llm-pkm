@@ -343,6 +343,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     if (!message) return;
 
     input.value = '';
+    input.style.height = 'auto'; // Reset textarea height
     input.disabled = true;
     sendBtn.disabled = true;
 
@@ -478,6 +479,14 @@ import EditorInterface from '../components/EditorInterface.astro';
       console.error('Error loading history:', e);
     }
   }
+
+  // Auto-resize textarea as user types
+  function autoResizeTextarea() {
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  }
+
+  input.addEventListener('input', autoResizeTextarea);
 
   // Keyboard shortcuts
   input.addEventListener('keypress', (e) => {

@@ -91,17 +91,18 @@
 
   <!-- Input Area -->
   <div class="flex gap-2 p-4 bg-white border-t border-gray-200 shadow-lg">
-    <input
+    <textarea
       id="input"
-      type="text"
+      rows="1"
       placeholder="Ask about your notes..."
       autocomplete="off"
-      class="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow"
-    />
+      class="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow resize-none overflow-hidden"
+      style="max-height: 240px;"
+    ></textarea>
     <button
       id="send-btn"
       onclick="send()"
-      class="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+      class="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed self-end"
     >
       Send
     </button>

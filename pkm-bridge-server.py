@@ -755,7 +755,7 @@ def ticktick_disconnect():
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Basic health info."""
+    """Health check with database connectivity test."""
     health_data = {
         "status": "ok",
         "org_dir": str(config.org_dir),
@@ -764,6 +764,20 @@ def health():
         "tools": tool_registry.list_tools(),
         "ticktick_configured": ticktick_oauth is not None,
     }
+
+    # Test database connectivity
+    try:
+        db = get_db()
+        # Try a simple query to verify connection works
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        health_data["database"] = "connected"
+        db.close()
+    except Exception as e:
+        health_data["database"] = "error"
+        health_data["database_error"] = str(e)
+        health_data["status"] = "degraded"
+
     if config.logseq_dir:
         health_data["logseq_dir"] = str(config.logseq_dir)
         health_data["logseq_dir_exists"] = config.logseq_dir.exists()

@@ -28,7 +28,6 @@ from pkm_bridge.tools.registry import ToolRegistry
 from pkm_bridge.tools.shell import ExecuteShellTool
 from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
-from pkm_bridge.tools.journal import JournalNoteTool
 
 
 def setup_logging():
@@ -106,7 +105,6 @@ def main():
     tool_registry.register(execute_shell_tool)
     tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
     tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
-    tool_registry.register(JournalNoteTool(logger, config.org_dir))
 
     # Check tool exists
     if tool_name not in tool_registry.list_tools():

@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from .database import OAuthToken, ConversationSession
+from .database import OAuthToken, ConversationSession, UserSettings
 
 
 class OAuthRepository:
@@ -190,3 +190,66 @@ class SessionRepository:
         return db.query(ConversationSession).filter_by(
             user_id=user_id
         ).order_by(ConversationSession.updated_at.desc()).all()
+
+
+class UserSettingsRepository:
+    """Repository for user settings operations."""
+
+    @staticmethod
+    def get_user_context(db: Session, user_id: str = 'default') -> Optional[str]:
+        """Get user context for a user.
+
+        Returns:
+            User context string or None if not set
+        """
+        settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+        return settings.user_context if settings else None
+
+    @staticmethod
+    def save_user_context(db: Session, context: str, user_id: str = 'default') -> UserSettings:
+        """Save or update user context.
+
+        Args:
+            db: Database session
+            context: User context text
+            user_id: User identifier
+
+        Returns:
+            Updated UserSettings object
+        """
+        settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+
+        if settings:
+            # Update existing settings
+            settings.user_context = context
+            settings.updated_at = datetime.utcnow()
+        else:
+            # Create new settings
+            settings = UserSettings(
+                user_id=user_id,
+                user_context=context
+            )
+            db.add(settings)
+
+        db.commit()
+        db.refresh(settings)
+        return settings
+
+    @staticmethod
+    def get_or_create_settings(db: Session, user_id: str = 'default') -> UserSettings:
+        """Get existing settings or create new one with empty context.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+
+        Returns:
+            UserSettings object
+        """
+        settings = db.query(UserSettings).filter_by(user_id=user_id).first()
+        if not settings:
+            settings = UserSettings(user_id=user_id, user_context='')
+            db.add(settings)
+            db.commit()
+            db.refresh(settings)
+        return settings

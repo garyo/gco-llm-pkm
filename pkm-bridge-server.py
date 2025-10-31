@@ -61,7 +61,7 @@ from pkm_bridge.tools.ticktick import TickTickTool
 
 # Import database components
 from pkm_bridge.database import init_db, get_db
-from pkm_bridge.db_repository import OAuthRepository
+from pkm_bridge.db_repository import OAuthRepository, UserSettingsRepository
 
 # Import TickTick components
 from pkm_bridge.ticktick_oauth import TickTickOAuth
@@ -151,6 +151,13 @@ logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.li
 # Initialize file editor
 from pkm_bridge.file_editor import FileEditor
 file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
+
+# Initialize history manager for conversation truncation
+from pkm_bridge.history_manager import HistoryManager
+history_manager = HistoryManager(
+    max_tokens=100000,  # ~$0.10 per request with Haiku
+    keep_recent_turns=10  # Always keep last 10 conversation turns
+)
 
 # -------------------------
 # Utilities
@@ -327,11 +334,28 @@ def query():
     # Get or create session from database
     db = get_db()
     try:
+        # Load user context from database for system prompt
+        user_context = UserSettingsRepository.get_user_context(db, user_id='default')
+
+        # Get system prompt blocks for optimal caching
+        # Block 1: Static instructions (cached)
+        # Block 2: User context (cached - separate so edits don't invalidate base)
+        # Block 3: Date (NOT cached - appended dynamically, changes daily)
+        system_prompt_blocks = config.get_system_prompt_blocks(user_context=user_context)
+
+        # Debug: log system block structure
+        if logger.level <= 10:  # DEBUG level
+            for i, block in enumerate(system_prompt_blocks, 1):
+                cached = "✓ CACHED" if "cache_control" in block else "✗ not cached"
+                logger.debug(f"  System block {i}: {len(block['text'])} chars, {cached}")
+
+        # Also get flat version for session storage
+        system_prompt_flat = config.get_system_prompt(user_context=user_context)
+
         db_session = SessionRepository.get_or_create_session(
-            db, session_id, system_prompt=config.get_system_prompt()
+            db, session_id, system_prompt=system_prompt_flat
         )
         history = db_session.history if db_session.history else []
-        system_prompt = db_session.system_prompt or config.get_system_prompt()
     finally:
         db.close()
 
@@ -341,23 +365,47 @@ def query():
         "content": user_message
     })
 
+    # Truncate history to stay within budget before sending to API
+    # Log history stats before truncation
+    stats_before = history_manager.get_history_stats(history)
+    if stats_before['total_tokens'] > 50000:  # Only log if potentially concerning
+        logger.info(f"History before truncation: {stats_before['budget_usage']}")
+
+    history = history_manager.truncate_history(history)
+
+    # Log if we truncated
+    stats_after = history_manager.get_history_stats(history)
+    if stats_after['total_tokens'] < stats_before['total_tokens']:
+        saved = stats_before['total_tokens'] - stats_after['total_tokens']
+        logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
+
     logger.info(f"User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
     try:
-        # Build beta headers
-        beta_features = ["context-management-2025-06-27"]
+        # Build beta headers - include prompt caching for cost optimization
+        beta_features = ["prompt-caching-2024-07-31"]
         if thinking:
             beta_features.append("interleaved-thinking-2025-05-14")
 
+        # Get tools with caching enabled
+        tools = tool_registry.get_anthropic_tools()
+
+        # Mark the last tool for caching (tools are relatively static)
+        if tools:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
+
         # Build API call parameters
+        # System prompt is structured as blocks for optimal caching:
+        # - Block 1: Static instructions (cached)
+        # - Block 2: User context (cached)
+        # - Block 3: Today's date (NOT cached - changes daily)
+        # Tools are also cached as they rarely change
         api_params = {
             "model": model,
             "max_tokens": 8192,
-            "system": [
-                {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
-            ],
+            "system": system_prompt_blocks,
             "messages": history,
-            "tools": tool_registry.get_anthropic_tools(),
+            "tools": tools,
             "extra_headers": {
                 "anthropic-beta": ",".join(beta_features)
             }
@@ -419,6 +467,35 @@ def query():
 
         total_elapsed = time.time() - request_start
         logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
+
+        # Log cache performance if available
+        usage = response.usage
+        if hasattr(usage, 'cache_creation_input_tokens') or hasattr(usage, 'cache_read_input_tokens'):
+            cache_write = getattr(usage, 'cache_creation_input_tokens', 0)
+            cache_read = getattr(usage, 'cache_read_input_tokens', 0)
+            input_tokens = getattr(usage, 'input_tokens', 0)
+
+            # Calculate breakdown
+            history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
+            system_blocks = len(system_prompt_blocks)
+
+            # Estimate cost (Haiku-4.5 rates: $0.80/M input, $0.08/M cached, $4/M output)
+            output_tokens = getattr(usage, 'output_tokens', 0)
+            cost_input = (input_tokens * 0.80) / 1_000_000
+            cost_cache_write = (cache_write * 1.00) / 1_000_000  # Cache writes cost more
+            cost_cache_read = (cache_read * 0.08) / 1_000_000
+            cost_output = (output_tokens * 4.00) / 1_000_000
+            total_cost = cost_input + cost_cache_write + cost_cache_read + cost_output
+
+            logger.info(f"Token usage: {input_tokens} input, {cache_write} cache write, {cache_read} cache read, {output_tokens} output")
+            logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
+            logger.info(f"  Estimated cost: ${total_cost:.4f} (${cost_input:.4f} input + ${cost_cache_read:.4f} cached + ${cost_output:.4f} output)")
+
+            # Warn if conversation is getting large
+            uncached_input = input_tokens - cache_read
+            if uncached_input > 20000:
+                logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
+
         logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
 
         return jsonify({"response": assistant_text, "session_id": session_id})
@@ -649,6 +726,81 @@ def serve_asset(filepath):
     except Exception as e:
         logger.error(f"Error serving asset {filepath}: {str(e)}")
         return jsonify({"error": "Error serving file"}), 500
+
+
+# -------------------------
+# User Settings Endpoints
+# -------------------------
+
+@app.route('/api/user-context', methods=['GET'])
+@auth_manager.require_auth
+@limiter.limit("30 per minute")
+def get_user_context():
+    """Get user context for the current user.
+
+    Returns:
+        JSON with user_context string
+    """
+    try:
+        db = get_db()
+        try:
+            context = UserSettingsRepository.get_user_context(db, user_id='default')
+
+            # If no context in DB, try to load from file as fallback
+            if context is None:
+                user_context_file = Path(__file__).parent / "config" / "user_context.txt"
+                if user_context_file.exists():
+                    context = user_context_file.read_text(encoding="utf-8")
+                    logger.info("Loaded user context from file (migration needed)")
+                else:
+                    context = ""
+
+            return jsonify({"user_context": context})
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error getting user context: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/user-context', methods=['PUT'])
+@auth_manager.require_auth
+@limiter.limit("10 per minute")
+def update_user_context():
+    """Update user context for the current user.
+
+    Request body:
+        {"user_context": "context text here"}
+
+    Returns:
+        JSON with status and updated_at timestamp
+    """
+    try:
+        data = request.json
+        if data is None or 'user_context' not in data:
+            return jsonify({"error": "Missing 'user_context' in request body"}), 400
+
+        context = data['user_context']
+
+        # Basic validation
+        if not isinstance(context, str):
+            return jsonify({"error": "'user_context' must be a string"}), 400
+
+        db = get_db()
+        try:
+            settings = UserSettingsRepository.save_user_context(db, context, user_id='default')
+            logger.info(f"User context updated ({len(context)} chars)")
+
+            return jsonify({
+                "status": "success",
+                "user_context": settings.user_context,
+                "updated_at": settings.updated_at.isoformat() + 'Z'
+            })
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Error updating user context: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 # -------------------------

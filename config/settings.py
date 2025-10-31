@@ -86,22 +86,28 @@ class Config:
         if not self.system_prompt_file.exists():
             raise ValueError(f"System prompt file not found: {self.system_prompt_file}")
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, user_context: Optional[str] = None) -> str:
         """Load and render the system prompt template with configuration values.
 
-        Loads system_prompt.txt and optionally user_context.txt (if present).
-        Personal information in user_context.txt is kept separate for privacy.
+        Loads system_prompt.txt and optionally user_context (from database or file).
+        Personal information in user_context is kept separate for privacy.
+
+        Args:
+            user_context: Optional user context string. If None, will try to load from file.
 
         Returns:
             Rendered system prompt string.
         """
         template = self.system_prompt_file.read_text(encoding="utf-8")
 
-        # Load optional user context (personal information)
-        user_context_file = Path(__file__).parent / "user_context.txt"
-        if user_context_file.exists():
-            user_context = user_context_file.read_text(encoding="utf-8")
-            # Insert user context after the placeholder comment
+        # Use provided user context, or fall back to file
+        if user_context is None:
+            user_context_file = Path(__file__).parent / "user_context.txt"
+            if user_context_file.exists():
+                user_context = user_context_file.read_text(encoding="utf-8")
+
+        # Insert user context if available
+        if user_context:
             template = template.replace(
                 "# USER CONTEXT loaded from user_context.txt (if present)",
                 user_context
@@ -114,6 +120,67 @@ class Config:
             LOGSEQ_DIR=self.logseq_dir,
             TODAY=today.strftime("%Y-%m-%d")
         )
+
+    def get_system_prompt_blocks(self, user_context: Optional[str] = None) -> list:
+        """Get system prompt as structured blocks optimized for prompt caching.
+
+        Returns a list of blocks where static content comes first (cached),
+        followed by dynamic content like dates (not cached).
+
+        Structure:
+        - Block 1: Base instructions (cached - most stable)
+        - Block 2: User context (cached - changes occasionally)
+        - Block 3: Today's date (NOT cached - changes daily)
+
+        Args:
+            user_context: Optional user context string. If None, will try to load from file.
+
+        Returns:
+            List of dicts with 'type', 'text', and optionally 'cache_control' keys.
+        """
+        template = self.system_prompt_file.read_text(encoding="utf-8")
+
+        # Use provided user context, or fall back to file
+        if user_context is None:
+            user_context_file = Path(__file__).parent / "user_context.txt"
+            if user_context_file.exists():
+                user_context = user_context_file.read_text(encoding="utf-8")
+
+        # Replace static placeholders (paths don't change)
+        template = template.replace("{ORG_DIR}", str(self.org_dir))
+        template = template.replace("{LOGSEQ_DIR}", str(self.logseq_dir))
+
+        # Remove user context placeholder from base template
+        template = template.replace(
+            "# USER CONTEXT loaded from user_context.txt (if present)\n\n",
+            ""
+        )
+
+        blocks = []
+
+        # Block 1: Static base instructions (cached - most stable)
+        blocks.append({
+            "type": "text",
+            "text": template.strip(),
+            "cache_control": {"type": "ephemeral"}
+        })
+
+        # Block 2: User context (cached - changes occasionally)
+        if user_context:
+            blocks.append({
+                "type": "text",
+                "text": f"\n\n# USER CONTEXT\n\n{user_context.strip()}",
+                "cache_control": {"type": "ephemeral"}
+            })
+
+        # Block 3: Today's date (NOT cached - changes daily)
+        today = datetime.today()
+        blocks.append({
+            "type": "text",
+            "text": f"\n\nToday's date is {today.strftime('%Y-%m-%d')}."
+        })
+
+        return blocks
 
     def __repr__(self) -> str:
         """String representation for debugging."""

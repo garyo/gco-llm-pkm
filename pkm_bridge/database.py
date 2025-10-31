@@ -46,6 +46,20 @@ class ConversationSession(Base):
         return f"<ConversationSession(session_id='{self.session_id}', messages={len(self.history)})>"
 
 
+class UserSettings(Base):
+    """Store user settings and context."""
+    __tablename__ = 'user_settings'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(255), unique=True, nullable=False, index=True, default='default')
+    user_context = Column(Text, nullable=True)  # Personal context for system prompt
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<UserSettings(user_id='{self.user_id}', context_length={len(self.user_context or '')})"
+
+
 # Database connection management
 _engine = None
 _SessionLocal = None

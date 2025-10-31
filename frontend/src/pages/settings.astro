@@ -3,8 +3,46 @@ import Layout from '../layouts/Layout.astro';
 ---
 
 <Layout title="Settings - PKM Bridge">
-    <div class="settings-container">
+    <!-- Header bar matching main app style -->
+    <div class="settings-header">
+        <a href="/" class="back-button" title="Back to Chat">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+            </svg>
+            <span>Back to Chat</span>
+        </a>
         <h1>Settings</h1>
+    </div>
+
+    <div class="settings-container">
+
+        <section class="user-context-section">
+            <h2>User Context</h2>
+            <p class="section-description">
+                Tell Claude about yourself. This information helps Claude provide more personalized and relevant responses.
+            </p>
+
+            <div class="context-editor">
+                <textarea
+                    id="user-context-textarea"
+                    class="context-textarea"
+                    rows="12"
+                    placeholder="Enter information about yourself, your work, interests, etc..."
+                ></textarea>
+
+                <div class="editor-actions">
+                    <span id="context-status" class="status-text"></span>
+                    <div class="button-group">
+                        <button id="cancel-context-btn" class="btn btn-secondary" style="display: none;">
+                            Cancel
+                        </button>
+                        <button id="save-context-btn" class="btn btn-primary">
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
 
         <section class="integrations-section">
             <h2>Integrations</h2>
@@ -34,22 +72,62 @@ import Layout from '../layouts/Layout.astro';
             </button>
         </section>
 
-        <a href="/" class="back-link">← Back to Chat</a>
     </div>
 </Layout>
 
 <style>
+    .settings-header {
+        background: #007bff;
+        color: white;
+        padding: 1rem 2rem;
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .settings-header h1 {
+        font-size: 1.5rem;
+        margin: 0;
+        font-weight: 600;
+    }
+
+    .back-button {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        color: white;
+        text-decoration: none;
+        padding: 0.5rem 1rem;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        transition: background 0.2s;
+        font-size: 0.95rem;
+    }
+
+    .back-button:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    .back-button svg {
+        width: 20px;
+        height: 20px;
+    }
+
     .settings-container {
         max-width: 800px;
         margin: 0 auto;
         padding: 2rem;
     }
 
-    h1 {
-        font-size: 2rem;
-        margin-bottom: 2rem;
+    h2 {
+        font-size: 1.5rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e0e0e0;
     }
 
+    .user-context-section,
     .integrations-section,
     .account-section {
         margin-bottom: 3rem;
@@ -60,6 +138,62 @@ import Layout from '../layouts/Layout.astro';
         margin-bottom: 1.5rem;
         padding-bottom: 0.5rem;
         border-bottom: 2px solid #e0e0e0;
+    }
+
+    .section-description {
+        color: #666;
+        margin-bottom: 1rem;
+        font-size: 0.95rem;
+    }
+
+    .context-editor {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1.5rem;
+        background: white;
+    }
+
+    .context-textarea {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 0.95rem;
+        line-height: 1.5;
+        resize: vertical;
+        min-height: 200px;
+    }
+
+    .context-textarea:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+    }
+
+    .editor-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 1rem;
+    }
+
+    .status-text {
+        font-size: 0.875rem;
+        color: #666;
+    }
+
+    .status-text.success {
+        color: #28a745;
+    }
+
+    .status-text.error {
+        color: #dc3545;
+    }
+
+    .button-group {
+        display: flex;
+        gap: 0.5rem;
     }
 
     .integration-card {
@@ -126,23 +260,115 @@ import Layout from '../layouts/Layout.astro';
         color: white;
     }
 
+    .btn-secondary {
+        background: #6c757d;
+        color: white;
+    }
+
+    .btn-secondary:hover {
+        background: #5a6268;
+    }
+
     .btn-danger:hover {
         background: #c82333;
-    }
-
-    .back-link {
-        display: inline-block;
-        margin-top: 2rem;
-        color: #007bff;
-        text-decoration: none;
-    }
-
-    .back-link:hover {
-        text-decoration: underline;
     }
 </style>
 
 <script>
+    // User Context Management
+    let originalContext = '';
+    const contextTextarea = document.getElementById('user-context-textarea');
+    const saveContextBtn = document.getElementById('save-context-btn');
+    const cancelContextBtn = document.getElementById('cancel-context-btn');
+    const contextStatus = document.getElementById('context-status');
+
+    async function loadUserContext() {
+        const token = localStorage.getItem('pkm-authToken');
+        contextStatus.textContent = 'Loading...';
+        contextStatus.className = 'status-text';
+
+        try {
+            const response = await fetch('/api/user-context', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                originalContext = data.user_context || '';
+                contextTextarea.value = originalContext;
+                contextStatus.textContent = '';
+            } else {
+                contextStatus.textContent = 'Failed to load user context';
+                contextStatus.className = 'status-text error';
+            }
+        } catch (error) {
+            console.error('Error loading user context:', error);
+            contextStatus.textContent = 'Error loading user context';
+            contextStatus.className = 'status-text error';
+        }
+    }
+
+    async function saveUserContext() {
+        const token = localStorage.getItem('pkm-authToken');
+        const newContext = contextTextarea.value;
+
+        saveContextBtn.disabled = true;
+        contextStatus.textContent = 'Saving...';
+        contextStatus.className = 'status-text';
+
+        try {
+            const response = await fetch('/api/user-context', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_context: newContext })
+            });
+
+            if (response.ok) {
+                originalContext = newContext;
+                contextStatus.textContent = 'Saved successfully!';
+                contextStatus.className = 'status-text success';
+                cancelContextBtn.style.display = 'none';
+
+                // Clear success message after 3 seconds
+                setTimeout(() => {
+                    contextStatus.textContent = '';
+                }, 3000);
+            } else {
+                const data = await response.json();
+                contextStatus.textContent = `Failed to save: ${data.error || 'Unknown error'}`;
+                contextStatus.className = 'status-text error';
+            }
+        } catch (error) {
+            console.error('Error saving user context:', error);
+            contextStatus.textContent = 'Error saving user context';
+            contextStatus.className = 'status-text error';
+        } finally {
+            saveContextBtn.disabled = false;
+        }
+    }
+
+    function cancelContextChanges() {
+        contextTextarea.value = originalContext;
+        cancelContextBtn.style.display = 'none';
+        contextStatus.textContent = '';
+    }
+
+    // Track changes to show/hide cancel button
+    contextTextarea?.addEventListener('input', () => {
+        const hasChanges = contextTextarea.value !== originalContext;
+        cancelContextBtn.style.display = hasChanges ? 'inline-block' : 'none';
+    });
+
+    // Button handlers
+    saveContextBtn?.addEventListener('click', saveUserContext);
+    cancelContextBtn?.addEventListener('click', cancelContextChanges);
+
+    // TickTick Integration Management
     async function checkTickTickStatus() {
         const token = localStorage.getItem('pkm-authToken');
         const statusBadge = document.getElementById('ticktick-status');
@@ -215,6 +441,7 @@ import Layout from '../layouts/Layout.astro';
         window.location.href = '/';
     });
 
-    // Check status on page load
+    // Load data on page load
+    loadUserContext();
     checkTickTickStatus();
 </script>

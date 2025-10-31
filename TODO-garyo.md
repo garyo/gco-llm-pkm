@@ -12,4 +12,7 @@
 - [x] Connect to ticktick
 - [ ] Connect to Google calendar
 - [x] Auto-refresh in editor
-- [ ] Session management in db?
+- [x] Session management in db?
+- [ ] Emacs on server doesn't work (used to create org notes): would need a bunch of stuff from my Emacs config. Make it work without that.
+  Now that I'm using file-per-day, it shouldn't be hard. I see Claude does figure it out.
+- [ ] Allow for editing custom user/system prompts in the app (store in db).

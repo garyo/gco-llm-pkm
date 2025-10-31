@@ -27,6 +27,13 @@ import Layout from '../layouts/Layout.astro';
             </div>
         </section>
 
+        <section class="account-section">
+            <h2>Account</h2>
+            <button id="logout-btn" class="btn btn-danger">
+                Logout
+            </button>
+        </section>
+
         <a href="/" class="back-link">← Back to Chat</a>
     </div>
 </Layout>
@@ -43,7 +50,8 @@ import Layout from '../layouts/Layout.astro';
         margin-bottom: 2rem;
     }
 
-    .integrations-section {
+    .integrations-section,
+    .account-section {
         margin-bottom: 3rem;
     }
 
@@ -199,6 +207,12 @@ import Layout from '../layouts/Layout.astro';
             console.error('Error disconnecting TickTick:', error);
             alert('Error disconnecting TickTick');
         }
+    });
+
+    // Logout handler
+    document.getElementById('logout-btn')?.addEventListener('click', () => {
+        localStorage.removeItem('pkm-authToken');
+        window.location.href = '/';
     });
 
     // Check status on page load

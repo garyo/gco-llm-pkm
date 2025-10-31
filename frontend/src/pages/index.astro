@@ -53,8 +53,11 @@ import EditorInterface from '../components/EditorInterface.astro';
         </div>
 
         <!-- Settings Link -->
-        <a href="/settings" class="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-sm transition-colors">
-          ⚙️ Settings
+        <a href="/settings" class="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors" title="Settings">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
         </a>
       </div>
     </div>
@@ -543,6 +546,17 @@ import EditorInterface from '../components/EditorInterface.astro';
     chat.scrollTop = chat.scrollHeight;
   }
 
+  // Show/hide model settings modal
+  function showModelSettings() {
+    const modal = document.getElementById('model-settings-modal')!;
+    modal.classList.remove('hidden');
+  }
+
+  function hideModelSettings() {
+    const modal = document.getElementById('model-settings-modal')!;
+    modal.classList.add('hidden');
+  }
+
   // Show session history modal
   async function showSessionHistory() {
     const modal = document.getElementById('session-history-modal')!;
@@ -702,6 +716,8 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Make functions globally available
   (window as any).send = send;
   (window as any).sendExample = sendExample;
+  (window as any).showModelSettings = showModelSettings;
+  (window as any).hideModelSettings = hideModelSettings;
   (window as any).showSessionHistory = showSessionHistory;
   (window as any).hideSessionHistory = hideSessionHistory;
   (window as any).switchToSession = switchToSession;

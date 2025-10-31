@@ -85,6 +85,8 @@ import EditorInterface from '../components/EditorInterface.astro';
 </Layout>
 
 <script>
+  import { VoiceInput } from '../utils/VoiceInput';
+
   // Initialize markdown-it with task-lists plugin
   const md = (window as any).markdownit({
     html: false,
@@ -190,6 +192,10 @@ import EditorInterface from '../components/EditorInterface.astro';
   const modelSelect = document.getElementById('model-select') as HTMLSelectElement;
   const thinkingToggle = document.getElementById('thinking-toggle') as HTMLInputElement;
 
+  // Voice input
+  let voiceInput: VoiceInput | null = null;
+  let autoSendTimeout: number | null = null;
+
   // Handle login
   async function handleLogin(event: Event) {
     event.preventDefault();
@@ -225,6 +231,88 @@ import EditorInterface from '../components/EditorInterface.astro';
     }
   }
 
+  // Initialize voice input
+  function initializeVoiceInput() {
+    const voiceBtn = document.getElementById('voice-btn') as HTMLButtonElement;
+    const voiceStatus = document.getElementById('voice-status') as HTMLDivElement;
+    const voiceStatusText = document.getElementById('voice-status-text') as HTMLSpanElement;
+
+    if (!voiceBtn || !voiceStatus || !voiceStatusText) {
+      console.warn('Voice input elements not found');
+      return;
+    }
+
+    voiceInput = new VoiceInput({
+      language: 'en-US',
+      continuous: false,
+      interimResults: true,
+
+      onTranscript: (text: string, isFinal: boolean) => {
+        if (isFinal) {
+          // Append to textarea
+          const currentText = input.value.trim();
+          const separator = currentText ? ' ' : '';
+          input.value = currentText + separator + text;
+          autoResizeTextarea();
+          voiceStatusText.textContent = 'Sending in 5 seconds... (edit to cancel)';
+
+          // Set auto-send timeout
+          if (autoSendTimeout) {
+            clearTimeout(autoSendTimeout);
+          }
+          autoSendTimeout = window.setTimeout(() => {
+            send();
+            autoSendTimeout = null;
+          }, 5000);
+        } else {
+          // Show interim in status
+          voiceStatusText.textContent = `Listening: "${text}"`;
+        }
+      },
+
+      onStart: () => {
+        voiceBtn.classList.add('recording');
+        voiceBtn.title = 'Tap to stop recording';
+        voiceStatus.classList.remove('hidden');
+        voiceStatusText.textContent = 'Listening...';
+      },
+
+      onEnd: () => {
+        voiceBtn.classList.remove('recording');
+        voiceBtn.title = 'Tap to start voice input';
+        setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+      },
+
+      onError: (error: string) => {
+        voiceBtn.classList.remove('recording');
+        voiceStatusText.textContent = error;
+        // Show error in red
+        voiceStatus.classList.remove('bg-blue-50', 'border-blue-200', 'text-blue-700');
+        voiceStatus.classList.add('bg-red-50', 'border-red-200', 'text-red-700');
+        setTimeout(() => {
+          voiceStatus.classList.add('hidden');
+          // Reset colors
+          voiceStatus.classList.add('bg-blue-50', 'border-blue-200', 'text-blue-700');
+          voiceStatus.classList.remove('bg-red-50', 'border-red-200', 'text-red-700');
+        }, 3000);
+      }
+    });
+
+    // Check browser support
+    if (!voiceInput.isSupported()) {
+      voiceBtn.disabled = true;
+      voiceBtn.classList.add('disabled');
+      voiceBtn.title = 'Voice input not supported in this browser';
+      return;
+    }
+
+    // Click handler
+    voiceBtn.addEventListener('click', () => {
+      if (!voiceInput) return;
+      voiceInput.toggle();
+    });
+  }
+
   // Show app (hide login)
   function showApp() {
     loginScreen.classList.add('hidden');
@@ -243,6 +331,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     switchTab(savedTab);
 
     loadHistory();
+    initializeVoiceInput();
   }
 
   // Show login (hide app)
@@ -363,6 +452,18 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Send message
   async function send() {
+    // Clear auto-send timeout if active
+    if (autoSendTimeout) {
+      clearTimeout(autoSendTimeout);
+      autoSendTimeout = null;
+
+      // Hide voice status bar when auto-sending
+      const voiceStatus = document.getElementById('voice-status');
+      if (voiceStatus) {
+        voiceStatus.classList.add('hidden');
+      }
+    }
+
     const message = input.value.trim();
     if (!message) return;
 
@@ -561,7 +662,21 @@ import EditorInterface from '../components/EditorInterface.astro';
     input.style.height = input.scrollHeight + 'px';
   }
 
-  input.addEventListener('input', autoResizeTextarea);
+  input.addEventListener('input', () => {
+    autoResizeTextarea();
+
+    // Clear auto-send timeout when user edits
+    if (autoSendTimeout) {
+      clearTimeout(autoSendTimeout);
+      autoSendTimeout = null;
+
+      // Hide the voice status bar if showing auto-send message
+      const voiceStatus = document.getElementById('voice-status');
+      if (voiceStatus && !voiceStatus.classList.contains('hidden')) {
+        voiceStatus.classList.add('hidden');
+      }
+    }
+  });
 
   // Keyboard shortcuts
   input.addEventListener('keypress', (e) => {

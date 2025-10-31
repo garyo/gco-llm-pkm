@@ -84,6 +84,21 @@ import examples from '../../../config/examples.json';
       class="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-base focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-shadow resize-none overflow-hidden"
       style="max-height: 240px;"
     ></textarea>
+
+    <!-- Voice Input Button -->
+    <button
+      id="voice-btn"
+      type="button"
+      aria-label="Voice input"
+      title="Tap to start voice input"
+      class="px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed self-end voice-button touch-manipulation"
+    >
+      <!-- Microphone Icon -->
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+      </svg>
+    </button>
+
     <button
       id="send-btn"
       onclick="send()"
@@ -91,6 +106,11 @@ import examples from '../../../config/examples.json';
     >
       Send
     </button>
+  </div>
+
+  <!-- Voice Status Indicator -->
+  <div id="voice-status" class="hidden px-4 py-2 bg-blue-50 border-t border-blue-200 text-sm text-blue-700 text-center">
+    <span id="voice-status-text">Listening...</span>
   </div>
 </div>
 
@@ -321,5 +341,35 @@ import examples from '../../../config/examples.json';
     .message.assistant h2 {
       font-size: 1.125rem;
     }
+  }
+
+  /* Voice button animations */
+  .voice-button.recording {
+    background-color: rgb(239 68 68) !important;
+    color: white !important;
+    animation: pulse-red 1.5s ease-in-out infinite;
+  }
+
+  .voice-button.recording svg {
+    color: white;
+  }
+
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.05); }
+  }
+
+  .voice-button.disabled {
+    opacity: 0.5;
+    cursor: not-allowed !important;
+  }
+
+  #voice-status {
+    animation: slideDown 0.3s ease-out;
+  }
+
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 </style>

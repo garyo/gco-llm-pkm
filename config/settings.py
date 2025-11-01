@@ -117,7 +117,6 @@ class Config:
         return template.format(
             ORG_DIR=self.org_dir,
             LOGSEQ_DIR=self.logseq_dir)
-        )
 
     def get_system_prompt_blocks(self, user_context: Optional[str] = None) -> list:
         """Get system prompt as structured blocks optimized for prompt caching.

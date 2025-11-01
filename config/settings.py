@@ -172,9 +172,10 @@ class Config:
 
         # Block 3: Today's date (NOT cached - changes daily)
         today = datetime.now()
+        timestring = today.strftime('%A, %B %d, %Y, %H:%M:%S')
         blocks.append({
             "type": "text",
-            "text": f"\n\nCurrent date/time is {today.isoformat()} or {today.strftime("%A, %B %d, %Y, %H:%M:%S")}."
+            "text": f"\n\nCurrent date/time is {today.isoformat()} or {timestring}."
         })
 
         return blocks

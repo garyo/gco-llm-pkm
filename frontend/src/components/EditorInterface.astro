@@ -76,34 +76,214 @@
   import { oneDark } from '@codemirror/theme-one-dark';
   import { StreamLanguage } from '@codemirror/language';
   import { emacs } from '@replit/codemirror-emacs';
+  import { foldService, foldEffect } from '@codemirror/language';
+  import { Tag, tags } from '@lezer/highlight';
+  import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+
+  // Define custom tags for Org mode
+  const orgTags = {
+    propertyDrawer: Tag.define(tags.keyword),
+    propertyKey: Tag.define(tags.propertyName),
+    propertyValue: Tag.define(tags.string),
+    srcBlockDelimiter: Tag.define(tags.keyword),
+    srcBlockContent: Tag.define(tags.monospace),
+    heading1: Tag.define(tags.heading1),
+    heading2: Tag.define(tags.heading2),
+    heading3: Tag.define(tags.heading3),
+    headingTags: Tag.define(tags.meta),
+    tableLine: Tag.define(tags.contentSeparator),
+    checkboxUnchecked: Tag.define(tags.list),
+    checkboxChecked: Tag.define(tags.list),
+    checkboxCheckedText: Tag.define(tags.strikethrough),
+  };
+
+  // Define highlight styles for Org mode
+  const orgHighlightStyle = HighlightStyle.define([
+    // Property drawers (custom, smaller text)
+    { tag: orgTags.propertyDrawer, color: '#61afef', fontWeight: 'bold', fontSize: '0.85em' },
+    { tag: orgTags.propertyKey, color: '#e5c07b', fontWeight: '600', fontSize: '0.85em' },
+    { tag: orgTags.propertyValue, color: '#98c379', fontSize: '0.85em' },
+
+    // Source blocks (custom)
+    { tag: orgTags.srcBlockDelimiter, color: '#c678dd', fontWeight: 'bold' },
+    { tag: orgTags.srcBlockContent, color: '#abb2bf', backgroundColor: 'rgba(0, 0, 0, 0.2)' },
+
+    // Headings (larger text for h1 and h2)
+    { tag: orgTags.heading1, color: '#e06c75', fontWeight: 'bold', fontSize: '1.4em' },
+    { tag: orgTags.heading2, color: '#e06c75', fontWeight: 'bold', fontSize: '1.2em' },
+    { tag: orgTags.heading3, color: '#e06c75', fontWeight: 'bold', fontSize: '1.05em' },
+    { tag: tags.heading, color: '#e06c75', fontWeight: 'bold' }, // h4+
+    { tag: orgTags.headingTags, color: '#5c6370', fontStyle: 'italic' }, // :tags:at:end:
+
+    // Tables
+    { tag: orgTags.tableLine, color: '#61afef', backgroundColor: 'rgba(0, 0, 0, 0.3)' },
+
+    // Checkboxes
+    { tag: orgTags.checkboxUnchecked, color: '#e5c07b', fontWeight: 'bold' }, // Bright orange/amber - needs attention!
+    { tag: orgTags.checkboxChecked, color: '#7fad5f', fontWeight: 'bold' }, // Darker green - done!
+    { tag: orgTags.checkboxCheckedText, color: '#5c6370', textDecoration: 'line-through' },
+
+    // Standard formatting
+    { tag: tags.strong, fontWeight: 'bold', color: '#d19a66' },
+    { tag: tags.emphasis, fontStyle: 'italic', color: '#c678dd' },
+    { tag: tags.monospace, fontFamily: 'monospace', color: '#98c379' },
+    { tag: tags.link, color: '#56b6c2', textDecoration: 'underline' },
+    { tag: tags.list, color: '#61afef' },
+    { tag: tags.meta, color: '#5c6370', fontStyle: 'italic' },
+  ]);
+
+  // Folding service for property drawers
+  const orgFoldService = foldService.of((state, from, to) => {
+    const line = state.doc.lineAt(from);
+    const text = line.text;
+
+    // Check if this line starts a property drawer
+    if (text.match(/^[\s]*:PROPERTIES:/i)) {
+      // Find the matching :END:
+      let endLine = line.number + 1;
+      while (endLine <= state.doc.lines) {
+        const currentLine = state.doc.line(endLine);
+        if (currentLine.text.match(/^[\s]*:END:/i)) {
+          // Return fold range from start of :PROPERTIES: to end of :END:
+          return {
+            from: line.to,
+            to: currentLine.from
+          };
+        }
+        endLine++;
+      }
+    }
+
+    return null;
+  });
 
   // Simple org-mode syntax highlighting
   const orgMode = StreamLanguage.define({
-    startState: () => ({ inSourceBlock: false }),
+    startState: () => ({
+      inSourceBlock: false,
+      inPropertyDrawer: false,
+      inCheckedItem: false
+    }),
+    tokenTable: {
+      "org-propertyDrawer": orgTags.propertyDrawer,
+      "org-propertyKey": orgTags.propertyKey,
+      "org-propertyValue": orgTags.propertyValue,
+      "org-srcBlockDelimiter": orgTags.srcBlockDelimiter,
+      "org-srcBlockContent": orgTags.srcBlockContent,
+      "org-heading1": orgTags.heading1,
+      "org-heading2": orgTags.heading2,
+      "org-heading3": orgTags.heading3,
+      "org-headingTags": orgTags.headingTags,
+      "org-tableLine": orgTags.tableLine,
+      "org-checkboxUnchecked": orgTags.checkboxUnchecked,
+      "org-checkboxChecked": orgTags.checkboxChecked,
+      "org-checkboxCheckedText": orgTags.checkboxCheckedText,
+    },
     token: (stream, state) => {
+      // Reset checked item state at start of line
+      if (stream.sol()) {
+        state.inCheckedItem = false;
+      }
+
+      // Table lines (start and end with |)
+      if (stream.sol() && stream.match(/^[\s]*\|.*\|[\s]*$/)) {
+        return "org-tableLine";
+      }
+
+      // Checkbox items - checked: - [X]
+      if (stream.sol() && stream.match(/^[\s]*-[\s]+\[[\s]*[Xx][\s]*\]/)) {
+        state.inCheckedItem = true;
+        return "org-checkboxChecked";
+      }
+
+      // Checkbox items - unchecked: - [ ]
+      if (stream.sol() && stream.match(/^[\s]*-[\s]+\[[\s]*\]/)) {
+        return "org-checkboxUnchecked";
+      }
+
+      // Text after checked checkbox (apply strikethrough)
+      if (state.inCheckedItem && !stream.eol()) {
+        stream.skipToEnd();
+        return "org-checkboxCheckedText";
+      }
+
+      // Check for property drawer start
+      if (stream.sol() && stream.match(/^[\s]*:PROPERTIES:/i)) {
+        state.inPropertyDrawer = true;
+        return "org-propertyDrawer";
+      }
+
+      // Check for property drawer end
+      if (stream.sol() && stream.match(/^[\s]*:END:/i)) {
+        state.inPropertyDrawer = false;
+        return "org-propertyDrawer";
+      }
+
+      // Inside property drawer - parse property lines
+      if (state.inPropertyDrawer) {
+        if (stream.sol() && stream.match(/^[\s]*:([A-Z_-]+):/)) {
+          // Property key found, now get the value
+          const value = stream.match(/[\s]*.*/);
+          if (value && value[0].trim()) {
+            // We need to return the key styling, value will be styled on next token
+            stream.backUp(value[0].length);
+            return "org-propertyKey";
+          }
+          return "org-propertyKey";
+        }
+        // If we're past the key, this is the value
+        if (!stream.sol() && stream.peek() !== ':') {
+          stream.skipToEnd();
+          return "org-propertyValue";
+        }
+      }
+
       // Check for source block delimiters
       if (stream.sol() && stream.match(/^[\s]*#\+begin_src/i)) {
         state.inSourceBlock = true;
         stream.skipToEnd();
-        return "keyword";
+        return "org-srcBlockDelimiter";
       }
 
       if (stream.sol() && stream.match(/^[\s]*#\+end_src/i)) {
         state.inSourceBlock = false;
         stream.skipToEnd();
-        return "keyword";
+        return "org-srcBlockDelimiter";
       }
 
       // Inside source block - treat as code
       if (state.inSourceBlock) {
         stream.skipToEnd();
-        return "comment";  // CodeMirror uses "comment" for code blocks in some themes
+        return "org-srcBlockContent";
       }
 
       // Headings (*, **, ***, etc.)
-      if (stream.sol() && stream.match(/^\*+\s/)) {
-        stream.skipToEnd();
-        return "heading";
+      if (stream.sol()) {
+        const match = stream.match(/^(\*+)\s/);
+        if (match) {
+          const level = match[1].length;
+          // Check if there are tags at the end of the line (pattern: :tag1:tag2:)
+          const restOfLine = stream.string.slice(stream.pos);
+          const tagsMatch = restOfLine.match(/^(.*?)((?:\s+)?:[a-zA-Z0-9_@]+(?::[a-zA-Z0-9_@]+)*:)\s*$/);
+
+          if (tagsMatch) {
+            // There are tags - consume just the heading text
+            stream.pos += tagsMatch[1].length;
+          } else {
+            // No tags - consume entire line
+            stream.skipToEnd();
+          }
+
+          if (level === 1) return "org-heading1";
+          if (level === 2) return "org-heading2";
+          if (level === 3) return "org-heading3";
+          return "heading"; // h4 and beyond use standard heading tag
+        }
+      }
+
+      // Org-mode tags at end of heading line (:tag1:tag2:)
+      if (stream.match(/(?:\s+)?:[a-zA-Z0-9_@]+(?::[a-zA-Z0-9_@]+)*:\s*$/)) {
+        return "org-headingTags";
       }
 
       // Bold **text**
@@ -184,23 +364,64 @@
     }
   }
 
+  // Auto-fold all property drawers in the document
+  function autoFoldPropertyDrawers() {
+    if (!editorView) return;
+
+    const effects: any[] = [];
+    const doc = editorView.state.doc;
+
+    // Find all :PROPERTIES: lines and fold them
+    for (let i = 1; i <= doc.lines; i++) {
+      const line = doc.line(i);
+      if (line.text.match(/^[\s]*:PROPERTIES:/i)) {
+        // Check if there's a matching :END:
+        let endLine = i + 1;
+        while (endLine <= doc.lines) {
+          const currentLine = doc.line(endLine);
+          if (currentLine.text.match(/^[\s]*:END:/i)) {
+            // Found matching :END:, create fold effect
+            effects.push(foldEffect.of({ from: line.to, to: currentLine.from }));
+            break;
+          }
+          endLine++;
+        }
+      }
+    }
+
+    // Apply all fold effects at once
+    if (effects.length > 0) {
+      editorView.dispatch({ effects });
+    }
+  }
+
   // Initialize CodeMirror
   function initEditor(filepath: string = '') {
+    const extensions = [
+      basicSetup,
+      getLanguageMode(filepath),
+      oneDark,
+      emacs(),
+      EditorView.lineWrapping,  // Enable word wrap
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          isDirty = true;
+          updateStatus('Modified (unsaved)');
+          saveButton.disabled = false;
+        }
+      })
+    ];
+
+    // Add org-specific extensions for .org files
+    if (filepath.endsWith('.org')) {
+      extensions.push(
+        syntaxHighlighting(orgHighlightStyle),
+        orgFoldService  // basicSetup already includes foldGutter()
+      );
+    }
+
     editorView = new EditorView({
-      extensions: [
-        basicSetup,
-        getLanguageMode(filepath),
-        oneDark,
-        emacs(),
-        EditorView.lineWrapping,  // Enable word wrap
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            isDirty = true;
-            updateStatus('Modified (unsaved)');
-            saveButton.disabled = false;
-          }
-        })
-      ],
+      extensions,
       parent: editorContainer,
       doc: ''
     });
@@ -324,6 +545,12 @@
             insert: data.content
           }
         });
+
+        // Auto-fold property drawers for .org files
+        if (filepath.endsWith('.org')) {
+          // Use setTimeout to ensure the document is fully parsed
+          setTimeout(() => autoFoldPropertyDrawers(), 50);
+        }
       }
 
       currentFile = filepath;

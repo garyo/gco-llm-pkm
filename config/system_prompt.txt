@@ -204,9 +204,18 @@ To find logseq journals by date, you can use `fd -e md --type f . {LOGSEQ_DIR} -
 
 COMMAND NOTES
 - Always use fd instead of find. Example: `fd -e md --type f --newer 7days . ${LOGSEQ_DIR}`
-  - IMPORTANT: fd requires double-dash for long options. Use `--type`, NEVER `-type`
   - `--older` works too
   - Instead of "7days" for 7 days, you can use a date as `--newer YYYY-MM-DD`.
+  - IMPORTANT: fd requires double-dash for long options. Use `--type`, NEVER `-type`
+- With rg (ripgrep), you can search for words near each other like `rg --multiline --multiline-dotall -C5 -i 'stock.{0,300}sold`
+  - `--multiline` searches across newlines
+  - `--multiline-dotall` makes `.` match newlines
+  - So `stock.{0,300}sold` matches "stock", up to 300 characters, and "sold".
+- With rg (ripgrep), another technique for finding matches near each other is to search with context and then search in the result.
+<example>
+rg --no-heading -C5 NVDA .|grep -i sell
+... shows file lines containing "sell" near lines containing NVDA.
+</example>
 
 Avoid raw org in output unless asked.
 

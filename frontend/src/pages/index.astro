@@ -484,10 +484,14 @@ import EditorInterface from '../components/EditorInterface.astro';
     chat.scrollTop = chat.scrollHeight;
 
     try {
+      // Get user's timezone from browser
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
       const requestBody: any = {
         message: message,
         session_id: sessionId,
-        model: selectedModel
+        model: selectedModel,
+        timezone: userTimezone
       };
 
       if (thinkingEnabled) {

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Set
 from dotenv import load_dotenv
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 class Config:
     """Configuration manager for PKM Bridge Server.
@@ -55,6 +56,14 @@ class Config:
         # Logging Configuration
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
+        # Timezone Configuration
+        timezone_str = os.getenv("TIMEZONE", "America/New_York")
+        try:
+            self.timezone = ZoneInfo(timezone_str)
+        except Exception as e:
+            print(f"Warning: Invalid timezone '{timezone_str}', using system default. Error: {e}")
+            self.timezone = None  # Use system default
+
         # Security - Allowed Shell Commands
         allowed_commands_str = os.getenv(
             "ALLOWED_COMMANDS",
@@ -86,7 +95,7 @@ class Config:
         if not self.system_prompt_file.exists():
             raise ValueError(f"System prompt file not found: {self.system_prompt_file}")
 
-    def get_system_prompt(self, user_context: Optional[str] = None) -> str:
+    def get_system_prompt(self, user_context: Optional[str] = None, user_timezone: Optional[str] = None) -> str:
         """Load and render the system prompt template with configuration values.
 
         Loads system_prompt.txt and optionally user_context (from database or file).
@@ -94,6 +103,8 @@ class Config:
 
         Args:
             user_context: Optional user context string. If None, will try to load from file.
+            user_timezone: Optional timezone string from client (e.g., 'America/New_York').
+                          If provided, uses client's timezone. Otherwise falls back to server config.
 
         Returns:
             Rendered system prompt string.
@@ -118,7 +129,7 @@ class Config:
             ORG_DIR=self.org_dir,
             LOGSEQ_DIR=self.logseq_dir)
 
-    def get_system_prompt_blocks(self, user_context: Optional[str] = None) -> list:
+    def get_system_prompt_blocks(self, user_context: Optional[str] = None, user_timezone: Optional[str] = None) -> list:
         """Get system prompt as structured blocks optimized for prompt caching.
 
         Returns a list of blocks where static content comes first (cached),
@@ -131,6 +142,8 @@ class Config:
 
         Args:
             user_context: Optional user context string. If None, will try to load from file.
+            user_timezone: Optional timezone string from client (e.g., 'America/New_York').
+                          If provided, uses client's timezone. Otherwise falls back to server config.
 
         Returns:
             List of dicts with 'type', 'text', and optionally 'cache_control' keys.
@@ -171,11 +184,27 @@ class Config:
             })
 
         # Block 3: Today's date (NOT cached - changes daily)
-        today = datetime.now()
-        timestring = today.strftime('%A, %B %d, %Y, %H:%M:%S')
+        # Get current time in user's timezone
+        # Priority: user_timezone (from client) > self.timezone (from config) > system default
+        timezone_to_use = None
+        if user_timezone:
+            try:
+                timezone_to_use = ZoneInfo(user_timezone)
+            except Exception as e:
+                print(f"Warning: Invalid user timezone '{user_timezone}', falling back. Error: {e}")
+                timezone_to_use = self.timezone
+        else:
+            timezone_to_use = self.timezone
+
+        if timezone_to_use:
+            now = datetime.now(timezone_to_use)
+        else:
+            now = datetime.now()
+
+        timestring = now.strftime('%A, %B %d, %Y, %H:%M:%S %Z')
         blocks.append({
             "type": "text",
-            "text": f"\n\nCurrent date/time is {today.isoformat()} or {timestring}."
+            "text": f"\n\nCurrent date/time is {now.isoformat()} or {timestring}."
         })
 
         return blocks

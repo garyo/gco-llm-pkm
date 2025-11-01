@@ -328,6 +328,7 @@ def query():
     user_message = data['message']
     model = data.get('model', config.model)
     thinking = data.get('thinking')
+    user_timezone = data.get('timezone')  # Optional timezone from client
 
     # Get or create session from database
     db = get_db()
@@ -339,7 +340,10 @@ def query():
         # Block 1: Static instructions (cached)
         # Block 2: User context (cached - separate so edits don't invalidate base)
         # Block 3: Date (NOT cached - appended dynamically, changes daily)
-        system_prompt_blocks = config.get_system_prompt_blocks(user_context=user_context)
+        system_prompt_blocks = config.get_system_prompt_blocks(
+            user_context=user_context,
+            user_timezone=user_timezone
+        )
 
         # Debug: log system block structure
         if logger.level <= 10:  # DEBUG level
@@ -348,7 +352,10 @@ def query():
                 logger.debug(f"  System block {i}: {len(block['text'])} chars, {cached}")
 
         # Also get flat version for session storage
-        system_prompt_flat = config.get_system_prompt(user_context=user_context)
+        system_prompt_flat = config.get_system_prompt(
+            user_context=user_context,
+            user_timezone=user_timezone
+        )
 
         db_session = SessionRepository.get_or_create_session(
             db, session_id, system_prompt=system_prompt_flat

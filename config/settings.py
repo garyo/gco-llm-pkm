@@ -114,11 +114,9 @@ class Config:
             )
 
         # Replace placeholders
-        today = datetime.today()
         return template.format(
             ORG_DIR=self.org_dir,
-            LOGSEQ_DIR=self.logseq_dir,
-            TODAY=today.strftime("%Y-%m-%d")
+            LOGSEQ_DIR=self.logseq_dir)
         )
 
     def get_system_prompt_blocks(self, user_context: Optional[str] = None) -> list:
@@ -174,10 +172,10 @@ class Config:
             })
 
         # Block 3: Today's date (NOT cached - changes daily)
-        today = datetime.today()
+        today = datetime.now()
         blocks.append({
             "type": "text",
-            "text": f"\n\nToday's date is {today.strftime('%Y-%m-%d')}."
+            "text": f"\n\nCurrent date/time is {today.isoformat()} or {today.strftime("%A, %B %d, %Y, %H:%M:%S")}."
         })
 
         return blocks

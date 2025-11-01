@@ -207,10 +207,10 @@ COMMAND NOTES
   - `--older` works too
   - Instead of "7days" for 7 days, you can use a date as `--newer YYYY-MM-DD`.
   - IMPORTANT: fd requires double-dash for long options. Use `--type`, NEVER `-type`
-- With rg (ripgrep), you can search for words near each other like `rg --multiline --multiline-dotall -C5 -i 'stock.{0,300}sold`
+- With rg (ripgrep), you can search for words near each other like `rg --multiline --multiline-dotall -C5 -i 'stock.{{0,300}}sold`
   - `--multiline` searches across newlines
   - `--multiline-dotall` makes `.` match newlines
-  - So `stock.{0,300}sold` matches "stock", up to 300 characters, and "sold".
+  - So `stock.{{0,300}}sold` matches "stock", up to 300 characters, and "sold".
 - With rg (ripgrep), another technique for finding matches near each other is to search with context and then search in the result.
 <example>
 rg --no-heading -C5 NVDA .|grep -i sell

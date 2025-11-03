@@ -1,5 +1,6 @@
 // Simple service worker for PWA support
-const CACHE_NAME = 'pkm-assistant-v1';
+const BUILD_TIMESTAMP = '__BUILD_TIMESTAMP__'; // Replaced during build
+const CACHE_NAME = `pkm-assistant-${BUILD_TIMESTAMP}`;
 const STATIC_ASSETS = [
   '/',
   '/favicon.svg',

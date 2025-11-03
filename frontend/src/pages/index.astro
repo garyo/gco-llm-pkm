@@ -9,9 +9,9 @@ import EditorInterface from '../components/EditorInterface.astro';
   <LoginForm />
 
   <!-- App Container -->
-  <div id="app-container" class="hidden h-screen flex flex-col">
-    <!-- Unified Header -->
-    <div class="bg-blue-500 text-white px-4 py-3 shadow-md flex items-center gap-4 flex-shrink-0 min-h-[56px]">
+  <div id="app-container" class="hidden h-screen flex flex-col overflow-hidden">
+    <!-- Unified Header - Always visible at top -->
+    <div class="bg-blue-500 text-white px-4 py-3 shadow-md flex items-center gap-4 flex-shrink-0 min-h-[56px] sticky top-0 z-10">
       <h1 class="text-xl font-semibold">GCO PKM Assistant</h1>
 
       <!-- Tab buttons -->
@@ -375,6 +375,14 @@ import EditorInterface from '../components/EditorInterface.astro';
       chatTab?.classList.add('bg-white/20');
       editorTab?.classList.remove('bg-white/20');
       editorTab?.classList.add('bg-white/0');
+
+      // Scroll chat to bottom when switching to it
+      setTimeout(() => {
+        const chatDiv = document.getElementById('chat');
+        if (chatDiv) {
+          chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+      }, 0);
 
       input.focus();
     } else {

@@ -722,6 +722,77 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Set up login form handler
   document.getElementById('login-form')?.addEventListener('submit', handleLogin);
 
+  // Swipe gesture handling for mobile tab switching
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchEndX = 0;
+  let touchEndY = 0;
+  let touchStartElement: HTMLElement | null = null;
+
+  function isSwipeableArea(element: HTMLElement | null): boolean {
+    if (!element) return false;
+
+    // Check if touch started in chat messages area
+    const chatArea = document.getElementById('chat');
+    if (chatArea && chatArea.contains(element)) {
+      return true;
+    }
+
+    // Check if touch started in editor file selector area (top bar of editor)
+    const editorFileSelector = element.closest('.bg-gray-50.px-4.py-3.border-b');
+    if (editorFileSelector) {
+      return true;
+    }
+
+    // Check if touch is in the header area
+    const header = element.closest('.bg-blue-500.text-white');
+    if (header) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function handleSwipeGesture() {
+    // Only handle swipes that started in swipeable areas
+    if (!isSwipeableArea(touchStartElement)) {
+      return;
+    }
+
+    const deltaX = touchEndX - touchStartX;
+    const deltaY = touchEndY - touchStartY;
+
+    // Only handle horizontal swipes (more horizontal than vertical)
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      const minSwipeDistance = 50; // minimum distance for swipe
+
+      if (deltaX < -minSwipeDistance) {
+        // Swipe left - go to editor
+        switchTab('editor');
+      } else if (deltaX > minSwipeDistance) {
+        // Swipe right - go to chat
+        switchTab('chat');
+      }
+    }
+  }
+
+  // Add touch listeners to content area
+  const contentArea = document.querySelector('#app-container');
+  if (contentArea) {
+    contentArea.addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].screenX;
+      touchStartY = e.changedTouches[0].screenY;
+      touchStartElement = e.target as HTMLElement;
+    }, { passive: true });
+
+    contentArea.addEventListener('touchend', (e) => {
+      touchEndX = e.changedTouches[0].screenX;
+      touchEndY = e.changedTouches[0].screenY;
+      handleSwipeGesture();
+      touchStartElement = null;
+    }, { passive: true });
+  }
+
   // Verify token and load app on page load
   verifyToken();
 

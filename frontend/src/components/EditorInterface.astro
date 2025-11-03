@@ -714,12 +714,31 @@
     loadFile(currentFile);
   }
 
-  // Handle open file event (for future use)
+  // Handle open file event from SSE
   function handleOpenFile(data: any) {
     const { path } = data;
-    // Future: switch to editor tab and load the file
+
+    if (!path) {
+      console.error('Open file event missing path:', data);
+      return;
+    }
+
     console.log('Open file requested:', path);
-    // loadFile(path);
+
+    // Switch to editor tab if not already there
+    const switchTabFn = (window as any).switchTab;
+    if (switchTabFn) {
+      switchTabFn('editor');
+    }
+
+    // Wait a moment for tab switch to complete, then load the file
+    setTimeout(() => {
+      // Update file selector to show this file
+      fileSelector.value = path;
+
+      // Load the file
+      loadFile(path);
+    }, 100);
   }
 
   // Event handlers
@@ -769,8 +788,6 @@
           // Don't initialize editor until a file is loaded
           // This way we can set the correct language mode
           loadFileList();
-          // Connect to SSE for real-time file updates
-          connectSSE();
         }
         observer.disconnect();
       }
@@ -783,8 +800,12 @@
     });
   }
 
-  // Start observing
+  // Start observing for editor initialization
   initEditorWhenVisible();
+
+  // Connect to SSE immediately (even if editor tab not visible yet)
+  // This allows receiving open_file events from chat
+  connectSSE();
 
   // Make functions globally available for tab switching
   (window as any).refreshFileList = loadFileList;

@@ -130,7 +130,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
             self.logger.error(f"Error getting TickTick client: {e}")
             return None
 
-    def execute(self, params: Dict[str, Any]) -> str:
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute TickTick action.
 
         Args:

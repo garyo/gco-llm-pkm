@@ -55,7 +55,7 @@ Directories:
             "required": ["pattern"]
         }
 
-    def execute(self, params: Dict[str, Any]) -> str:
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute search with date-sorted results.
 
         Args:

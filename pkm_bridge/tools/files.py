@@ -43,7 +43,7 @@ class ListFilesTool(BaseTool):
             }
         }
 
-    def execute(self, params: Dict[str, Any]) -> str:
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """List files matching pattern in specified directories.
 
         Args:

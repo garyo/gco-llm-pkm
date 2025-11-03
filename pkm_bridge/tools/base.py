@@ -42,11 +42,12 @@ class BaseTool(ABC):
         pass
 
     @abstractmethod
-    def execute(self, params: Dict[str, Any]) -> str:
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute the tool with given parameters.
 
         Args:
             params: Tool parameters matching input_schema
+            context: Optional execution context (e.g., session_id for SSE events)
 
         Returns:
             Tool execution result as string

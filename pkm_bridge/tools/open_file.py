@@ -47,11 +47,12 @@ The file will be opened in the editor tab of the web interface."""
             "required": ["filepath"]
         }
 
-    def execute(self, params: Dict[str, Any]) -> str:
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Open a file in the editor.
 
         Args:
             params: Dict with 'filepath'
+            context: Optional execution context with 'session_id'
 
         Returns:
             Success message or error
@@ -59,6 +60,9 @@ The file will be opened in the editor tab of the web interface."""
         filepath = params.get("filepath", "").strip()
         if not filepath:
             return "❌ Error: No filepath provided"
+
+        context = context or {}
+        session_id = context.get("session_id")
 
         try:
             # Convert to Path object
@@ -114,12 +118,20 @@ The file will be opened in the editor tab of the web interface."""
 
             # Broadcast event to frontend via SSE
             from pkm_bridge.events import event_manager
-            event_manager.broadcast('open_file', {
-                'path': formatted_path,
-                'absolute_path': str(full_path)
-            })
-
-            self.logger.info(f"Opening file in editor: {formatted_path}")
+            if session_id:
+                # Send only to this session
+                event_manager.broadcast_to_session(session_id, 'open_file', {
+                    'path': formatted_path,
+                    'absolute_path': str(full_path)
+                })
+                self.logger.info(f"Opening file in editor for session {session_id}: {formatted_path}")
+            else:
+                # Fallback to broadcast (shouldn't happen in normal use)
+                event_manager.broadcast('open_file', {
+                    'path': formatted_path,
+                    'absolute_path': str(full_path)
+                })
+                self.logger.warning(f"Opening file without session context: {formatted_path}")
 
             return f"✅ Opening '{filepath}' in editor tab..."
 

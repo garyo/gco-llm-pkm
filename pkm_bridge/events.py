@@ -18,21 +18,31 @@ class SSEEventManager:
 
     def __init__(self):
         self.clients: Set[queue.Queue] = set()
+        self.client_sessions: Dict[queue.Queue, Optional[str]] = {}  # Map client to session_id
         self.lock = threading.Lock()
         self.file_watcher: Optional['FileWatcher'] = None
 
-    def add_client(self) -> queue.Queue:
-        """Add a new SSE client and return its message queue."""
+    def add_client(self, session_id: Optional[str] = None) -> queue.Queue:
+        """Add a new SSE client and return its message queue.
+
+        Args:
+            session_id: Optional session ID to associate with this client
+
+        Returns:
+            Message queue for this client
+        """
         client_queue = queue.Queue(maxsize=100)
         with self.lock:
             self.clients.add(client_queue)
-        logger.info(f"SSE client connected. Total clients: {len(self.clients)}")
+            self.client_sessions[client_queue] = session_id
+        logger.info(f"SSE client connected (session: {session_id}). Total clients: {len(self.clients)}")
         return client_queue
 
     def remove_client(self, client_queue: queue.Queue):
         """Remove an SSE client."""
         with self.lock:
             self.clients.discard(client_queue)
+            self.client_sessions.pop(client_queue, None)
         logger.info(f"SSE client disconnected. Total clients: {len(self.clients)}")
 
     def broadcast(self, event_type: str, data: Dict):
@@ -56,6 +66,40 @@ class SSEEventManager:
 
             # Clean up disconnected clients
             self.clients -= disconnected
+
+    def broadcast_to_session(self, session_id: str, event_type: str, data: Dict):
+        """Broadcast an event only to clients in a specific session.
+
+        Args:
+            session_id: Session ID to send to
+            event_type: Type of event
+            data: Event data
+        """
+        message = {
+            "type": event_type,
+            "data": data,
+            "timestamp": int(time.time())
+        }
+
+        # Remove disconnected clients
+        disconnected = set()
+        sent_count = 0
+        with self.lock:
+            for client_queue in self.clients:
+                # Only send to clients in this session
+                if self.client_sessions.get(client_queue) == session_id:
+                    try:
+                        client_queue.put_nowait(message)
+                        logger.debug(f"Sent {event_type} to client in session {session_id}")
+                        sent_count += 1
+                    except queue.Full:
+                        logger.warning("Client queue full, dropping message")
+                        disconnected.add(client_queue)
+
+            # Clean up disconnected clients
+            self.clients -= disconnected
+
+        logger.info(f"Sent {event_type} to {sent_count} client(s) in session {session_id}")
 
     def start_file_watcher(self, directories: list[Path]):
         """Start watching directories for file changes."""

@@ -809,4 +809,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   (window as any).updateModel = updateModel;
   (window as any).updateThinking = updateThinking;
   (window as any).switchTab = switchTab;
+
+  // Make sessionId available globally for SSE connection
+  (window as any).getSessionId = () => sessionId;
 </script>

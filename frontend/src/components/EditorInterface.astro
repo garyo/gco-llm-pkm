@@ -638,7 +638,13 @@
     }
 
     try {
-      eventSource = new EventSource('/api/events');
+      // Get session ID from global context
+      const getSessionId = (window as any).getSessionId;
+      const sessionId = getSessionId ? getSessionId() : null;
+
+      // Connect with session ID as query parameter
+      const url = sessionId ? `/api/events?session_id=${encodeURIComponent(sessionId)}` : '/api/events';
+      eventSource = new EventSource(url);
 
       eventSource.onopen = () => {
         // Connection established
@@ -803,9 +809,24 @@
   // Start observing for editor initialization
   initEditorWhenVisible();
 
-  // Connect to SSE immediately (even if editor tab not visible yet)
+  // Wait for session ID to be available, then connect to SSE
   // This allows receiving open_file events from chat
-  connectSSE();
+  let sessionWaitCount = 0;
+  function waitForSessionAndConnect() {
+    const getSessionId = (window as any).getSessionId;
+    if (getSessionId && getSessionId()) {
+      console.log('Session ID available, connecting to SSE with session:', getSessionId());
+      connectSSE();
+    } else if (sessionWaitCount < 50) { // Max 5 seconds
+      // Check again in 100ms
+      sessionWaitCount++;
+      setTimeout(waitForSessionAndConnect, 100);
+    } else {
+      console.error('Timeout waiting for session ID, connecting without it');
+      connectSSE();
+    }
+  }
+  waitForSessionAndConnect();
 
   // Make functions globally available for tab switching
   (window as any).refreshFileList = loadFileList;

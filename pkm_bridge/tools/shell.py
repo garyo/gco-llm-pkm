@@ -59,7 +59,7 @@ Security: Only whitelisted commands allowed: {', '.join(sorted(self.allowed_comm
             "required": ["command"]
         }
 
-    def execute(self, params: Dict[str, Any]) -> str:
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute a whitelisted shell command.
 
         Args:

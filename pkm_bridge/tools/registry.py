@@ -35,19 +35,20 @@ class ToolRegistry:
             raise KeyError(f"Tool not found: {name}")
         return self._tools[name]
 
-    def execute_tool(self, name: str, params: Dict[str, Any]) -> str:
+    def execute_tool(self, name: str, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute a tool by name.
 
         Args:
             name: Tool name
             params: Tool parameters
+            context: Optional execution context (e.g., session_id)
 
         Returns:
             Tool execution result
         """
         try:
             tool = self.get_tool(name)
-            return tool.execute(params)
+            return tool.execute(params, context=context)
         except KeyError as e:
             error_msg = f"❌ Unknown tool: {name}"
             # Log if tools have logger access

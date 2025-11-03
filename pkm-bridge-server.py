@@ -437,7 +437,9 @@ def query():
                     tool_call_count += 1
                     logger.info(f"Tool call: {block.name} with params: {block.input}")
                     with timer(f"Tool execution: {block.name}"):
-                        result = tool_registry.execute_tool(block.name, block.input)
+                        # Pass session_id in context for tools that need it
+                        context = {"session_id": session_id}
+                        result = tool_registry.execute_tool(block.name, block.input, context=context)
                     # Log if tool result contains an error
                     if result.startswith("❌"):
                         logger.error(f"Tool {block.name} returned error: {result[:200]}")
@@ -1060,10 +1062,14 @@ def sse_events():
     """Server-Sent Events endpoint for real-time notifications."""
     import json
     import queue
+    from flask import request
+
+    # Get session_id from query parameter
+    session_id = request.args.get('session_id', None)
 
     def event_stream():
         """Generator for SSE events."""
-        client_queue = event_manager.add_client()
+        client_queue = event_manager.add_client(session_id=session_id)
         try:
             # Send initial connection event
             yield f"data: {json.dumps({'type': 'connected', 'data': {}, 'timestamp': int(time.time())})}\n\n"

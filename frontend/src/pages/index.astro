@@ -331,9 +331,8 @@ import EditorInterface from '../components/EditorInterface.astro';
     modelSelect.value = selectedModel;
     thinkingToggle.checked = thinkingEnabled;
 
-    // Restore last active tab (default to chat)
-    const savedTab = localStorage.getItem('pkm-currentTab') as 'chat' | 'editor' || 'chat';
-    switchTab(savedTab);
+    // Always start on chat tab
+    switchTab('chat');
 
     loadHistory();
     initializeVoiceInput();

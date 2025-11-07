@@ -67,6 +67,7 @@
     font-size: 14px;
     line-height: 1.6;
     overflow: auto;
+    padding-bottom: 50vh; /* Add space at bottom for easier mobile editing */
   }
 </style>
 
@@ -345,6 +346,16 @@
   const searchFilter = document.getElementById('search-filter') as HTMLInputElement;
   const fileCount = document.getElementById('file-count')!;
 
+  // Debounce helper - calls function on trailing edge after delay
+  function debounce<T extends (...args: any[]) => any>(func: T, delay: number): (...args: Parameters<T>) => void {
+    let timeoutId: number | undefined;
+    return function(this: any, ...args: Parameters<T>) {
+      const context = this;
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => func.apply(context, args), delay) as unknown as number;
+    };
+  }
+
   // Get auth headers from parent context
   function getAuthHeaders(): HeadersInit {
     const authToken = localStorage.getItem('pkm-authToken');
@@ -409,6 +420,12 @@
           updateStatus('Modified (unsaved)');
           saveButton.disabled = false;
         }
+      }),
+      // Add bottom padding for easier mobile editing
+      EditorView.theme({
+        ".cm-scroller": {
+          paddingBottom: "10vh"
+        }
       })
     ];
 
@@ -446,6 +463,9 @@
       console.error('Failed to load file list:', e);
     }
   }
+
+  // Debounced version for automatic updates (waits 2s after last call)
+  const debouncedLoadFileList = debounce(loadFileList, 2000);
 
   // Filter and populate file selector based on current filters
   function filterAndPopulateFiles() {
@@ -608,6 +628,10 @@
 
   // Refresh file from server
   async function refreshFile() {
+    // Always refresh the file list first (immediate, not debounced - user action)
+    await loadFileList();
+
+    // Then reload current file if one is open
     if (!currentFile) return;
 
     // Warn if there are unsaved changes
@@ -694,6 +718,9 @@
   // Handle file change event
   function handleFileChanged(data: any) {
     const { path, mtime } = data;
+
+    // Refresh file list (debounced - waits for file changes to settle)
+    debouncedLoadFileList();
 
     if (!currentFile) {
       return;

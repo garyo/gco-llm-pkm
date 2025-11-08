@@ -58,6 +58,7 @@ from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.ticktick import TickTickTool
 from pkm_bridge.tools.open_file import OpenFileTool
+from pkm_bridge.tools.find_context import FindContextTool
 
 # Import database components
 from pkm_bridge.database import init_db, get_db
@@ -139,6 +140,7 @@ execute_shell_tool = ExecuteShellTool(
 tool_registry.register(execute_shell_tool)
 tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
+tool_registry.register(FindContextTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(OpenFileTool(logger, config.org_dir, config.logseq_dir))
 
 # Register TickTick tool if configured

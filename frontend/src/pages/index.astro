@@ -330,6 +330,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     // Initialize UI controls from saved preferences
     modelSelect.value = selectedModel;
     thinkingToggle.checked = thinkingEnabled;
+    updateModelButtonHighlight();
 
     // Always start on chat tab
     switchTab('chat');
@@ -402,11 +403,29 @@ import EditorInterface from '../components/EditorInterface.astro';
     localStorage.setItem('pkm-currentTab', tab);
   }
 
+  // Update model button styling based on cost
+  function updateModelButtonHighlight() {
+    const modelBtn = document.getElementById('model-settings-btn');
+    if (!modelBtn) return;
+
+    // Highlight if using non-Haiku model or extended thinking
+    const isExpensive = selectedModel !== 'claude-haiku-4-5' || thinkingEnabled;
+
+    if (isExpensive) {
+      modelBtn.classList.remove('bg-gray-100', 'hover:bg-gray-200', 'text-gray-700');
+      modelBtn.classList.add('bg-yellow-400', 'hover:bg-yellow-500', 'text-gray-900');
+    } else {
+      modelBtn.classList.remove('bg-yellow-400', 'hover:bg-yellow-500', 'text-gray-900');
+      modelBtn.classList.add('bg-gray-100', 'hover:bg-gray-200', 'text-gray-700');
+    }
+  }
+
   // Update model selection
   function updateModel() {
     selectedModel = modelSelect.value;
     localStorage.setItem('pkm-model', selectedModel);
     console.log('Model changed to:', selectedModel);
+    updateModelButtonHighlight();
   }
 
   // Update thinking toggle
@@ -414,6 +433,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     thinkingEnabled = thinkingToggle.checked;
     localStorage.setItem('pkm-thinking', thinkingEnabled.toString());
     console.log('Deep thinking:', thinkingEnabled);
+    updateModelButtonHighlight();
   }
 
   // Verify token on page load

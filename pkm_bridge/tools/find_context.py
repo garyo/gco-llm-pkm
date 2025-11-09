@@ -9,6 +9,7 @@
 import re
 import sys
 import yaml
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -56,6 +57,10 @@ class FindContextTool(BaseTool):
 
         return f"""Find all notes matching a regex pattern with full hierarchical context.
 
+Note: Automatically excludes:
+- Logseq internal directories (logseq/) which contain backup and config files
+- Git-ignored files (respects .gitignore in each repository)
+
 Returns YAML with the following fields for each match:
 - filename: full path to the file
 - file_type: 'org' or 'md'
@@ -69,13 +74,15 @@ Context structure:
 - For markdown files: includes parent bullets (less indented), matched line, and child content (more indented)
 
 Returns only the first match per file to avoid duplication.
-Results are sorted by date (most recent first).
+Results are sorted by date (most recent first), then limited to max_results.
 
 Arguments:
 - pattern: regex pattern to search for (case-insensitive, required)
+- paths: optional list of files/directories to search (if not provided, searches default directories)
+- newer: optional date filter in YYYY-MM-DD format (only returns notes with dates >= this date)
 - max_results: maximum number of results to return (default: 50)
 
-Directories searched:
+Default directories searched (if paths not provided):
 {dirs_info}
 """
 
@@ -87,6 +94,15 @@ Directories searched:
                 "pattern": {
                     "type": "string",
                     "description": "Regex pattern to search for"
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of files or directories to search. Directories are searched recursively."
+                },
+                "newer": {
+                    "type": "string",
+                    "description": "Optional date filter in YYYY-MM-DD format. Only returns notes with dates >= this date."
                 },
                 "max_results": {
                     "type": "number",
@@ -252,6 +268,114 @@ Directories searched:
             self.logger.warning(f"Could not get mtime for {file_path}: {e}")
             return None
 
+    def _get_git_root(self, path: Path) -> Optional[str]:
+        """Get git repository root for a given path.
+
+        Args:
+            path: Directory or file path to check
+
+        Returns:
+            Git root path as string, or None if not in a git repo
+        """
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', '--show-toplevel'],
+                cwd=path if path.is_dir() else path.parent,
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            pass
+        return None
+
+    def _filter_gitignored_files(self, files: List[Path]) -> List[Path]:
+        """Filter out files that are git-ignored.
+
+        Args:
+            files: List of file paths to check
+
+        Returns:
+            List of files that are not ignored by git
+        """
+        if not files:
+            return []
+
+        # Find git roots for base directories (org_dir and logseq_dir)
+        # This way we only call git once per base dir instead of once per file
+        repo_cache = {}
+
+        # Pre-populate cache with base directories
+        if self.org_dir.exists():
+            repo_root = self._get_git_root(self.org_dir)
+            repo_cache[str(self.org_dir)] = repo_root
+        if self.logseq_dir and self.logseq_dir.exists():
+            repo_root = self._get_git_root(self.logseq_dir)
+            repo_cache[str(self.logseq_dir)] = repo_root
+
+        # Group files by their git repository root
+        repo_groups = {}
+        for file_path in files:
+            # Find which cached base directory this file belongs to
+            repo_root = None
+            for base_dir_str, cached_root in repo_cache.items():
+                if str(file_path).startswith(base_dir_str):
+                    repo_root = cached_root
+                    break
+
+            # If not found in cache, check directly (for custom paths)
+            if repo_root is None and str(file_path) not in repo_cache:
+                repo_root = self._get_git_root(file_path)
+                # Cache the parent directory for future lookups
+                if file_path.parent:
+                    repo_cache[str(file_path.parent)] = repo_root
+
+            # Group by repo root
+            if repo_root not in repo_groups:
+                repo_groups[repo_root] = []
+            repo_groups[repo_root].append(file_path)
+
+        # Check each repo group for ignored files
+        non_ignored_files = []
+
+        # Files not in any repo are kept
+        if None in repo_groups:
+            non_ignored_files.extend(repo_groups[None])
+
+        # Check files in git repos
+        for repo_root, repo_files in repo_groups.items():
+            if repo_root is None:
+                continue
+
+            try:
+                # Use git check-ignore with --stdin for efficiency
+                file_paths_str = '\n'.join(str(f) for f in repo_files)
+                result = subprocess.run(
+                    ['git', 'check-ignore', '--stdin'],
+                    cwd=repo_root,
+                    input=file_paths_str,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+
+                # Files that git check-ignore outputs are ignored
+                ignored_files = set(result.stdout.strip().split('\n')) if result.stdout.strip() else set()
+
+                # Keep files that are not in the ignored set
+                for file_path in repo_files:
+                    if str(file_path) not in ignored_files:
+                        non_ignored_files.append(file_path)
+
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+                # On error, keep all files from this repo
+                self.logger.warning(f"Could not check git ignore status for {repo_root}: {e}")
+                non_ignored_files.extend(repo_files)
+
+        return non_ignored_files
+
     def _search_file(self, file_path: Path, pattern: str, file_type: str) -> List[Dict[str, Any]]:
         """Search a single file for pattern and extract context.
 
@@ -356,39 +480,78 @@ Directories searched:
         """Execute context search.
 
         Args:
-            params: Dict with pattern and optional max_results
+            params: Dict with pattern, optional paths, and optional max_results
 
         Returns:
             YAML-formatted results or error message
         """
         pattern = params["pattern"]
+        paths = params.get("paths", [])
+        newer = params.get("newer")
         max_results = params.get("max_results", 50)
 
         self.logger.info(f"Finding context for pattern: {pattern}")
+        if newer:
+            self.logger.info(f"Filtering for dates >= {newer}")
 
         all_results = []
 
-        # Search org files
-        if self.org_dir.exists():
-            for org_file in self.org_dir.rglob("*.org"):
-                results = self._search_file(org_file, pattern, 'org')
-                all_results.extend(results)
-                if len(all_results) >= max_results:
-                    break
+        # Determine which files to search
+        files_to_search = []
 
-        # Search Logseq files
-        if self.logseq_dir and self.logseq_dir.exists() and len(all_results) < max_results:
-            for md_file in self.logseq_dir.rglob("*.md"):
-                results = self._search_file(md_file, pattern, 'md')
-                all_results.extend(results)
-                if len(all_results) >= max_results:
-                    break
+        if paths:
+            # Use provided paths
+            for path_str in paths:
+                path = Path(path_str).expanduser()
+                if not path.exists():
+                    self.logger.warning(f"Path does not exist: {path}")
+                    continue
+
+                if path.is_file():
+                    files_to_search.append(path)
+                elif path.is_dir():
+                    # Recursively find all .org and .md files
+                    files_to_search.extend(path.rglob("*.org"))
+                    files_to_search.extend(path.rglob("*.md"))
+        else:
+            # Use default directories
+            if self.org_dir.exists():
+                files_to_search.extend(self.org_dir.rglob("*.org"))
+
+            if self.logseq_dir and self.logseq_dir.exists():
+                files_to_search.extend(self.logseq_dir.rglob("*.md"))
+
+        # Filter out Logseq internal directories (logseq/ contains internal data)
+        files_to_search = [
+            f for f in files_to_search
+            if 'logseq' not in f.parts
+        ]
+
+        # Filter out git-ignored files
+        files_to_search = self._filter_gitignored_files(files_to_search)
+
+        # Search all files
+        for file_path in files_to_search:
+            # Determine file type from extension
+            if file_path.suffix == '.org':
+                file_type = 'org'
+            elif file_path.suffix == '.md':
+                file_type = 'md'
+            else:
+                continue
+
+            results = self._search_file(file_path, pattern, file_type)
+            all_results.extend(results)
 
         # Sort results by date (most recent first)
         # Results without dates will be at the end
         all_results.sort(key=lambda x: x.get('date', '0000-00-00'), reverse=True)
 
-        # Limit results
+        # Filter by date if newer is specified
+        if newer:
+            all_results = [r for r in all_results if r.get('date', '0000-00-00') >= newer]
+
+        # Limit results AFTER sorting and filtering
         all_results = all_results[:max_results]
 
         # Format as YAML
@@ -428,9 +591,15 @@ Examples:
   %(prog)s "Emacs.*PKM"
   %(prog)s "LLM|AI" --max-results 10
   %(prog)s "#music" --org-only
+  %(prog)s "TODO" --paths ~/Documents/org-agenda/journals/2025-11-*.org
+  %(prog)s "music" --newer 2025-11-01
         """
     )
     parser.add_argument('pattern', help='Regex pattern to search for')
+    parser.add_argument('--paths', nargs='+',
+                        help='Files or directories to search (default: use default org/logseq dirs)')
+    parser.add_argument('--newer', type=str,
+                        help='Only return notes with dates >= this date (YYYY-MM-DD format)')
     parser.add_argument('--max-results', type=int, default=50,
                         help='Maximum number of results (default: 50)')
     parser.add_argument('--org-only', action='store_true',
@@ -462,10 +631,16 @@ Examples:
 
     # Create tool and execute
     tool = FindContextTool(logger, org_dir or Path('/tmp'), logseq_dir)
-    result = tool.execute({
+    params = {
         'pattern': args.pattern,
         'max_results': args.max_results
-    })
+    }
+    if args.paths:
+        params['paths'] = args.paths
+    if args.newer:
+        params['newer'] = args.newer
+
+    result = tool.execute(params)
 
     print(result)
 

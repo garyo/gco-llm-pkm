@@ -390,7 +390,7 @@ def query():
         saved = stats_before['total_tokens'] - stats_after['total_tokens']
         logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
 
-    logger.info(f"User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
+    logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
     try:
         # Build beta headers - include prompt caching for cost optimization
@@ -439,7 +439,7 @@ def query():
             for block in response.content:
                 if getattr(block, "type", None) == "tool_use":
                     tool_call_count += 1
-                    logger.info(f"Tool call: {block.name} with params: {block.input}")
+                    logger.info(f">>> Tool call: {block.name} with params: {block.input}")
                     with timer(f"Tool execution: {block.name}"):
                         # Pass session_id in context for tools that need it
                         context = {"session_id": session_id}

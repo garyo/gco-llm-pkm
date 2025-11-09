@@ -202,13 +202,15 @@ def serialize_message_content(content):
 @app.route('/')
 def index():
     """Serve the main web interface."""
-    return render_template('index.html')
+    # Send as static file to avoid Jinja2 processing issues with minified CSS
+    return send_from_directory(app.template_folder, 'index.html')
 
 
 @app.route('/settings')
 def settings():
     """Serve the settings page."""
-    return render_template('settings.html')
+    # Send as static file to avoid Jinja2 processing issues with minified CSS
+    return send_from_directory(app.template_folder, 'settings.html')
 
 
 @app.route('/<path:filename>')

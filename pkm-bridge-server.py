@@ -511,7 +511,65 @@ def query():
 
         logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
 
-        return jsonify({"response": assistant_text, "session_id": session_id})
+        # Update session cost tracking
+        if hasattr(usage, 'input_tokens') and hasattr(usage, 'output_tokens'):
+            input_tokens = getattr(usage, 'input_tokens', 0)
+            output_tokens = getattr(usage, 'output_tokens', 0)
+            cache_write = getattr(usage, 'cache_creation_input_tokens', 0)
+            cache_read = getattr(usage, 'cache_read_input_tokens', 0)
+
+            # Calculate cost using appropriate model rates
+            if model == 'claude-haiku-4-5':
+                # Haiku 4.5: $0.80/M input, $0.08/M cached, $4/M output
+                cost_input = (input_tokens * 0.80) / 1_000_000
+                cost_cache_write = (cache_write * 1.00) / 1_000_000
+                cost_cache_read = (cache_read * 0.08) / 1_000_000
+                cost_output = (output_tokens * 4.00) / 1_000_000
+            elif model == 'claude-sonnet-4-5':
+                # Sonnet 4.5: $3/M input, $0.30/M cached, $15/M output
+                cost_input = (input_tokens * 3.00) / 1_000_000
+                cost_cache_write = (cache_write * 3.75) / 1_000_000
+                cost_cache_read = (cache_read * 0.30) / 1_000_000
+                cost_output = (output_tokens * 15.00) / 1_000_000
+            elif model == 'claude-opus-4-1':
+                # Opus 4.1: $15/M input, $1.50/M cached, $75/M output
+                cost_input = (input_tokens * 15.00) / 1_000_000
+                cost_cache_write = (cache_write * 18.75) / 1_000_000
+                cost_cache_read = (cache_read * 1.50) / 1_000_000
+                cost_output = (output_tokens * 75.00) / 1_000_000
+            else:
+                # Unknown model, use Haiku rates as fallback
+                cost_input = (input_tokens * 0.80) / 1_000_000
+                cost_cache_write = (cache_write * 1.00) / 1_000_000
+                cost_cache_read = (cache_read * 0.08) / 1_000_000
+                cost_output = (output_tokens * 4.00) / 1_000_000
+
+            request_cost = cost_input + cost_cache_write + cost_cache_read + cost_output
+
+            # Update session totals in database
+            db = get_db()
+            try:
+                SessionRepository.update_session_cost(
+                    db,
+                    session_id,
+                    input_tokens,
+                    output_tokens,
+                    request_cost
+                )
+
+                # Get updated totals
+                db_session_obj = SessionRepository.get_session(db, session_id)
+                total_session_cost = db_session_obj.total_cost if db_session_obj else request_cost
+            finally:
+                db.close()
+        else:
+            total_session_cost = 0.0
+
+        return jsonify({
+            "response": assistant_text,
+            "session_id": session_id,
+            "session_cost": total_session_cost
+        })
 
     except Exception as e:
         logger.error(f"Query error: {str(e)}", exc_info=True)
@@ -596,7 +654,10 @@ def list_sessions():
                 "created_at": session.created_at.isoformat() + 'Z',  # Mark as UTC
                 "updated_at": session.updated_at.isoformat() + 'Z',  # Mark as UTC
                 "message_count": len(session.history),
-                "preview": preview
+                "preview": preview,
+                "total_cost": session.total_cost,
+                "total_input_tokens": session.total_input_tokens,
+                "total_output_tokens": session.total_output_tokens
             })
 
         return jsonify(sessions_list)

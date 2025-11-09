@@ -32,6 +32,11 @@ import examples from '../../../config/examples.json';
 
   <!-- Controls -->
   <div class="flex items-center gap-2 px-4 py-2 bg-white border-t border-gray-200 text-sm">
+    <!-- Cost Warning (only shown if > $1.00) -->
+    <div id="cost-warning" class="hidden px-3 py-1 bg-yellow-100 text-yellow-800 rounded-lg text-xs font-medium">
+      Session cost: <span id="cost-amount"></span>
+    </div>
+
     <!-- Model Settings Button -->
     <button
       id="model-settings-btn"

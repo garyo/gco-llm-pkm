@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from urllib.parse import quote_plus
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, JSON, Text
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, JSON, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
@@ -39,6 +39,9 @@ class ConversationSession(Base):
     user_id = Column(String(255), nullable=False, default='default')
     history = Column(JSON, nullable=False, default=list)  # List of message dicts
     system_prompt = Column(Text, nullable=True)  # Optional custom system prompt
+    total_input_tokens = Column(Integer, nullable=False, default=0)  # Cumulative input tokens
+    total_output_tokens = Column(Integer, nullable=False, default=0)  # Cumulative output tokens
+    total_cost = Column(Float, nullable=False, default=0.0)  # Cumulative cost in USD
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

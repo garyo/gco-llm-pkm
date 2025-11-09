@@ -544,6 +544,16 @@ import EditorInterface from '../components/EditorInterface.astro';
       loading.classList.remove('flex');
 
       appendMessage('assistant', data.response);
+
+      // Update cost warning if > $1.00
+      if (data.session_cost && data.session_cost > 1.0) {
+        const costWarning = document.getElementById('cost-warning');
+        const costAmount = document.getElementById('cost-amount');
+        if (costWarning && costAmount) {
+          costAmount.textContent = `$${data.session_cost.toFixed(2)}`;
+          costWarning.classList.remove('hidden');
+        }
+      }
     } catch (e: any) {
       loading.classList.add('hidden');
       loading.classList.remove('flex');
@@ -622,13 +632,18 @@ import EditorInterface from '../components/EditorInterface.astro';
         const isActive = session.session_id === sessionId;
         const date = new Date(session.updated_at).toLocaleString();
         const preview = session.preview || 'Empty session';
+        const cost = session.total_cost || 0;
+        const costDisplay = cost > 0 ? `$${cost.toFixed(3)}` : '';
 
         return `
           <div class="border rounded-lg p-4 mb-3 hover:bg-gray-50 cursor-pointer ${isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}"
                onclick="switchToSession('${session.session_id}')">
             <div class="flex justify-between items-start mb-2">
               <div class="text-sm text-gray-500">${date}</div>
-              ${isActive ? '<span class="text-xs px-2 py-1 bg-blue-500 text-white rounded">Current</span>' : ''}
+              <div class="flex gap-2 items-center">
+                ${costDisplay ? `<span class="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded">${costDisplay}</span>` : ''}
+                ${isActive ? '<span class="text-xs px-2 py-1 bg-blue-500 text-white rounded">Current</span>' : ''}
+              </div>
             </div>
             <div class="text-gray-800 truncate mb-1">${preview}</div>
             <div class="text-xs text-gray-500">${session.message_count} messages</div>
@@ -655,6 +670,12 @@ import EditorInterface from '../components/EditorInterface.astro';
 
     sessionId = newSessionId;
     localStorage.setItem('pkm-sessionId', sessionId);
+
+    // Hide cost warning for new session
+    const costWarning = document.getElementById('cost-warning');
+    if (costWarning) {
+      costWarning.classList.add('hidden');
+    }
 
     // Clear current chat
     const messages = chat.querySelectorAll('.message');

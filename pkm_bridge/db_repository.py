@@ -185,6 +185,28 @@ class SessionRepository:
         return False
 
     @staticmethod
+    def update_session_cost(
+        db: Session,
+        session_id: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost: float
+    ) -> ConversationSession:
+        """Update session token and cost totals."""
+        session = SessionRepository.get_session(db, session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        session.total_input_tokens += input_tokens
+        session.total_output_tokens += output_tokens
+        session.total_cost += cost
+        session.updated_at = datetime.utcnow()
+
+        db.commit()
+        db.refresh(session)
+        return session
+
+    @staticmethod
     def get_all_sessions(db: Session, user_id: str = 'default') -> List[ConversationSession]:
         """Get all sessions for a user."""
         return db.query(ConversationSession).filter_by(

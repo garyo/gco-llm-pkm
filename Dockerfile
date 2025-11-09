@@ -47,6 +47,8 @@ RUN uv pip install --no-cache -r requirements.txt
 COPY pkm_bridge/ ./pkm_bridge/
 COPY config/ ./config/
 COPY pkm-bridge-server.py ./
+COPY migrate_add_cost_tracking.py ./
+COPY docker-entrypoint.sh ./
 
 # Copy built frontend from first stage
 COPY --from=frontend-builder /app/templates ./templates/
@@ -64,5 +66,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run server
-CMD ["uv", "run", "--script", "pkm-bridge-server.py"]
+# Run entrypoint script (runs migrations, then starts server)
+CMD ["./docker-entrypoint.sh"]

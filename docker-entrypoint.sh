@@ -2,7 +2,7 @@
 set -e
 
 echo "Running database migrations..."
-uv run --script migrate_add_cost_tracking.py
+python3 migrate_add_cost_tracking.py
 
 echo "Starting PKM Bridge Server..."
-exec uv run --script pkm-bridge-server.py
+exec python3 pkm-bridge-server.py

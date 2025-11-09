@@ -23,8 +23,10 @@ charset-normalizer==3.4.4
     # via requests
 click==8.3.0
     # via flask
-deprecated==1.3.0
-    # via limits
+deprecated==1.3.1
+    # via
+    #   gco-pkm-llm (pyproject.toml)
+    #   limits
 distro==1.9.0
     # via anthropic
 docstring-parser==0.17.0

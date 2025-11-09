@@ -64,17 +64,8 @@
   }
 
   #editor-container .cm-scroller {
-    font-size: 16px;
     line-height: 1.6;
     overflow: auto;
-    padding-bottom: 50vh; /* Add space at bottom for easier mobile editing */
-  }
-
-  /* Larger font on mobile devices */
-  @media (max-width: 768px) {
-    #editor-container .cm-scroller {
-      font-size: 18px;
-    }
   }
 </style>
 
@@ -428,10 +419,17 @@
           saveButton.disabled = false;
         }
       }),
-      // Add bottom padding for easier mobile editing
+      // Add bottom padding and font size for easier mobile editing
       EditorView.theme({
         ".cm-scroller": {
-          paddingBottom: "10vh"
+          paddingBottom: "10vh",
+          fontSize: "16px"
+        },
+        // Larger font on mobile
+        "@media (max-width: 768px)": {
+          ".cm-scroller": {
+            fontSize: "18px"
+          }
         }
       }),
       // Enable auto-capitalization on mobile keyboards

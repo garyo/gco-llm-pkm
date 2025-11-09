@@ -10,7 +10,8 @@ import re
 import sys
 import yaml
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from datetime import datetime
 
 # Allow running as script or as module
 if __name__ == "__main__":
@@ -58,6 +59,7 @@ class FindContextTool(BaseTool):
 Returns YAML with the following fields for each match:
 - filename: full path to the file
 - file_type: 'org' or 'md'
+- date: note date in YYYY-MM-DD format (extracted from #+title for org files, filename for journals, or file mtime)
 - match_line: line number of the match (1-indexed)
 - matched_text: the actual matched line
 - context: hierarchical context (optional - only included if there's additional context beyond the matched line)
@@ -67,6 +69,7 @@ Context structure:
 - For markdown files: includes parent bullets (less indented), matched line, and child content (more indented)
 
 Returns only the first match per file to avoid duplication.
+Results are sorted by date (most recent first).
 
 Arguments:
 - pattern: regex pattern to search for (case-insensitive, required)
@@ -213,6 +216,42 @@ Directories searched:
             'section_content': '\n'.join(section_content).strip()
         }
 
+    def _extract_date(self, file_path: Path, lines: List[str], file_type: str) -> Optional[str]:
+        """Extract date from note file.
+
+        Priority order:
+        1. For org files: #+title: line (if contains date in YYYY-MM-DD format)
+        2. Filename (journal files like YYYY-MM-DD.org or YYYY_MM_DD.md)
+        3. File modification time (fallback)
+
+        Returns:
+            Date string in YYYY-MM-DD format, or None if no date found
+        """
+        # 1. Try #+title for org files
+        if file_type == 'org':
+            for line in lines[:20]:  # Check first 20 lines
+                if line.lower().startswith('#+title:'):
+                    # Look for YYYY-MM-DD pattern in the title
+                    title_match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
+                    if title_match:
+                        return title_match.group(1)
+
+        # 2. Try filename pattern (YYYY-MM-DD or YYYY_MM_DD)
+        filename = file_path.stem  # Get filename without extension
+        date_match = re.match(r'^(\d{4})[-_](\d{2})[-_](\d{2})', filename)
+        if date_match:
+            year, month, day = date_match.groups()
+            return f"{year}-{month}-{day}"
+
+        # 3. Fall back to file modification time
+        try:
+            mtime = file_path.stat().st_mtime
+            dt = datetime.fromtimestamp(mtime)
+            return dt.strftime('%Y-%m-%d')
+        except Exception as e:
+            self.logger.warning(f"Could not get mtime for {file_path}: {e}")
+            return None
+
     def _search_file(self, file_path: Path, pattern: str, file_type: str) -> List[Dict[str, Any]]:
         """Search a single file for pattern and extract context.
 
@@ -225,6 +264,9 @@ Directories searched:
             with open(file_path, 'r', encoding='utf-8') as f:
                 # Read lines and strip newlines to avoid double-spacing in output
                 lines = [line.rstrip('\n\r') for line in f.readlines()]
+
+            # Extract date from file
+            file_date = self._extract_date(file_path, lines, file_type)
 
             # Compile regex pattern
             try:
@@ -260,6 +302,10 @@ Directories searched:
                             'matched_text': matched_text,
                         }
 
+                        # Add date if available
+                        if file_date:
+                            result['date'] = file_date
+
                         # Only include context if it adds information beyond the matched line
                         if context_str != matched_text:
                             result['context'] = context_str
@@ -287,6 +333,10 @@ Directories searched:
                             'match_line': line_num + 1,  # 1-indexed
                             'matched_text': matched_text,
                         }
+
+                        # Add date if available
+                        if file_date:
+                            result['date'] = file_date
 
                         # Only include context if it adds information beyond the matched line
                         if context_str != matched_text:
@@ -333,6 +383,10 @@ Directories searched:
                 all_results.extend(results)
                 if len(all_results) >= max_results:
                     break
+
+        # Sort results by date (most recent first)
+        # Results without dates will be at the end
+        all_results.sort(key=lambda x: x.get('date', '0000-00-00'), reverse=True)
 
         # Limit results
         all_results = all_results[:max_results]

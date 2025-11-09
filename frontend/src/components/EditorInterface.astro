@@ -64,10 +64,17 @@
   }
 
   #editor-container .cm-scroller {
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.6;
     overflow: auto;
     padding-bottom: 50vh; /* Add space at bottom for easier mobile editing */
+  }
+
+  /* Larger font on mobile devices */
+  @media (max-width: 768px) {
+    #editor-container .cm-scroller {
+      font-size: 18px;
+    }
   }
 </style>
 
@@ -426,6 +433,12 @@
         ".cm-scroller": {
           paddingBottom: "10vh"
         }
+      }),
+      // Enable auto-capitalization on mobile keyboards
+      EditorView.contentAttributes.of({
+        autocapitalize: 'on',
+        autocorrect: 'on',
+        spellcheck: 'true'
       })
     ];
 

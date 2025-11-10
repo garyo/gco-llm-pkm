@@ -589,6 +589,20 @@
       isDirty = false;
       saveButton.disabled = true;
 
+      // Update file selector to show current file
+      // If the file isn't in the dropdown (due to filtering), add it temporarily
+      const existingOption = Array.from(fileSelector.options).find(
+        opt => opt.value === filepath
+      );
+      if (!existingOption) {
+        // File not in filtered list, add it
+        const option = document.createElement('option');
+        option.value = filepath;
+        option.textContent = filepath.split('/').pop() || filepath;
+        fileSelector.insertBefore(option, fileSelector.options[1]); // Insert after "Select a file..."
+      }
+      fileSelector.value = filepath;
+
       const size = (data.size / 1024).toFixed(1);
       const fileType = filepath.endsWith('.org') ? 'Org' : 'Markdown';
       updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);

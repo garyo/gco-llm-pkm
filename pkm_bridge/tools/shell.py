@@ -41,6 +41,7 @@ Available tools:
 - fd: better find replacement (faster, regex patterns, smart case; always prefer this over find)
 - emacs: batch mode for org-ql, etc.
 - cat/head/tail, git
+- sed: use for editing files
 
 Directories:
 {dirs_info}

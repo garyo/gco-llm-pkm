@@ -35,7 +35,7 @@ class SSEEventManager:
         with self.lock:
             self.clients.add(client_queue)
             self.client_sessions[client_queue] = session_id
-        logger.info(f"SSE client connected (session: {session_id}). Total clients: {len(self.clients)}")
+        logger.debug(f"SSE client connected (session: {session_id}). Total clients: {len(self.clients)}")
         return client_queue
 
     def remove_client(self, client_queue: queue.Queue):
@@ -43,7 +43,7 @@ class SSEEventManager:
         with self.lock:
             self.clients.discard(client_queue)
             self.client_sessions.pop(client_queue, None)
-        logger.info(f"SSE client disconnected. Total clients: {len(self.clients)}")
+        logger.debug(f"SSE client disconnected. Total clients: {len(self.clients)}")
 
     def broadcast(self, event_type: str, data: Dict):
         """Broadcast an event to all connected clients."""

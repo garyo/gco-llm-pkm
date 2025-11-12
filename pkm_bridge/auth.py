@@ -68,16 +68,19 @@ class AuthManager:
         Returns:
             JWT token string
         """
+        now = datetime.utcnow()
+        expiry = now + timedelta(hours=self.token_expiry_hours)
+
         payload = {
             "username": username,
-            "exp": datetime.utcnow() + timedelta(hours=self.token_expiry_hours),
-            "iat": datetime.utcnow()
+            "exp": expiry,
+            "iat": now
         }
         token = jwt.encode(payload, self.secret_key, algorithm="HS256")
 
         if self.logger:
-            expiry = datetime.utcnow() + timedelta(hours=self.token_expiry_hours)
             self.logger.info(f"Generated token for '{username}', expires at {expiry.isoformat()}Z")
+            self.logger.debug(f"Token issued at {now.isoformat()}Z, expires in {self.token_expiry_hours} hours")
 
         return token
 
@@ -91,13 +94,33 @@ class AuthManager:
             Decoded token payload if valid, None otherwise
         """
         try:
-            payload = jwt.decode(token, self.secret_key, algorithms=["HS256"])
+            # Force JWT to use UTC for time comparison (matches token generation)
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=["HS256"],
+                options={"verify_exp": True}  # Explicitly enable expiration check
+            )
             if self.logger:
                 self.logger.debug(f"Token verified for user '{payload.get('username', 'unknown')}'")
             return payload
-        except jwt.ExpiredSignatureError:
+        except jwt.ExpiredSignatureError as e:
             if self.logger:
-                self.logger.warning("Token verification failed: expired token")
+                # Try to decode without verification to see the expiry time
+                try:
+                    unverified = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+                    exp_timestamp = unverified.get('exp')
+                    if exp_timestamp:
+                        exp_time = datetime.fromtimestamp(exp_timestamp)
+                        now = datetime.utcnow()
+                        self.logger.warning(
+                            f"Token verification failed: expired token. "
+                            f"Token expired at {exp_time.isoformat()}Z, current time is {now.isoformat()}Z"
+                        )
+                    else:
+                        self.logger.warning("Token verification failed: expired token (no exp field)")
+                except Exception:
+                    self.logger.warning("Token verification failed: expired token")
             return None
         except jwt.InvalidTokenError as e:
             if self.logger:

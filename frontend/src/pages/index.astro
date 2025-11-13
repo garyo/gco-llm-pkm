@@ -201,6 +201,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   let voiceInput: VoiceInput | null = null;
   let autoSendTimeout: number | null = null;
   let isVoiceMessage = false;  // Track if current message is from voice
+  let lastVoiceLength = 0;  // Track length before user edits
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -262,8 +263,9 @@ import EditorInterface from '../components/EditorInterface.astro';
           autoResizeTextarea();
           voiceStatusText.textContent = 'Sending in 5 seconds... (edit to cancel)';
 
-          // Mark this as a voice message
+          // Mark this as a voice message and track length
           isVoiceMessage = true;
+          lastVoiceLength = input.value.length;
 
           // Set auto-send timeout
           if (autoSendTimeout) {
@@ -273,6 +275,16 @@ import EditorInterface from '../components/EditorInterface.astro';
             send();
             autoSendTimeout = null;
           }, 5000);
+
+          // Auto-restart recognition after a pause to allow continued speech
+          // This lets users speak with natural pauses without being cut off
+          if (voiceInput && voiceInput.isActive()) {
+            setTimeout(() => {
+              if (voiceInput && voiceBtn.classList.contains('recording')) {
+                voiceInput.start();
+              }
+            }, 300);  // Small delay before restarting
+          }
         } else {
           // Show interim in status
           voiceStatusText.textContent = `Listening: "${text}"`;
@@ -287,9 +299,10 @@ import EditorInterface from '../components/EditorInterface.astro';
       },
 
       onEnd: () => {
-        voiceBtn.classList.remove('recording');
-        voiceBtn.title = 'Tap to start voice input';
-        setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+        // Only clean up if user explicitly stopped (not auto-restart)
+        if (!voiceBtn.classList.contains('recording')) {
+          setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+        }
       },
 
       onError: (error: string) => {
@@ -318,6 +331,13 @@ import EditorInterface from '../components/EditorInterface.astro';
     // Click handler
     voiceBtn.addEventListener('click', () => {
       if (!voiceInput) return;
+
+      // If stopping, remove recording class to prevent auto-restart
+      if (voiceBtn.classList.contains('recording')) {
+        voiceBtn.classList.remove('recording');
+        voiceBtn.title = 'Tap to start voice input';
+      }
+
       voiceInput.toggle();
     });
   }
@@ -743,16 +763,21 @@ import EditorInterface from '../components/EditorInterface.astro';
 
     // Clear auto-send timeout when user edits
     if (autoSendTimeout) {
-      clearTimeout(autoSendTimeout);
-      autoSendTimeout = null;
+      // Only clear voice flag if user actually edited (not just voice adding more text)
+      const currentLength = input.value.length;
+      const userEdited = currentLength !== lastVoiceLength;
 
-      // Clear voice flag if user manually edits
-      isVoiceMessage = false;
+      if (userEdited) {
+        // User manually edited - clear voice flag and auto-send
+        clearTimeout(autoSendTimeout);
+        autoSendTimeout = null;
+        isVoiceMessage = false;
 
-      // Hide the voice status bar if showing auto-send message
-      const voiceStatus = document.getElementById('voice-status');
-      if (voiceStatus && !voiceStatus.classList.contains('hidden')) {
-        voiceStatus.classList.add('hidden');
+        // Hide the voice status bar if showing auto-send message
+        const voiceStatus = document.getElementById('voice-status');
+        if (voiceStatus && !voiceStatus.classList.contains('hidden')) {
+          voiceStatus.classList.add('hidden');
+        }
       }
     }
   });

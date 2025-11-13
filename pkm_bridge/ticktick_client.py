@@ -292,17 +292,36 @@ class TickTickClient:
             Exception: If the update fails
         """
         try:
+            # TickTick API requires the full task object for updates
+            # First, fetch the existing task
+            all_tasks = self.list_tasks()
+            existing_task = None
+            for task in all_tasks:
+                if task.get('id') == task_id:
+                    existing_task = task
+                    break
+
+            if not existing_task:
+                raise Exception(f"Task {task_id} not found")
+
+            # Merge updates into existing task
+            updated_task = {**existing_task, **updates}
+
             # TickTick API uses POST for updates, not PUT
-            response = self.session.post(f"{self.BASE_URL}/task/{task_id}", json=updates)
+            response = self.session.post(f"{self.BASE_URL}/task/{task_id}", json=updated_task)
             response.raise_for_status()
-            result = response.json()
 
-            # Handle empty response (TickTick sometimes returns empty string)
-            if not result or result == '':
-                # Return the updates as confirmation
-                return {"id": task_id, **updates}
+            # Handle empty response (TickTick sometimes returns empty string or no content)
+            if not response.text or response.text.strip() == '':
+                # Return the merged task
+                return updated_task
 
-            return result
+            try:
+                result = response.json()
+                return result
+            except ValueError:
+                # JSON parsing failed, but request succeeded - return merged task
+                return updated_task
         except requests.exceptions.HTTPError as e:
             raise Exception(f"Failed to update task {task_id}: {e.response.status_code} - {e.response.text}")
         except Exception as e:

@@ -203,6 +203,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   let isVoiceMessage = false;  // Track if current message is from voice
   let lastVoiceLength = 0;  // Track length before user edits
   let inactivityTimeout: number | null = null;  // Timer for auto-send after speech stops
+  let voiceBaseText = '';  // Text that was in input before voice started
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -257,10 +258,10 @@ import EditorInterface from '../components/EditorInterface.astro';
 
       onTranscript: (text: string, isFinal: boolean) => {
         if (isFinal) {
-          // Append to textarea
-          const currentText = input.value.trim();
-          const separator = currentText ? ' ' : '';
-          input.value = currentText + separator + text;
+          // Append final result to textarea
+          const separator = voiceBaseText ? ' ' : '';
+          voiceBaseText = voiceBaseText + separator + text;
+          input.value = voiceBaseText;
           autoResizeTextarea();
 
           // Mark this as a voice message and track length
@@ -284,11 +285,12 @@ import EditorInterface from '../components/EditorInterface.astro';
             autoSendTimeout = window.setTimeout(() => {
               send();
               autoSendTimeout = null;
+              voiceBaseText = '';  // Clear after sending
             }, 3000);
           }
         }, 3000);
 
-        // Update status text
+        // Update status text (show interim results there, not in input)
         if (isFinal) {
           voiceStatusText.textContent = 'Listening... (pause 3s to send)';
         } else {
@@ -301,6 +303,9 @@ import EditorInterface from '../components/EditorInterface.astro';
         voiceBtn.title = 'Tap to stop recording';
         voiceStatus.classList.remove('hidden');
         voiceStatusText.textContent = 'Listening...';
+
+        // Capture current input text as base (in case user had typed something)
+        voiceBaseText = input.value.trim();
       },
 
       onEnd: () => {
@@ -319,6 +324,7 @@ import EditorInterface from '../components/EditorInterface.astro';
             autoSendTimeout = window.setTimeout(() => {
               send();
               autoSendTimeout = null;
+              voiceBaseText = '';  // Clear after sending
             }, 3000);
 
             // Hide status bar after showing countdown
@@ -330,6 +336,7 @@ import EditorInterface from '../components/EditorInterface.astro';
           } else {
             // No text captured, just hide status
             setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+            voiceBaseText = '';  // Clear the base text
           }
         }
       },
@@ -361,10 +368,16 @@ import EditorInterface from '../components/EditorInterface.astro';
     voiceBtn.addEventListener('click', () => {
       if (!voiceInput) return;
 
-      // If stopping, remove recording class to prevent auto-restart
+      // If stopping, remove recording class and clear timers
       if (voiceBtn.classList.contains('recording')) {
         voiceBtn.classList.remove('recording');
         voiceBtn.title = 'Tap to start voice input';
+
+        // Clear inactivity timer when manually stopping
+        if (inactivityTimeout) {
+          clearTimeout(inactivityTimeout);
+          inactivityTimeout = null;
+        }
       }
 
       voiceInput.toggle();
@@ -790,23 +803,41 @@ import EditorInterface from '../components/EditorInterface.astro';
   input.addEventListener('input', () => {
     autoResizeTextarea();
 
-    // Clear auto-send timeout when user edits
-    if (autoSendTimeout) {
-      // Only clear voice flag if user actually edited (not just voice adding more text)
-      const currentLength = input.value.length;
-      const userEdited = currentLength !== lastVoiceLength;
+    // Detect if user manually edited (not just voice adding text)
+    const currentLength = input.value.length;
+    const userEdited = currentLength !== lastVoiceLength && currentLength !== voiceBaseText.length;
 
-      if (userEdited) {
-        // User manually edited - clear voice flag and auto-send
+    if (userEdited) {
+      // User manually edited - stop everything voice-related
+
+      // Stop voice recording if active
+      if (voiceInput && voiceInput.isActive()) {
+        const voiceBtn = document.getElementById('voice-btn');
+        if (voiceBtn && voiceBtn.classList.contains('recording')) {
+          voiceBtn.classList.remove('recording');
+          voiceBtn.title = 'Tap to start voice input';
+        }
+        voiceInput.stop();
+      }
+
+      // Clear all timers
+      if (autoSendTimeout) {
         clearTimeout(autoSendTimeout);
         autoSendTimeout = null;
-        isVoiceMessage = false;
+      }
+      if (inactivityTimeout) {
+        clearTimeout(inactivityTimeout);
+        inactivityTimeout = null;
+      }
 
-        // Hide the voice status bar if showing auto-send message
-        const voiceStatus = document.getElementById('voice-status');
-        if (voiceStatus && !voiceStatus.classList.contains('hidden')) {
-          voiceStatus.classList.add('hidden');
-        }
+      // Clear voice state
+      isVoiceMessage = false;
+      voiceBaseText = '';
+
+      // Hide the voice status bar
+      const voiceStatus = document.getElementById('voice-status');
+      if (voiceStatus && !voiceStatus.classList.contains('hidden')) {
+        voiceStatus.classList.add('hidden');
       }
     }
   });

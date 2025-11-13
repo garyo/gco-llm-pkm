@@ -63,6 +63,23 @@ import Layout from '../layouts/Layout.astro';
                     </button>
                 </div>
             </div>
+
+            <div class="integration-card">
+                <div class="integration-header">
+                    <h3>Google Calendar</h3>
+                    <span id="google-calendar-status" class="status-badge">Checking...</span>
+                </div>
+                <p>Connect your Google Calendar to let Claude manage your events and schedule.</p>
+
+                <div id="google-calendar-actions">
+                    <button id="connect-google-calendar" class="btn btn-primary" style="display: none;">
+                        Connect Google Calendar
+                    </button>
+                    <button id="disconnect-google-calendar" class="btn btn-danger" style="display: none;">
+                        Disconnect
+                    </button>
+                </div>
+            </div>
         </section>
 
         <section class="account-section">
@@ -201,6 +218,11 @@ import Layout from '../layouts/Layout.astro';
         border-radius: 8px;
         padding: 1.5rem;
         background: white;
+        margin-bottom: 1rem;
+    }
+
+    .integration-card:last-child {
+        margin-bottom: 0;
     }
 
     .integration-header {
@@ -435,6 +457,73 @@ import Layout from '../layouts/Layout.astro';
         }
     });
 
+    // Google Calendar Integration Management
+    async function checkGoogleCalendarStatus() {
+        const token = localStorage.getItem('pkm-authToken');
+        const statusBadge = document.getElementById('google-calendar-status');
+        const connectBtn = document.getElementById('connect-google-calendar');
+        const disconnectBtn = document.getElementById('disconnect-google-calendar');
+
+        try {
+            const response = await fetch('/auth/google-calendar/status', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.connected) {
+                statusBadge.textContent = 'Connected';
+                statusBadge.className = 'status-badge connected';
+                disconnectBtn.style.display = 'inline-block';
+                connectBtn.style.display = 'none';
+            } else {
+                statusBadge.textContent = 'Not Connected';
+                statusBadge.className = 'status-badge disconnected';
+                connectBtn.style.display = 'inline-block';
+                disconnectBtn.style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Error checking Google Calendar status:', error);
+            statusBadge.textContent = 'Error';
+            statusBadge.className = 'status-badge disconnected';
+            connectBtn.style.display = 'inline-block';
+        }
+    }
+
+    document.getElementById('connect-google-calendar')?.addEventListener('click', () => {
+        // Open authorization in same tab
+        window.location.href = '/auth/google-calendar/authorize';
+    });
+
+    document.getElementById('disconnect-google-calendar')?.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to disconnect Google Calendar?')) {
+            return;
+        }
+
+        const token = localStorage.getItem('pkm-authToken');
+
+        try {
+            const response = await fetch('/auth/google-calendar/disconnect', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                alert('Google Calendar disconnected successfully');
+                checkGoogleCalendarStatus();
+            } else {
+                alert('Failed to disconnect Google Calendar');
+            }
+        } catch (error) {
+            console.error('Error disconnecting Google Calendar:', error);
+            alert('Error disconnecting Google Calendar');
+        }
+    });
+
     // Logout handler
     document.getElementById('logout-btn')?.addEventListener('click', () => {
         localStorage.removeItem('pkm-authToken');
@@ -444,4 +533,5 @@ import Layout from '../layouts/Layout.astro';
     // Load data on page load
     loadUserContext();
     checkTickTickStatus();
+    checkGoogleCalendarStatus();
 </script>

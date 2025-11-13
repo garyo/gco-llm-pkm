@@ -337,35 +337,36 @@ import EditorInterface from '../components/EditorInterface.astro';
       },
 
       onEnd: () => {
-        // Clear inactivity timer when recording ends
+        // Recording ended (either user stopped or auto-stopped from silence)
+
+        // Clear the recording indicator
+        voiceBtn.classList.remove('recording');
+        voiceBtn.title = 'Tap to start voice input';
+
+        // Clear inactivity timer since we're no longer recording
         if (inactivityTimeout) {
           clearTimeout(inactivityTimeout);
           inactivityTimeout = null;
         }
 
-        // If user explicitly stopped and we don't already have an auto-send timer
-        if (!voiceBtn.classList.contains('recording') && !autoSendTimeout) {
-          // User tapped mic to stop - start 3-second auto-send countdown
-          if (input.value.trim()) {
-            voiceStatusText.textContent = 'Sending in 3 seconds... (edit to cancel)';
+        // If we have text and no auto-send timer yet, start one
+        if (input.value.trim() && !autoSendTimeout) {
+          voiceStatusText.textContent = 'Sending in 3 seconds... (edit to cancel)';
 
-            autoSendTimeout = window.setTimeout(() => {
-              send();
-              autoSendTimeout = null;
-              voiceBaseText = '';  // Clear after sending
-            }, 3000);
+          autoSendTimeout = window.setTimeout(() => {
+            send();
+            autoSendTimeout = null;
+          }, 3000);
 
-            // Hide status bar after showing countdown
-            setTimeout(() => {
-              if (!autoSendTimeout) {
-                voiceStatus.classList.add('hidden');
-              }
-            }, 3500);
-          } else {
-            // No text captured, just hide status
-            setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
-            voiceBaseText = '';  // Clear the base text
-          }
+          // Hide status bar after auto-send completes
+          setTimeout(() => {
+            if (!autoSendTimeout) {
+              voiceStatus.classList.add('hidden');
+            }
+          }, 3500);
+        } else if (!input.value.trim()) {
+          // No text captured, just hide status
+          setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
         }
       },
 

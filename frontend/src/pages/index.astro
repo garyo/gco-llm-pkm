@@ -203,8 +203,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   let isVoiceMessage = false;  // Track if current message is from voice
   let lastVoiceLength = 0;  // Track length before user edits
   let inactivityTimeout: number | null = null;  // Timer for auto-send after speech stops
-  let voiceBaseText = '';  // Text that was in input before voice started
-  let lastInterimText = '';  // Track last interim result to prevent duplicates
+  let lastFinalText = '';  // Track last final text to avoid duplicates
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -264,7 +263,7 @@ import EditorInterface from '../components/EditorInterface.astro';
         if (debugPanel && debugLog) {
           debugPanel.classList.remove('hidden');
           const entry = document.createElement('div');
-          entry.textContent = `${new Date().toLocaleTimeString()}: isFinal=${isFinal}, len=${text.length}, base="${voiceBaseText.substring(0, 20)}..."`;
+          entry.textContent = `${new Date().toLocaleTimeString()}: isFinal=${isFinal}, len=${text.length}`;
           debugLog.appendChild(entry);
           if (debugLog.children.length > 10) {
             debugLog.removeChild(debugLog.firstChild!);
@@ -273,25 +272,30 @@ import EditorInterface from '../components/EditorInterface.astro';
 
         // ONLY update input box for final results
         if (isFinal) {
+          // Skip if this is exact duplicate (some browsers send duplicates)
+          if (text === lastFinalText) {
+            const entry = document.createElement('div');
+            entry.textContent = `${new Date().toLocaleTimeString()}: SKIPPED duplicate`;
+            entry.className = 'text-yellow-700';
+            debugLog?.appendChild(entry);
+            return;
+          }
+
           const entry = document.createElement('div');
-          entry.textContent = `${new Date().toLocaleTimeString()}: ADDING "${text}" to input`;
+          entry.textContent = `${new Date().toLocaleTimeString()}: SET input to "${text.substring(0, 30)}..."`;
           entry.className = 'text-green-700';
           debugLog?.appendChild(entry);
 
-          // Append final result to textarea
-          const separator = voiceBaseText ? ' ' : '';
-          voiceBaseText = voiceBaseText + separator + text;
-          input.value = voiceBaseText;
+          // Simply SET the input to whatever the API sends (it accumulates for us)
+          input.value = text;
           autoResizeTextarea();
 
           // Mark this as a voice message and track length
           isVoiceMessage = true;
           lastVoiceLength = input.value.length;
-          lastInterimText = '';  // Clear interim tracking after adding final
-        } else {
-          // Track interim text but DON'T add it to input
-          lastInterimText = text;
+          lastFinalText = text;  // Remember to skip duplicates
         }
+        // Ignore interim results entirely - don't show them in input
 
         // Reset inactivity timer on any speech (interim or final)
         // This detects when user has stopped speaking
@@ -327,9 +331,9 @@ import EditorInterface from '../components/EditorInterface.astro';
         voiceStatus.classList.remove('hidden');
         voiceStatusText.textContent = 'Listening...';
 
-        // Capture current input text as base (in case user had typed something)
-        voiceBaseText = input.value.trim();
-        lastInterimText = '';  // Clear interim tracking
+        // Clear tracking when starting fresh
+        lastFinalText = '';
+        input.value = '';  // Clear input when starting voice
       },
 
       onEnd: () => {
@@ -602,8 +606,8 @@ import EditorInterface from '../components/EditorInterface.astro';
       voiceStatus.classList.add('hidden');
     }
 
-    // Clear voice base text
-    voiceBaseText = '';
+    // Clear voice tracking
+    lastFinalText = '';
 
     const message = input.value.trim();
     if (!message) return;
@@ -848,7 +852,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
     // Detect if user manually edited (not just voice adding text)
     const currentLength = input.value.length;
-    const userEdited = currentLength !== lastVoiceLength && currentLength !== voiceBaseText.length;
+    const userEdited = currentLength !== lastVoiceLength;
 
     if (userEdited) {
       // User manually edited - stop everything voice-related
@@ -875,7 +879,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
       // Clear voice state
       isVoiceMessage = false;
-      voiceBaseText = '';
+      lastFinalText = '';
 
       // Hide the voice status bar
       const voiceStatus = document.getElementById('voice-status');

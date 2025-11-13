@@ -80,6 +80,9 @@ from pkm_bridge.google_calendar_client import GoogleCalendarClient
 # Import SSE event manager
 from pkm_bridge.events import event_manager
 
+# Import voice preprocessor
+from pkm_bridge.voice_preprocessor import VoicePreprocessor
+
 # -------------------------
 # Setup & Configuration
 # -------------------------
@@ -92,6 +95,9 @@ logger = setup_logging(config.log_level)
 
 # Initialize Anthropic client
 client = Anthropic(api_key=config.anthropic_api_key)
+
+# Initialize voice preprocessor
+voice_preprocessor = VoicePreprocessor(client)
 
 # Flask app
 app = Flask(__name__)
@@ -357,6 +363,14 @@ def query():
     model = data.get('model', config.model)
     thinking = data.get('thinking')
     user_timezone = data.get('timezone')  # Optional timezone from client
+    is_voice = data.get('is_voice', False)  # Flag indicating voice transcription
+
+    # Preprocess voice transcriptions to clean up disfluencies
+    if is_voice and voice_preprocessor.should_preprocess(user_message, is_voice):
+        original_message = user_message
+        user_message = voice_preprocessor.preprocess(user_message)
+        if user_message != original_message:
+            logger.info(f"🎤 Voice preprocessing applied")
 
     # Get or create session from database
     db = get_db()

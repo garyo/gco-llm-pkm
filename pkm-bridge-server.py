@@ -185,7 +185,7 @@ file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
 # Initialize history manager for conversation truncation
 from pkm_bridge.history_manager import HistoryManager
 history_manager = HistoryManager(
-    max_tokens=100000,  # ~$0.10 per request with Haiku
+    max_tokens=75000,  # Leave ~25k for system prompt + tools (total budget: 100k)
     keep_recent_turns=10  # Always keep last 10 conversation turns
 )
 

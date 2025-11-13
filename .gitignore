@@ -41,6 +41,7 @@ config/user_context.txt
 .pytest_cache/
 .coverage
 htmlcov/
+tests_local/
 
 # Frontend (Astro)
 frontend/node_modules/

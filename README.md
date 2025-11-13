@@ -206,6 +206,8 @@ gco-pkm-llm/
 │   ├── search-patterns.md
 │   ├── journal-navigation.md
 │   └── org-ql-queries.md
+├── tests/
+├── tests_local/        # git-ignored
 ├── requirements.txt
 ├── .env.example
 ├── PROJECT.md            # Architecture and design

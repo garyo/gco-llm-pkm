@@ -71,6 +71,14 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.oberbrunner.com`)||Host(`pkm.home.oberbrunner.com`)||Host(`pkm`)"
       - "traefik.http.services.pkm-bridge.loadbalancer.server.port=8000"
+      # SSE-specific configuration for /api/events endpoint
+      - "traefik.http.routers.pkm-bridge.middlewares=sse-headers@docker"
+      - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Cache-Control=no-cache"
+      - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Connection=keep-alive"
+      - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.X-Accel-Buffering=no"
+      # Increase timeout for SSE connections (default is 90s)
+      - "traefik.http.services.pkm-bridge.loadbalancer.responseforwardingtimeouts.readtimeout=0s"
+      - "traefik.http.services.pkm-bridge.loadbalancer.responseforwardingtimeouts.writetimeout=0s"
 
     # Resource limits
     deploy:

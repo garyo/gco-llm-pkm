@@ -202,6 +202,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   let autoSendTimeout: number | null = null;
   let isVoiceMessage = false;  // Track if current message is from voice
   let lastVoiceLength = 0;  // Track length before user edits
+  let inactivityTimeout: number | null = null;  // Timer for auto-send after speech stops
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -251,7 +252,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
     voiceInput = new VoiceInput({
       language: 'en-US',
-      continuous: false,
+      continuous: true,
       interimResults: true,
 
       onTranscript: (text: string, isFinal: boolean) => {
@@ -261,32 +262,36 @@ import EditorInterface from '../components/EditorInterface.astro';
           const separator = currentText ? ' ' : '';
           input.value = currentText + separator + text;
           autoResizeTextarea();
-          voiceStatusText.textContent = 'Sending in 5 seconds... (edit to cancel)';
 
           // Mark this as a voice message and track length
           isVoiceMessage = true;
           lastVoiceLength = input.value.length;
+        }
 
-          // Set auto-send timeout
-          if (autoSendTimeout) {
-            clearTimeout(autoSendTimeout);
-          }
-          autoSendTimeout = window.setTimeout(() => {
-            send();
-            autoSendTimeout = null;
-          }, 5000);
+        // Reset inactivity timer on any speech (interim or final)
+        // This detects when user has stopped speaking
+        if (inactivityTimeout) {
+          clearTimeout(inactivityTimeout);
+        }
 
-          // Auto-restart recognition after a pause to allow continued speech
-          // This lets users speak with natural pauses without being cut off
-          if (voiceInput && voiceInput.isActive()) {
-            setTimeout(() => {
-              if (voiceInput && voiceBtn.classList.contains('recording')) {
-                voiceInput.start();
-              }
-            }, 300);  // Small delay before restarting
+        // Start countdown to auto-send after 3 seconds of silence
+        inactivityTimeout = window.setTimeout(() => {
+          if (voiceInput && voiceInput.isActive() && input.value.trim()) {
+            // User stopped speaking - stop recording and start auto-send
+            voiceInput.stop();
+            voiceStatusText.textContent = 'Sending in 3 seconds... (edit to cancel)';
+
+            autoSendTimeout = window.setTimeout(() => {
+              send();
+              autoSendTimeout = null;
+            }, 3000);
           }
+        }, 3000);
+
+        // Update status text
+        if (isFinal) {
+          voiceStatusText.textContent = 'Listening... (pause 3s to send)';
         } else {
-          // Show interim in status
           voiceStatusText.textContent = `Listening: "${text}"`;
         }
       },
@@ -299,9 +304,33 @@ import EditorInterface from '../components/EditorInterface.astro';
       },
 
       onEnd: () => {
-        // Only clean up if user explicitly stopped (not auto-restart)
-        if (!voiceBtn.classList.contains('recording')) {
-          setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+        // Clear inactivity timer when recording ends
+        if (inactivityTimeout) {
+          clearTimeout(inactivityTimeout);
+          inactivityTimeout = null;
+        }
+
+        // If user explicitly stopped and we don't already have an auto-send timer
+        if (!voiceBtn.classList.contains('recording') && !autoSendTimeout) {
+          // User tapped mic to stop - start 3-second auto-send countdown
+          if (input.value.trim()) {
+            voiceStatusText.textContent = 'Sending in 3 seconds... (edit to cancel)';
+
+            autoSendTimeout = window.setTimeout(() => {
+              send();
+              autoSendTimeout = null;
+            }, 3000);
+
+            // Hide status bar after showing countdown
+            setTimeout(() => {
+              if (!autoSendTimeout) {
+                voiceStatus.classList.add('hidden');
+              }
+            }, 3500);
+          } else {
+            // No text captured, just hide status
+            setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+          }
         }
       },
 

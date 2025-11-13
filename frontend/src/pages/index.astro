@@ -204,6 +204,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   let lastVoiceLength = 0;  // Track length before user edits
   let inactivityTimeout: number | null = null;  // Timer for auto-send after speech stops
   let voiceBaseText = '';  // Text that was in input before voice started
+  let lastInterimText = '';  // Track last interim result to prevent duplicates
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -257,7 +258,15 @@ import EditorInterface from '../components/EditorInterface.astro';
       interimResults: true,
 
       onTranscript: (text: string, isFinal: boolean) => {
+        // ONLY update input box for final results
         if (isFinal) {
+          // Prevent duplicate additions - check if this text was already added
+          if (text === lastInterimText) {
+            // This final result is the same as the last interim - skip it
+            lastInterimText = '';
+            return;
+          }
+
           // Append final result to textarea
           const separator = voiceBaseText ? ' ' : '';
           voiceBaseText = voiceBaseText + separator + text;
@@ -267,6 +276,10 @@ import EditorInterface from '../components/EditorInterface.astro';
           // Mark this as a voice message and track length
           isVoiceMessage = true;
           lastVoiceLength = input.value.length;
+          lastInterimText = '';  // Clear interim tracking
+        } else {
+          // Track interim text but DON'T add it to input
+          lastInterimText = text;
         }
 
         // Reset inactivity timer on any speech (interim or final)
@@ -285,7 +298,6 @@ import EditorInterface from '../components/EditorInterface.astro';
             autoSendTimeout = window.setTimeout(() => {
               send();
               autoSendTimeout = null;
-              voiceBaseText = '';  // Clear after sending
             }, 3000);
           }
         }, 3000);
@@ -306,6 +318,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
         // Capture current input text as base (in case user had typed something)
         voiceBaseText = input.value.trim();
+        lastInterimText = '';  // Clear interim tracking
       },
 
       onEnd: () => {
@@ -550,17 +563,36 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Send message
   async function send() {
-    // Clear auto-send timeout if active
+    // Stop voice recording if still active
+    if (voiceInput && voiceInput.isActive()) {
+      voiceInput.stop();
+    }
+
+    // Clear the recording indicator
+    const voiceBtn = document.getElementById('voice-btn');
+    if (voiceBtn && voiceBtn.classList.contains('recording')) {
+      voiceBtn.classList.remove('recording');
+      voiceBtn.title = 'Tap to start voice input';
+    }
+
+    // Clear all timers
     if (autoSendTimeout) {
       clearTimeout(autoSendTimeout);
       autoSendTimeout = null;
-
-      // Hide voice status bar when auto-sending
-      const voiceStatus = document.getElementById('voice-status');
-      if (voiceStatus) {
-        voiceStatus.classList.add('hidden');
-      }
     }
+    if (inactivityTimeout) {
+      clearTimeout(inactivityTimeout);
+      inactivityTimeout = null;
+    }
+
+    // Hide voice status bar
+    const voiceStatus = document.getElementById('voice-status');
+    if (voiceStatus) {
+      voiceStatus.classList.add('hidden');
+    }
+
+    // Clear voice base text
+    voiceBaseText = '';
 
     const message = input.value.trim();
     if (!message) return;

@@ -76,9 +76,6 @@ services:
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Cache-Control=no-cache"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Connection=keep-alive"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.X-Accel-Buffering=no"
-      # Increase timeout for SSE connections (default is 90s)
-      - "traefik.http.services.pkm-bridge.loadbalancer.responseforwardingtimeouts.readtimeout=0s"
-      - "traefik.http.services.pkm-bridge.loadbalancer.responseforwardingtimeouts.writetimeout=0s"
 
     # Resource limits
     deploy:

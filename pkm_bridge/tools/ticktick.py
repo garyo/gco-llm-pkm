@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import logging
 
 from pkm_bridge.tools.base import BaseTool
@@ -35,8 +36,12 @@ class TickTickTool(BaseTool):
         return """Query and manage TickTick tasks. Use this to:
 - List today's tasks or all tasks (including Inbox if configured)
 - Create new todos
+- Update existing tasks (change title, due date, priority, etc.)
 - Mark tasks as complete
 - Search for specific tasks
+
+IMPORTANT: To update a task, first search for it to get its task_id.
+The search results include [ID: xxx] which is the task_id needed for updates.
 
 Note: Inbox tasks are included if TICKTICK_INBOX_ID is configured in .env
 
@@ -50,7 +55,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list_today", "list_all", "create", "complete", "search"],
+                    "enum": ["list_today", "list_all", "create", "update", "complete", "search"],
                     "description": "Action to perform"
                 },
                 "title": {
@@ -71,7 +76,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 },
                 "task_id": {
                     "type": "string",
-                    "description": "Task ID (for complete, or use title to search)"
+                    "description": "Task ID (for update or complete). Get this from search results - look for [ID: xxx]"
                 },
                 "query": {
                     "type": "string",
@@ -188,10 +193,63 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                     title=title,
                     content=content,
                     due_date=due_dt,
-                    priority=priority
+                    priority=priority,
+                    user_timezone=user_timezone
                 )
 
                 return f"✓ Created task: {title}"
+
+            elif action == "update":
+                task_id = params.get('task_id')
+                if not task_id:
+                    return "Error: task_id is required for updating a task"
+
+                # Build updates dict from provided parameters
+                updates = {}
+                if 'title' in params:
+                    updates['title'] = params['title']
+                if 'content' in params:
+                    updates['content'] = params['content']
+                if 'due_date' in params:
+                    # Format as all-day task (no specific time, no timed reminders)
+                    due_date_str = params['due_date']
+                    if 'T' not in due_date_str:
+                        # All-day task: Convert date to midnight in user's timezone, then to UTC
+                        # Parse the date
+                        due_date_obj = datetime.fromisoformat(due_date_str)
+
+                        # Set to midnight in user's timezone
+                        if user_timezone:
+                            try:
+                                tz = ZoneInfo(user_timezone)
+                                # Create timezone-aware datetime at midnight in user's timezone
+                                due_date_local = due_date_obj.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
+                                # Convert to UTC
+                                due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
+                                # Format with milliseconds as TickTick expects
+                                due_date_formatted = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                                updates['timeZone'] = user_timezone
+                            except Exception as e:
+                                self.logger.warning(f"Error converting timezone: {e}, using UTC")
+                                due_date_formatted = f"{due_date_str}T00:00:00.000+0000"
+                        else:
+                            due_date_formatted = f"{due_date_str}T00:00:00.000+0000"
+
+                        updates['dueDate'] = due_date_formatted
+                        updates['startDate'] = due_date_formatted  # TickTick expects both
+                        updates['isAllDay'] = True  # Mark as all-day to avoid timed reminders
+                    else:
+                        updates['dueDate'] = due_date_str
+                        updates['isAllDay'] = False
+
+                if 'priority' in params:
+                    updates['priority'] = params['priority']
+
+                if not updates:
+                    return "Error: No fields to update provided"
+
+                task = client.update_task(task_id, **updates)
+                return f"✓ Updated task: {task.get('title', task_id)}"
 
             elif action == "complete":
                 task_id = params.get('task_id')
@@ -223,7 +281,8 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 if not tasks:
                     return f"No tasks found matching '{query}'."
 
-                task_summaries = [client.format_task_summary(t) for t in tasks]
+                # Include task IDs in search results so they can be used for update/complete
+                task_summaries = [client.format_task_summary(t, include_id=True) for t in tasks]
                 return f"Tasks matching '{query}' ({len(tasks)}):\n" + "\n".join(f"• {s}" for s in task_summaries)
 
             else:

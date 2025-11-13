@@ -141,16 +141,18 @@ class TickTickClient:
         content: Optional[str] = None,
         due_date: Optional[datetime] = None,
         priority: int = 0,
-        project_id: Optional[str] = None
+        project_id: Optional[str] = None,
+        user_timezone: str = None
     ) -> Dict[str, Any]:
         """Create a new task.
 
         Args:
             title: Task title
             content: Task description/content
-            due_date: Due date for the task
+            due_date: Due date for the task (datetime object or None)
             priority: Priority level (0=None, 1=Low, 3=Medium, 5=High)
             project_id: Project ID to add task to
+            user_timezone: User's timezone (e.g., 'America/New_York'). Used for all-day tasks.
 
         Returns:
             Created task dictionary
@@ -167,8 +169,34 @@ class TickTickClient:
                 task_data['content'] = content
 
             if due_date:
-                # Format: YYYY-MM-DDTHH:MM:SS+0000
-                task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S+0000')
+                # For all-day tasks in America/New_York timezone:
+                # Use 05:00:00 UTC (midnight EST/America/New_York)
+                # This matches the pattern used by existing all-day tasks
+                if user_timezone:
+                    try:
+                        tz = ZoneInfo(user_timezone)
+                        # Ensure due_date is timezone-aware at midnight in user's timezone
+                        if due_date.tzinfo is None:
+                            due_date_local = due_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
+                        else:
+                            due_date_local = due_date.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+                        # Convert to UTC
+                        due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
+                        # Format with milliseconds as TickTick expects
+                        task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                        task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                        task_data['timeZone'] = user_timezone
+                    except Exception:
+                        # Fallback to simple format
+                        task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                        task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                else:
+                    # No timezone provided, use UTC
+                    task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                    task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+
+                # Mark as all-day task (no specific time, no timed reminders)
+                task_data['isAllDay'] = True
 
             if priority:
                 task_data['priority'] = priority
@@ -432,16 +460,18 @@ class TickTickClient:
 
         return matching_tasks
 
-    def format_task_summary(self, task: Dict[str, Any]) -> str:
+    def format_task_summary(self, task: Dict[str, Any], include_id: bool = False) -> str:
         """Format a task into a human-readable summary.
 
         Args:
             task: Task dictionary
+            include_id: Whether to include task ID in output (default: False)
 
         Returns:
             Formatted task summary string
         """
         title = task.get('title', 'Untitled')
+        task_id = task.get('id', '')
         due_date = task.get('dueDate', '')
         priority = task.get('priority', 0)
 
@@ -458,4 +488,7 @@ class TickTickClient:
             except (ValueError, AttributeError):
                 pass
 
-        return f"{title} {priority_str}{due_str}".strip()
+        # Include ID if requested (useful for updates)
+        id_str = f" [ID: {task_id}]" if include_id and task_id else ''
+
+        return f"{title} {priority_str}{due_str}{id_str}".strip()

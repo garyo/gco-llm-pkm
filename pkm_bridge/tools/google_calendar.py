@@ -194,6 +194,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
         try:
             calendar_id = params.get('calendar_id', 'primary')
+            user_timezone = context.get('user_timezone') if context else None
 
             if action == "list_calendars":
                 self.logger.info("Executing list_calendars action")
@@ -218,8 +219,8 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 return "\n".join(lines)
 
             elif action == "list_today":
-                self.logger.info(f"Executing list_today action for calendar: {calendar_id}")
-                events = client.get_today_events(calendar_id=calendar_id)
+                self.logger.info(f"Executing list_today action for calendar: {calendar_id}, user_timezone: {user_timezone}")
+                events = client.get_today_events(calendar_id=calendar_id, user_timezone=user_timezone)
                 self.logger.info(f"list_today returned {len(events)} events")
 
                 if not events:
@@ -229,8 +230,8 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 return f"Today's events ({len(events)}):\n" + "\n".join(f"• {s}" for s in summaries)
 
             elif action == "list_week":
-                self.logger.info(f"Executing list_week action for calendar: {calendar_id}")
-                events = client.get_week_events(calendar_id=calendar_id)
+                self.logger.info(f"Executing list_week action for calendar: {calendar_id}, user_timezone: {user_timezone}")
+                events = client.get_week_events(calendar_id=calendar_id, user_timezone=user_timezone)
                 self.logger.info(f"list_week returned {len(events)} events")
 
                 if not events:

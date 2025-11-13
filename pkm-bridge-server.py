@@ -463,8 +463,11 @@ def query():
                     tool_call_count += 1
                     logger.info(f">>> Tool call: {block.name} with params: {block.input}")
                     with timer(f"Tool execution: {block.name}"):
-                        # Pass session_id in context for tools that need it
-                        context = {"session_id": session_id}
+                        # Pass session_id and user_timezone in context for tools that need it
+                        context = {
+                            "session_id": session_id,
+                            "user_timezone": user_timezone
+                        }
                         result = tool_registry.execute_tool(block.name, block.input, context=context)
                     # Log if tool result contains an error
                     if result.startswith("❌"):

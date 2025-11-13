@@ -149,8 +149,10 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
             return "TickTick not connected. Please connect via /auth/ticktick/authorize"
 
         try:
+            user_timezone = context.get('user_timezone') if context else None
+
             if action == "list_today":
-                tasks = client.get_today_tasks()
+                tasks = client.get_today_tasks(user_timezone=user_timezone)
                 if not tasks:
                     return "No tasks due today or overdue."
 

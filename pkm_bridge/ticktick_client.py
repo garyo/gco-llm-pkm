@@ -3,6 +3,7 @@
 import os
 from datetime import datetime
 from typing import List, Dict, Optional, Any
+from zoneinfo import ZoneInfo
 import requests
 
 
@@ -96,14 +97,26 @@ class TickTickClient:
         except Exception as e:
             raise Exception(f"TickTick API Error: {e}")
 
-    def get_today_tasks(self) -> List[Dict[str, Any]]:
+    def get_today_tasks(self, user_timezone: str = None) -> List[Dict[str, Any]]:
         """Get tasks due today or overdue.
+
+        Args:
+            user_timezone: User's timezone string (e.g., 'America/New_York'). If None, uses server local time.
 
         Returns:
             List of tasks due today or overdue
         """
         all_tasks = self.list_tasks()
-        today = datetime.now().date()
+
+        # Use user's timezone if provided, otherwise server local time
+        if user_timezone:
+            try:
+                tz = ZoneInfo(user_timezone)
+                today = datetime.now(tz).date()
+            except Exception:
+                today = datetime.now().date()
+        else:
+            today = datetime.now().date()
 
         today_tasks = []
         for task in all_tasks:

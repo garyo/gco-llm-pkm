@@ -99,33 +99,39 @@ class GoogleCalendarClient:
         except HttpError as e:
             raise Exception(f"Failed to list events: {e}")
 
-    def get_today_events(self, calendar_id: str = 'primary') -> List[Dict[str, Any]]:
+    def get_today_events(self, calendar_id: str = 'primary', user_timezone: str = None) -> List[Dict[str, Any]]:
         """Get events for today.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
+            user_timezone: User's timezone string (e.g., 'America/New_York'). If None, uses server local time.
 
         Returns:
             List of today's events
         """
-        # Use current local time, then convert to UTC for API
-        now = datetime.now()
-        logger.info(f"Getting today's events. Current local time: {now}")
+        # Use user's timezone if provided, otherwise server local time
+        if user_timezone:
+            try:
+                tz = ZoneInfo(user_timezone)
+                now = datetime.now(tz)
+                logger.info(f"Getting today's events. Current time in {user_timezone}: {now}")
+            except Exception as e:
+                logger.warning(f"Invalid timezone '{user_timezone}', falling back to server local: {e}")
+                now = datetime.now()
+                logger.info(f"Getting today's events. Current server local time: {now}")
+        else:
+            now = datetime.now()
+            logger.info(f"Getting today's events. Current server local time: {now}")
 
-        # Get local timezone start/end of day
+        # Get timezone-aware start/end of day
         time_min = now.replace(hour=0, minute=0, second=0, microsecond=0)
         time_max = time_min + timedelta(days=1)
 
         logger.info(f"Local time range: {time_min} to {time_max}")
 
-        # Convert to UTC for API query
-        # Get the local timezone
-        local_tz = datetime.now().astimezone().tzinfo
-        time_min_aware = time_min.replace(tzinfo=local_tz)
-        time_max_aware = time_max.replace(tzinfo=local_tz)
-
-        time_min_utc = time_min_aware.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
-        time_max_utc = time_max_aware.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+        # Convert to UTC for API query (remove tzinfo after conversion)
+        time_min_utc = time_min.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+        time_max_utc = time_max.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
 
         logger.info(f"UTC time range for API: {time_min_utc} to {time_max_utc}")
 
@@ -142,32 +148,39 @@ class GoogleCalendarClient:
 
         return events
 
-    def get_week_events(self, calendar_id: str = 'primary') -> List[Dict[str, Any]]:
+    def get_week_events(self, calendar_id: str = 'primary', user_timezone: str = None) -> List[Dict[str, Any]]:
         """Get events for the next 7 days.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
+            user_timezone: User's timezone string (e.g., 'America/New_York'). If None, uses server local time.
 
         Returns:
             List of this week's events
         """
-        # Use current local time, then convert to UTC for API
-        now = datetime.now()
-        logger.info(f"Getting week's events. Current local time: {now}")
+        # Use user's timezone if provided, otherwise server local time
+        if user_timezone:
+            try:
+                tz = ZoneInfo(user_timezone)
+                now = datetime.now(tz)
+                logger.info(f"Getting week's events. Current time in {user_timezone}: {now}")
+            except Exception as e:
+                logger.warning(f"Invalid timezone '{user_timezone}', falling back to server local: {e}")
+                now = datetime.now()
+                logger.info(f"Getting week's events. Current server local time: {now}")
+        else:
+            now = datetime.now()
+            logger.info(f"Getting week's events. Current server local time: {now}")
 
-        # Get local timezone start of today + 7 days
+        # Get timezone-aware start of today + 7 days
         time_min = now.replace(hour=0, minute=0, second=0, microsecond=0)
         time_max = time_min + timedelta(days=7)
 
         logger.info(f"Local time range: {time_min} to {time_max}")
 
-        # Convert to UTC for API query
-        local_tz = datetime.now().astimezone().tzinfo
-        time_min_aware = time_min.replace(tzinfo=local_tz)
-        time_max_aware = time_max.replace(tzinfo=local_tz)
-
-        time_min_utc = time_min_aware.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
-        time_max_utc = time_max_aware.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+        # Convert to UTC for API query (remove tzinfo after conversion)
+        time_min_utc = time_min.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+        time_max_utc = time_max.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
 
         logger.info(f"UTC time range for API: {time_min_utc} to {time_max_utc}")
 

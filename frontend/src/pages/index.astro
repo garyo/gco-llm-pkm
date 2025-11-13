@@ -200,6 +200,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Voice input
   let voiceInput: VoiceInput | null = null;
   let autoSendTimeout: number | null = null;
+  let isVoiceMessage = false;  // Track if current message is from voice
 
   // Handle login
   async function handleLogin(event: Event) {
@@ -260,6 +261,9 @@ import EditorInterface from '../components/EditorInterface.astro';
           input.value = currentText + separator + text;
           autoResizeTextarea();
           voiceStatusText.textContent = 'Sending in 5 seconds... (edit to cancel)';
+
+          // Mark this as a voice message
+          isVoiceMessage = true;
 
           // Set auto-send timeout
           if (autoSendTimeout) {
@@ -520,12 +524,16 @@ import EditorInterface from '../components/EditorInterface.astro';
         message: message,
         session_id: sessionId,
         model: selectedModel,
-        timezone: userTimezone
+        timezone: userTimezone,
+        is_voice: isVoiceMessage  // Add voice flag
       };
 
       if (thinkingEnabled) {
         requestBody.thinking = { type: 'enabled', budget_tokens: 10000 };
       }
+
+      // Reset voice flag after using it
+      isVoiceMessage = false;
 
       const res = await fetch('/query', {
         method: 'POST',
@@ -737,6 +745,9 @@ import EditorInterface from '../components/EditorInterface.astro';
     if (autoSendTimeout) {
       clearTimeout(autoSendTimeout);
       autoSendTimeout = null;
+
+      // Clear voice flag if user manually edits
+      isVoiceMessage = false;
 
       // Hide the voice status bar if showing auto-send message
       const voiceStatus = document.getElementById('voice-status');

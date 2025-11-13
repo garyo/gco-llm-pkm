@@ -72,7 +72,7 @@ services:
       - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.oberbrunner.com`)||Host(`pkm.home.oberbrunner.com`)||Host(`pkm`)"
       - "traefik.http.services.pkm-bridge.loadbalancer.server.port=8000"
       # SSE-specific configuration for /api/events endpoint
-      - "traefik.http.routers.pkm-bridge.middlewares=sse-headers@docker"
+      - "traefik.http.routers.pkm-bridge.middlewares=sse-headers"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Cache-Control=no-cache"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Connection=keep-alive"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.X-Accel-Buffering=no"

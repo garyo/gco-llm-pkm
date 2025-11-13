@@ -89,6 +89,16 @@ import Layout from '../layouts/Layout.astro';
             </button>
         </section>
 
+        <section class="version-section">
+            <h2>Version</h2>
+            <div class="version-info">
+                <div class="version-item">
+                    <span class="version-label">Build:</span>
+                    <span id="build-version" class="version-value">Loading...</span>
+                </div>
+            </div>
+        </section>
+
     </div>
 </Layout>
 
@@ -146,7 +156,8 @@ import Layout from '../layouts/Layout.astro';
 
     .user-context-section,
     .integrations-section,
-    .account-section {
+    .account-section,
+    .version-section {
         margin-bottom: 3rem;
     }
 
@@ -293,6 +304,35 @@ import Layout from '../layouts/Layout.astro';
 
     .btn-danger:hover {
         background: #c82333;
+    }
+
+    .version-info {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1.5rem;
+        background: white;
+    }
+
+    .version-item {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .version-item:last-child {
+        margin-bottom: 0;
+    }
+
+    .version-label {
+        font-weight: 600;
+        color: #666;
+        min-width: 80px;
+    }
+
+    .version-value {
+        color: #333;
+        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+        font-size: 0.9rem;
     }
 </style>
 
@@ -530,8 +570,43 @@ import Layout from '../layouts/Layout.astro';
         window.location.href = '/';
     });
 
+    // Load build version from service worker
+    async function loadBuildVersion() {
+        const buildVersionEl = document.getElementById('build-version');
+
+        try {
+            // Fetch the service worker file to extract the build timestamp
+            const response = await fetch('/sw.js');
+            const swCode = await response.text();
+
+            // Extract BUILD_TIMESTAMP from the service worker code
+            const match = swCode.match(/BUILD_TIMESTAMP\s*=\s*['"]([^'"]+)['"]/);
+
+            if (match && match[1]) {
+                const timestamp = match[1];
+                // Format the timestamp nicely
+                const date = new Date(timestamp);
+                const formatted = date.toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                });
+                buildVersionEl.textContent = formatted;
+            } else {
+                buildVersionEl.textContent = 'Unknown';
+            }
+        } catch (error) {
+            console.error('Error loading build version:', error);
+            buildVersionEl.textContent = 'Error';
+        }
+    }
+
     // Load data on page load
     loadUserContext();
     checkTickTickStatus();
     checkGoogleCalendarStatus();
+    loadBuildVersion();
 </script>

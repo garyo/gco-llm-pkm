@@ -192,48 +192,54 @@ class HistoryManager:
         # Estimate current size
         total_tokens = sum(self.estimate_message_tokens(msg) for msg in history)
 
-        # If under budget, return as-is
+        # If under budget, return as-is (no filtering needed)
         if total_tokens <= self.max_tokens:
             return history
 
-        # Separate into recent and old
+        # Filter tool results based on age and size
+        # Process all messages and filter those that are:
+        # - OLD: More than MIN_AGE_FOR_FILTERING turns old (from the end)
+        # - LARGE: More than MIN_TOKENS_FOR_FILTERING tokens
+
         # Count conversation turns (pairs of user + assistant messages)
         user_assistant_indices = [
             i for i, msg in enumerate(history)
             if msg.get('role') in ['user', 'assistant']
         ]
 
-        # Keep at least keep_recent_turns conversation turns
-        if len(user_assistant_indices) > self.keep_recent_turns * 2:
-            # Find the index where we should start keeping everything
-            keep_from_index = user_assistant_indices[-(self.keep_recent_turns * 2)]
+        # Calculate the cutoff index for "old" messages (those eligible for filtering)
+        # Messages beyond the last MIN_AGE_FOR_FILTERING turns are considered "old"
+        total_turns = len(user_assistant_indices) // 2
+        if total_turns > MIN_AGE_FOR_FILTERING:
+            # Find the index of the message that's MIN_AGE_FOR_FILTERING turns from the end
+            turns_to_keep = MIN_AGE_FOR_FILTERING * 2  # Each turn is 2 messages (user + assistant)
+            filter_cutoff_index = user_assistant_indices[-turns_to_keep] if turns_to_keep < len(user_assistant_indices) else 0
         else:
-            keep_from_index = 0
+            # Not enough turns - don't filter anything
+            filter_cutoff_index = len(history)
 
-        recent = history[keep_from_index:]
-        old = history[:keep_from_index]
+        # Process messages and filter old, large tool results
+        filtered_history = []
+        for i, msg in enumerate(history):
+            # Check if this message is old enough to be filtered
+            is_old_enough = i < filter_cutoff_index
 
-        # Truncate large tool results in old messages using smart line-based approach
-        # (or LLM-based if enabled)
-        truncated_old = []
-        for i, msg in enumerate(old):
-            if msg.get('role') == 'user' and isinstance(msg.get('content'), list):
-                # Check if any tool results need filtering
-                needs_filtering = False
+            if is_old_enough and msg.get('role') == 'user' and isinstance(msg.get('content'), list):
+                # Check if any tool results are large enough to filter
+                has_large_tool_results = False
                 for item in msg.get('content', []):
                     if isinstance(item, dict) and item.get('type') == 'tool_result':
                         tokens = self.estimate_tokens(str(item.get('content', '')))
                         if tokens > MIN_TOKENS_FOR_FILTERING:
-                            needs_filtering = True
+                            has_large_tool_results = True
                             break
 
-                if needs_filtering:
+                if has_large_tool_results:
+                    # Filter this message's tool results
                     msg = msg.copy()
                     if USE_LLM_FILTERING:
                         # TODO: Implement LLM-based filtering
                         # See test-multiple-queries-review.py for implementation
-                        # This would run in background thread and replace results when done
-                        # For now, fall back to line-based
                         msg['content'] = self.truncate_tool_result(
                             msg['content'],
                             max_tokens=TARGET_TOKENS_AFTER_FILTERING
@@ -244,30 +250,23 @@ class HistoryManager:
                             msg['content'],
                             max_tokens=TARGET_TOKENS_AFTER_FILTERING
                         )
-            truncated_old.append(msg)
 
-        # Also truncate large tool results in recent messages (more generously)
-        truncated_recent = []
-        for msg in recent:
-            if msg.get('role') == 'user' and isinstance(msg.get('content'), list):
-                # For recent messages, only truncate if VERY large
-                msg = msg.copy()
-                msg['content'] = self.truncate_tool_result(
-                    msg['content'],
-                    max_tokens=MIN_TOKENS_FOR_FILTERING  # Only truncate if over threshold
-                )
-            truncated_recent.append(msg)
+            filtered_history.append(msg)
 
-        # Recalculate tokens
-        new_history = truncated_old + truncated_recent
-        total_tokens = sum(self.estimate_message_tokens(msg) for msg in new_history)
+        # Recalculate tokens after filtering
+        total_tokens = sum(self.estimate_message_tokens(msg) for msg in filtered_history)
 
-        # If still over budget, remove oldest messages
-        while total_tokens > self.max_tokens and len(truncated_old) > 0:
-            removed = truncated_old.pop(0)
+        # If still over budget after filtering, remove oldest messages
+        # But always keep at least keep_recent_turns conversation turns
+        # Calculate minimum messages to keep
+        min_messages_to_keep = self.keep_recent_turns * 2  # Each turn is user + assistant
+
+        while total_tokens > self.max_tokens and len(filtered_history) > min_messages_to_keep:
+            # Remove oldest message (but maintain minimum)
+            removed = filtered_history.pop(0)
             total_tokens -= self.estimate_message_tokens(removed)
 
-        new_history = truncated_old + truncated_recent
+        new_history = filtered_history
 
         # Log truncation
         if len(new_history) < len(history):

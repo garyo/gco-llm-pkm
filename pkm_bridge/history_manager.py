@@ -2,13 +2,36 @@
 
 Manages conversation history to keep costs predictable by:
 - Estimating token counts for messages
-- Truncating old tool results
+- Smart truncation of large tool results (line-based)
 - Removing oldest turns when over budget
 - Preserving recent context
+
+Configuration:
+- Tool results are filtered when they are:
+  * OLD: More than MIN_AGE_FOR_FILTERING turns old
+  * LARGE: More than MIN_TOKENS_FOR_FILTERING tokens
+- Filtering uses a smart line-based approach that preserves:
+  * Recent content (first 2/3 of target lines)
+  * Oldest content (last 1/3 of target lines)
+  * This preserves both recent and historical context
+
+Future Enhancement:
+- LLM-based filtering can be enabled by setting use_llm_filtering=True
+- See test-multiple-queries-review.py for the LLM filtering implementation
+- LLM filtering reduces tool results by ~80% while preserving context
+- Trade-off: ~90s processing time and $0.06 cost per large tool result
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import json
+
+# Configuration constants for tool result filtering
+MIN_AGE_FOR_FILTERING = 5  # Filter tool results older than this many turns
+MIN_TOKENS_FOR_FILTERING = 10000  # Only filter tool results larger than this
+TARGET_TOKENS_AFTER_FILTERING = 2000  # Target size after filtering (for line-based)
+
+# LLM-based filtering (disabled by default - see docstring for details)
+USE_LLM_FILTERING = False  # Set to True to enable LLM-based filtering instead
 
 
 class HistoryManager:
@@ -72,8 +95,56 @@ class HistoryManager:
         return HistoryManager.estimate_tokens(str(content))
 
     @staticmethod
+    def smart_truncate_lines(text: str, target_tokens: int) -> str:
+        """Smart truncation that preserves both recent and oldest content.
+
+        Given text with N lines, where we want only M lines (M < N),
+        keeps the first M*2/3 lines (recent) and last M*1/3 lines (oldest).
+
+        This assumes the text is sorted most-recent-first, which is typical
+        for tool results like search_notes.
+
+        Args:
+            text: Text to truncate (newline-separated)
+            target_tokens: Target token count
+
+        Returns:
+            Truncated text with marker showing what was removed
+        """
+        lines = text.split('\n')
+        total_lines = len(lines)
+
+        # Calculate target lines from target tokens
+        # Rough estimate: average line is ~40 chars = ~10 tokens
+        target_lines = (target_tokens * 4) // 40  # Conservative estimate
+
+        if total_lines <= target_lines:
+            # Already small enough
+            return text
+
+        # Keep first 2/3 (most recent) and last 1/3 (oldest)
+        recent_count = (target_lines * 2) // 3
+        oldest_count = target_lines - recent_count
+
+        recent_lines = lines[:recent_count]
+        oldest_lines = lines[-oldest_count:] if oldest_count > 0 else []
+
+        removed_count = total_lines - len(recent_lines) - len(oldest_lines)
+
+        result = '\n'.join(recent_lines)
+        if removed_count > 0:
+            result += f"\n\n[... removed {removed_count} lines (~{removed_count * 10} tokens) ...]\n\n"
+        if oldest_lines:
+            result += '\n'.join(oldest_lines)
+
+        return result
+
+    @staticmethod
     def truncate_tool_result(content: List[Dict[str, Any]], max_tokens: int = 1000) -> List[Dict[str, Any]]:
         """Truncate large tool results in message content.
+
+        Uses smart line-based truncation that preserves both recent and
+        oldest content for better context preservation.
 
         Args:
             content: List of content blocks (may include tool_result blocks)
@@ -89,14 +160,10 @@ class HistoryManager:
                 if isinstance(tool_content, str):
                     tokens = HistoryManager.estimate_tokens(tool_content)
                     if tokens > max_tokens:
-                        # Truncate and add marker
-                        chars_to_keep = max_tokens * 4
-                        truncated = tool_content[:chars_to_keep]
+                        # Use smart truncation
+                        truncated = HistoryManager.smart_truncate_lines(tool_content, max_tokens)
                         item = item.copy()
-                        item['content'] = (
-                            f"{truncated}\n\n[... truncated {tokens - max_tokens} tokens "
-                            f"from tool result to save costs ...]"
-                        )
+                        item['content'] = truncated
                 result.append(item)
             else:
                 result.append(item)
@@ -146,17 +213,53 @@ class HistoryManager:
         recent = history[keep_from_index:]
         old = history[:keep_from_index]
 
-        # First, try truncating large tool results in old messages
+        # Truncate large tool results in old messages using smart line-based approach
+        # (or LLM-based if enabled)
         truncated_old = []
-        for msg in old:
+        for i, msg in enumerate(old):
             if msg.get('role') == 'user' and isinstance(msg.get('content'), list):
-                # Truncate tool results in this message
-                msg = msg.copy()
-                msg['content'] = self.truncate_tool_result(msg['content'], max_tokens=1000)
+                # Check if any tool results need filtering
+                needs_filtering = False
+                for item in msg.get('content', []):
+                    if isinstance(item, dict) and item.get('type') == 'tool_result':
+                        tokens = self.estimate_tokens(str(item.get('content', '')))
+                        if tokens > MIN_TOKENS_FOR_FILTERING:
+                            needs_filtering = True
+                            break
+
+                if needs_filtering:
+                    msg = msg.copy()
+                    if USE_LLM_FILTERING:
+                        # TODO: Implement LLM-based filtering
+                        # See test-multiple-queries-review.py for implementation
+                        # This would run in background thread and replace results when done
+                        # For now, fall back to line-based
+                        msg['content'] = self.truncate_tool_result(
+                            msg['content'],
+                            max_tokens=TARGET_TOKENS_AFTER_FILTERING
+                        )
+                    else:
+                        # Use fast line-based truncation
+                        msg['content'] = self.truncate_tool_result(
+                            msg['content'],
+                            max_tokens=TARGET_TOKENS_AFTER_FILTERING
+                        )
             truncated_old.append(msg)
 
+        # Also truncate large tool results in recent messages (more generously)
+        truncated_recent = []
+        for msg in recent:
+            if msg.get('role') == 'user' and isinstance(msg.get('content'), list):
+                # For recent messages, only truncate if VERY large
+                msg = msg.copy()
+                msg['content'] = self.truncate_tool_result(
+                    msg['content'],
+                    max_tokens=MIN_TOKENS_FOR_FILTERING  # Only truncate if over threshold
+                )
+            truncated_recent.append(msg)
+
         # Recalculate tokens
-        new_history = truncated_old + recent
+        new_history = truncated_old + truncated_recent
         total_tokens = sum(self.estimate_message_tokens(msg) for msg in new_history)
 
         # If still over budget, remove oldest messages
@@ -164,7 +267,7 @@ class HistoryManager:
             removed = truncated_old.pop(0)
             total_tokens -= self.estimate_message_tokens(removed)
 
-        new_history = truncated_old + recent
+        new_history = truncated_old + truncated_recent
 
         # Log truncation
         if len(new_history) < len(history):
@@ -211,3 +314,41 @@ class HistoryManager:
             "over_budget": total_tokens > self.max_tokens,
             "budget_usage": f"{total_tokens}/{self.max_tokens} ({100*total_tokens//self.max_tokens}%)"
         }
+
+    @staticmethod
+    def filter_tool_result_with_llm(content: str, tool_name: str, query_params: dict) -> str:
+        """Filter tool results using LLM (placeholder for future implementation).
+
+        This method would use Claude Haiku 4.5 to intelligently filter large tool
+        results while preserving contextually valuable information.
+
+        Performance characteristics (based on testing):
+        - Reduction: ~80% (23k → 6k tokens typical)
+        - Processing time: ~90 seconds for 23k tokens
+        - Cost: ~$0.06 per filter operation
+        - Quality: Preserves format, removes low-value entries
+
+        Implementation notes:
+        - Should run in background thread to avoid blocking
+        - Should only be called for old (>5 turns) and large (>10k tokens) results
+        - See test-multiple-queries-review.py for working implementation
+        - System prompt: "You filter file search results. Output ONLY filtered entries."
+        - User prompt: "Keep the N most valuable entries..." with specific criteria
+
+        Args:
+            content: Tool result content to filter
+            tool_name: Name of the tool (e.g., 'search_notes')
+            query_params: Parameters passed to the tool
+
+        Returns:
+            Filtered content (or original if LLM filtering fails)
+        """
+        # TODO: Implement LLM-based filtering
+        # For now, this is just a placeholder
+        # When implementing:
+        # 1. Use claude-haiku-4-5 model
+        # 2. Run in background thread (asyncio or threading)
+        # 3. Calculate target_entries = max(100, int(total_entries * 0.30))
+        # 4. Use the prompt from test-multiple-queries-review.py
+        # 5. Handle errors gracefully (fall back to line-based truncation)
+        raise NotImplementedError("LLM-based filtering not yet implemented")

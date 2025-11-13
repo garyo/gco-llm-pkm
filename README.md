@@ -85,6 +85,55 @@ HOST=127.0.0.1          # Bind address (use 0.0.0.0 for network access)
 SKILLS_DIR=./skills     # Location of skill files
 ```
 
+## Integrations
+
+### Google Calendar (Optional)
+
+Connect your Google Calendar to query and manage events through natural language.
+
+**Setup:**
+
+1. **Create OAuth Credentials:**
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select existing
+   - Enable Google Calendar API
+   - Configure OAuth consent screen
+   - Create OAuth 2.0 Client ID (Web application type)
+   - Add authorized redirect URIs:
+     - `http://localhost:8000/auth/google-calendar/callback` (for dev)
+     - `https://your-domain.com/auth/google-calendar/callback` (for production)
+   - Download credentials
+
+2. **Configure `.env`:**
+   ```bash
+   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google-calendar/callback
+   ```
+
+3. **Connect Your Calendar:**
+   - Start the server: `./pkm-bridge-server.py`
+   - Visit: `http://localhost:8000/auth/google-calendar/authorize`
+   - Sign in and authorize access
+   - You're all set!
+
+**Usage:**
+- "What's on my calendar today?"
+- "Show me this week's meetings"
+- "Add a meeting with Sarah tomorrow at 2pm for 1 hour"
+- "Find all events about the PKM project"
+- "Create an event: Team standup tomorrow 9am-9:30am"
+
+**Benefits:**
+- Single OAuth client works for both dev and production
+- Read and write access to your calendar
+- Natural language event creation with Quick Add
+- Automatic token refresh
+
+### TickTick (Optional)
+
+Connect TickTick for task management integration. See `.env.example` for setup instructions.
+
 ## Usage Examples
 
 ### Simple Search
@@ -258,6 +307,14 @@ See `PROJECT.md` for detailed deployment instructions to Proxmox.
 - Check org-ql loaded: `emacs --batch --eval "(require 'org-ql)"`
 - May need to load full init.el
 
+### Google Calendar connection issues
+- Verify credentials are set in `.env`: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`
+- Ensure redirect URI in `.env` matches exactly what's configured in Google Cloud Console
+- Check that Google Calendar API is enabled in your Google Cloud project
+- If using production domain, make sure both dev and prod redirect URIs are registered
+- Visit `/auth/google-calendar/status` to check connection state
+- Try disconnecting and reconnecting: visit `/auth/google-calendar/authorize`
+
 ## API Endpoints
 
 ### GET /
@@ -287,6 +344,20 @@ Clear conversation history
 
 ### GET /health
 Server status and configuration
+
+### OAuth Integration Endpoints
+
+#### Google Calendar
+- `GET /auth/google-calendar/authorize` - Start OAuth flow
+- `GET /auth/google-calendar/callback` - OAuth callback (automatic)
+- `GET /auth/google-calendar/status` - Check connection status
+- `POST /auth/google-calendar/disconnect` - Disconnect calendar
+
+#### TickTick
+- `GET /auth/ticktick/authorize` - Start OAuth flow
+- `GET /auth/ticktick/callback` - OAuth callback (automatic)
+- `GET /auth/ticktick/status` - Check connection status
+- `POST /auth/ticktick/disconnect` - Disconnect TickTick
 
 ## Performance
 

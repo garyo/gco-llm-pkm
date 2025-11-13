@@ -14,6 +14,10 @@
 #   "alembic>=1.13.0",
 #   "requests>=2.31.0",
 #   "watchdog>=3.0.0",
+#   "google-auth>=2.34.0",
+#   "google-auth-oauthlib>=1.2.0",
+#   "google-auth-httplib2>=0.2.0",
+#   "google-api-python-client>=2.147.0",
 # ]
 # ///
 """
@@ -27,7 +31,7 @@ from contextlib import contextmanager
 from typing import Dict, Any
 
 from anthropic import Anthropic
-from flask import Flask, request, jsonify, render_template, send_from_directory, redirect
+from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import os
@@ -57,6 +61,7 @@ from pkm_bridge.tools.shell import ExecuteShellTool
 from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.ticktick import TickTickTool
+from pkm_bridge.tools.google_calendar import GoogleCalendarTool
 from pkm_bridge.tools.open_file import OpenFileTool
 from pkm_bridge.tools.find_context import FindContextTool
 
@@ -67,6 +72,10 @@ from pkm_bridge.db_repository import OAuthRepository, UserSettingsRepository
 # Import TickTick components
 from pkm_bridge.ticktick_oauth import TickTickOAuth
 from pkm_bridge.ticktick_client import TickTickClient
+
+# Import Google Calendar components
+from pkm_bridge.google_oauth import GoogleOAuth
+from pkm_bridge.google_calendar_client import GoogleCalendarClient
 
 # Import SSE event manager
 from pkm_bridge.events import event_manager
@@ -106,6 +115,14 @@ try:
     logger.info("TickTick OAuth handler initialized")
 except ValueError as e:
     logger.info(f"TickTick not configured: {e}")
+
+# Initialize Google Calendar OAuth handler (optional - only if configured)
+google_oauth = None
+try:
+    google_oauth = GoogleOAuth()
+    logger.info("Google Calendar OAuth handler initialized")
+except ValueError as e:
+    logger.info(f"Google Calendar not configured: {e}")
 
 # Initialize rate limiter
 limiter = Limiter(
@@ -147,6 +164,11 @@ tool_registry.register(OpenFileTool(logger, config.org_dir, config.logseq_dir))
 if ticktick_oauth:
     tool_registry.register(TickTickTool(logger, ticktick_oauth))
     logger.info("TickTick tool registered")
+
+# Register Google Calendar tool if configured
+if google_oauth:
+    tool_registry.register(GoogleCalendarTool(logger, google_oauth))
+    logger.info("Google Calendar tool registered")
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
@@ -968,8 +990,19 @@ def ticktick_authorize():
 
     try:
         auth_data = ticktick_oauth.get_authorization_url()
-        # Redirect user to TickTick authorization page
-        return redirect(auth_data['url'])
+        # Use HTML redirect to avoid hot-reload middleware issues
+        return f"""
+        <html>
+            <head>
+                <meta http-equiv="refresh" content="0;url={auth_data['url']}" />
+                <title>Redirecting to TickTick...</title>
+            </head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <p>Redirecting to TickTick authorization...</p>
+                <p>If not redirected automatically, <a href="{auth_data['url']}">click here</a>.</p>
+            </body>
+        </html>
+        """
     except Exception as e:
         logger.error(f"Error initiating TickTick OAuth: {e}")
         return jsonify({"error": str(e)}), 500
@@ -1086,6 +1119,155 @@ def ticktick_disconnect():
 
     except Exception as e:
         logger.error(f"Error disconnecting TickTick: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# -------------------------
+# Google Calendar OAuth Routes
+# -------------------------
+
+@app.route('/auth/google-calendar/authorize', methods=['GET'])
+def google_calendar_authorize():
+    """Initiate Google Calendar OAuth flow.
+
+    This endpoint doesn't require authentication since it's part of the initial
+    setup flow. The actual authorization happens on Google's servers.
+    Redirects user to Google's authorization page.
+    """
+    if not google_oauth:
+        return jsonify({"error": "Google Calendar not configured"}), 503
+
+    try:
+        auth_data = google_oauth.get_authorization_url()
+        # Use HTML redirect to avoid hot-reload middleware issues
+        return f"""
+        <html>
+            <head>
+                <meta http-equiv="refresh" content="0;url={auth_data['url']}" />
+                <title>Redirecting to Google...</title>
+            </head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <p>Redirecting to Google Calendar authorization...</p>
+                <p>If not redirected automatically, <a href="{auth_data['url']}">click here</a>.</p>
+            </body>
+        </html>
+        """
+    except Exception as e:
+        logger.error(f"Error initiating Google Calendar OAuth: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/auth/google-calendar/callback', methods=['GET'])
+def google_calendar_callback():
+    """Handle Google Calendar OAuth callback."""
+    if not google_oauth:
+        return jsonify({"error": "Google Calendar not configured"}), 503
+
+    code = request.args.get('code')
+    state = request.args.get('state')
+    error = request.args.get('error')
+
+    if error:
+        logger.error(f"Google Calendar OAuth error: {error}")
+        return jsonify({"error": error}), 400
+
+    if not code:
+        return jsonify({"error": "No authorization code received"}), 400
+
+    try:
+        # Exchange code for tokens
+        token_data = google_oauth.exchange_code(code)
+
+        # Store tokens in database
+        db = get_db()
+        OAuthRepository.save_token(
+            db=db,
+            service='google_calendar',
+            access_token=token_data['access_token'],
+            refresh_token=token_data.get('refresh_token'),
+            expires_at=token_data['expires_at'],
+            scope=token_data.get('scope')
+        )
+        db.close()
+
+        logger.info("Google Calendar OAuth completed successfully")
+        return """
+        <html>
+            <head>
+                <title>Google Calendar Connected</title>
+                <meta http-equiv="refresh" content="3;url=/" />
+            </head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <h1 style="color: #4CAF50;">✓ Google Calendar Connected Successfully!</h1>
+                <p>Claude can now access your Google Calendar.</p>
+                <p>Redirecting to home page... <a href="/">Click here</a> if not redirected.</p>
+            </body>
+        </html>
+        """
+
+    except Exception as e:
+        logger.error(f"Error completing Google Calendar OAuth: {e}")
+        return f"""
+        <html>
+            <head><title>Google Calendar Connection Error</title></head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <h1 style="color: #f44336;">✗ Connection Failed</h1>
+                <p>Error: {str(e)}</p>
+                <p><a href="/auth/google-calendar/authorize">Try again</a></p>
+            </body>
+        </html>
+        """, 500
+
+
+@app.route('/auth/google-calendar/status', methods=['GET'])
+def google_calendar_status():
+    """Check Google Calendar connection status."""
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        db = get_db()
+        token = OAuthRepository.get_token(db, 'google_calendar')
+        db.close()
+
+        if token:
+            is_expired = OAuthRepository.is_token_expired(token)
+            return jsonify({
+                "connected": True,
+                "expired": is_expired,
+                "expires_at": token.expires_at.isoformat() if token.expires_at else None
+            })
+        else:
+            return jsonify({"connected": False})
+
+    except Exception as e:
+        logger.error(f"Error checking Google Calendar status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/auth/google-calendar/disconnect', methods=['POST'])
+def google_calendar_disconnect():
+    """Disconnect Google Calendar."""
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        db = get_db()
+        deleted = OAuthRepository.delete_token(db, 'google_calendar')
+        db.close()
+
+        if deleted:
+            logger.info("Google Calendar disconnected")
+            return jsonify({"status": "success", "message": "Google Calendar disconnected"})
+        else:
+            return jsonify({"error": "Google Calendar not connected"}), 404
+
+    except Exception as e:
+        logger.error(f"Error disconnecting Google Calendar: {e}")
         return jsonify({"error": str(e)}), 500
 
 

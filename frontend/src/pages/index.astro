@@ -258,14 +258,25 @@ import EditorInterface from '../components/EditorInterface.astro';
       interimResults: true,
 
       onTranscript: (text: string, isFinal: boolean) => {
+        // DEBUG: Show in visible debug panel
+        const debugPanel = document.getElementById('debug-panel');
+        const debugLog = document.getElementById('debug-log');
+        if (debugPanel && debugLog) {
+          debugPanel.classList.remove('hidden');
+          const entry = document.createElement('div');
+          entry.textContent = `${new Date().toLocaleTimeString()}: isFinal=${isFinal}, len=${text.length}, base="${voiceBaseText.substring(0, 20)}..."`;
+          debugLog.appendChild(entry);
+          if (debugLog.children.length > 10) {
+            debugLog.removeChild(debugLog.firstChild!);
+          }
+        }
+
         // ONLY update input box for final results
         if (isFinal) {
-          // Prevent duplicate additions - check if this text was already added
-          if (text === lastInterimText) {
-            // This final result is the same as the last interim - skip it
-            lastInterimText = '';
-            return;
-          }
+          const entry = document.createElement('div');
+          entry.textContent = `${new Date().toLocaleTimeString()}: ADDING "${text}" to input`;
+          entry.className = 'text-green-700';
+          debugLog?.appendChild(entry);
 
           // Append final result to textarea
           const separator = voiceBaseText ? ' ' : '';
@@ -276,7 +287,7 @@ import EditorInterface from '../components/EditorInterface.astro';
           // Mark this as a voice message and track length
           isVoiceMessage = true;
           lastVoiceLength = input.value.length;
-          lastInterimText = '';  // Clear interim tracking
+          lastInterimText = '';  // Clear interim tracking after adding final
         } else {
           // Track interim text but DON'T add it to input
           lastInterimText = text;

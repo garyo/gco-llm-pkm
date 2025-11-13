@@ -130,9 +130,13 @@ export class VoiceInput {
           }
         }
 
+        // Send final results first (higher priority)
         if (finalTranscript) {
           this.config.onTranscript(finalTranscript.trim(), true);
-        } else if (interimTranscript) {
+        }
+
+        // Send interim results separately (only if we don't have final)
+        if (interimTranscript && !finalTranscript) {
           this.config.onTranscript(interimTranscript.trim(), false);
         }
       };

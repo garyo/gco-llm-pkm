@@ -257,34 +257,12 @@ import EditorInterface from '../components/EditorInterface.astro';
       interimResults: true,
 
       onTranscript: (text: string, isFinal: boolean) => {
-        // DEBUG: Show in visible debug panel
-        const debugPanel = document.getElementById('debug-panel');
-        const debugLog = document.getElementById('debug-log');
-        if (debugPanel && debugLog) {
-          debugPanel.classList.remove('hidden');
-          const entry = document.createElement('div');
-          entry.textContent = `${new Date().toLocaleTimeString()}: isFinal=${isFinal}, len=${text.length}`;
-          debugLog.appendChild(entry);
-          if (debugLog.children.length > 10) {
-            debugLog.removeChild(debugLog.firstChild!);
-          }
-        }
-
         // ONLY update input box for final results
         if (isFinal) {
           // Skip if this is exact duplicate (some browsers send duplicates)
           if (text === lastFinalText) {
-            const entry = document.createElement('div');
-            entry.textContent = `${new Date().toLocaleTimeString()}: SKIPPED duplicate`;
-            entry.className = 'text-yellow-700';
-            debugLog?.appendChild(entry);
             return;
           }
-
-          const entry = document.createElement('div');
-          entry.textContent = `${new Date().toLocaleTimeString()}: SET input to "${text.substring(0, 30)}..."`;
-          entry.className = 'text-green-700';
-          debugLog?.appendChild(entry);
 
           // Simply SET the input to whatever the API sends (it accumulates for us)
           input.value = text;

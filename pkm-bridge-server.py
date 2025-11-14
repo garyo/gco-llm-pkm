@@ -229,6 +229,16 @@ def serialize_message_content(content):
         return str(content)
 
 
+def validate_history(history):
+    """Ensure all messages have non-empty content (API requirement)."""
+    for i, msg in enumerate(history):
+        content = msg.get('content')
+        # Empty string, empty list, or None
+        if not content or (isinstance(content, str) and not content.strip()):
+            logger.warning(f"Empty content at message {i} (role={msg.get('role')}), fixing")
+            msg['content'] = '[Empty message]'
+
+
 # -------------------------
 # Web Endpoints
 # -------------------------
@@ -432,6 +442,9 @@ def query():
         saved = stats_before['total_tokens'] - stats_after['total_tokens']
         logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
 
+    # Validate all messages have non-empty content (API requirement)
+    validate_history(history)
+
     logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
     try:
@@ -489,9 +502,16 @@ def query():
                             "user_timezone": user_timezone
                         }
                         result = tool_registry.execute_tool(block.name, block.input, context=context)
+
+                    # Ensure result is never empty (API requirement)
+                    if not result or (isinstance(result, str) and not result.strip()):
+                        result = "[Empty result]"
+                        logger.warning(f"Tool {block.name} returned empty result")
+
                     # Log if tool result contains an error
                     if result.startswith("❌"):
                         logger.error(f"Tool {block.name} returned error: {result[:200]}")
+
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,

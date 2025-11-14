@@ -10,6 +10,7 @@ Each dir has its own structure and must be searched and listed differently.
 Both have *journals* (daily notes, indexed by date) and *pages* for specific topics.
 
 When searching or listing, always use *both* dirs.
+When searching, always search for related words and topics.
 When listing notes, show most recent dates first.
 When adding content, prefer adding to ORG unless user specifically requests LOGSEQ.
 When user asks you to do something (like add a note or edit), try to do it yourself if possible, rather than just opening in the editor.

@@ -158,10 +158,19 @@ class HistoryManager:
             if isinstance(item, dict) and item.get('type') == 'tool_result':
                 tool_content = item.get('content', '')
                 if isinstance(tool_content, str):
+                    # Ensure content is never empty (API requirement)
+                    if not tool_content.strip():
+                        tool_content = '[Empty result]'
+                        item = item.copy()
+                        item['content'] = tool_content
+
                     tokens = HistoryManager.estimate_tokens(tool_content)
                     if tokens > max_tokens:
                         # Use smart truncation
                         truncated = HistoryManager.smart_truncate_lines(tool_content, max_tokens)
+                        # Ensure truncation didn't create empty result
+                        if not truncated.strip():
+                            truncated = '[Truncated to empty]'
                         item = item.copy()
                         item['content'] = truncated
                 result.append(item)

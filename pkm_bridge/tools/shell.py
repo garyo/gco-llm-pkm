@@ -149,6 +149,7 @@ Security notes:
                 self.logger.warning(
                     f"[SHELL_ERROR] command={command[:100]}, "
                     f"returncode={result.returncode}, "
+                    f"stdout={result.stdout[:500] if result.stdout else 'none'},"
                     f"stderr={result.stderr[:500] if result.stderr else 'none'}"
                 )
 
@@ -320,6 +321,7 @@ Security notes:
                 self.logger.warning(
                     f"[SCRIPT_ERROR] path={script_path}, "
                     f"returncode={result.returncode}, "
+                    f"stdout={result.stdout[:500] if result.stdout else 'none'},"
                     f"stderr={result.stderr[:500] if result.stderr else 'none'}"
                 )
 

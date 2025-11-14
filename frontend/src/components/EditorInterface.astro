@@ -396,6 +396,7 @@
   let lastSaveTime: number | null = null;
   let conflictDetected = false;
   let statusUpdateInterval: number | null = null;
+  let saveInProgress = false;  // Track when we're saving to ignore our own SSE events
 
   // Cached auto-save settings (for performance - avoid reading localStorage on every keystroke)
   let cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
@@ -692,6 +693,9 @@
   async function saveFile() {
     if (!editorView || !currentFile) return;
 
+    // Prevent race condition with SSE events
+    saveInProgress = true;
+
     try {
       saveButton.disabled = true;
       updateStatus('Saving...');
@@ -710,6 +714,8 @@
 
       const data = await res.json();
 
+      // Update mtime from response
+      currentFileMtime = data.modified;
       isDirty = false;
       const size = (data.size / 1024).toFixed(1);
       updateStatus(`Saved ${data.path} (${size} KB)`);
@@ -724,6 +730,8 @@
       updateStatus(`Error saving file: ${e.message}`, true);
       console.error('Failed to save file:', e);
       saveButton.disabled = false;
+    } finally {
+      saveInProgress = false;
     }
   }
 
@@ -802,6 +810,9 @@
       return;
     }
 
+    // Prevent race condition: mark that we're saving so handleFileChanged ignores our SSE event
+    saveInProgress = true;
+
     try {
       updateStatus('Auto-saving...');
       const content = editorView.state.doc.toString();
@@ -832,6 +843,9 @@
     } catch (e: any) {
       updateStatus(`Auto-save failed: ${e.message}`, true);
       console.error('Auto-save error:', e);
+    } finally {
+      // Always clear the flag, even on error
+      saveInProgress = false;
     }
   }
 
@@ -1016,6 +1030,12 @@
     // Check if the absolute path ends with the relative path from currentFile
     const currentRelPath = currentFile.includes(':') ? currentFile.split(':', 2)[1] : currentFile;
     if (!path.endsWith(currentRelPath)) {
+      return;
+    }
+
+    // Ignore file changes from our own saves (prevent false conflict detection)
+    if (saveInProgress) {
+      console.log('Ignoring file change event - save in progress');
       return;
     }
 

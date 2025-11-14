@@ -521,14 +521,49 @@ Default directories searched (if paths not provided):
             if self.logseq_dir and self.logseq_dir.exists():
                 files_to_search.extend(self.logseq_dir.rglob("*.md"))
 
-        # Filter out Logseq internal directories (logseq/ contains internal data)
-        files_to_search = [
-            f for f in files_to_search
-            if 'logseq' not in f.parts
-        ]
+        # Log all files found before filtering
+        self.logger.info(f"Found {len(files_to_search)} files before filtering")
+        for f in files_to_search[:10]:  # Log first 10 files
+            self.logger.debug(f"  Found file: {f}")
+        if len(files_to_search) > 10:
+            self.logger.debug(f"  ... and {len(files_to_search) - 10} more files")
+
+        # Filter out Logseq internal directories (.logseq/ or logseq/ subdirectories)
+        # The .logseq/ or logseq/ directories within the Logseq notes directory contain
+        # backup and config files, not user notes. We need to be careful to only filter
+        # these internal directories, not the main Logseq directory itself.
+        initial_count = len(files_to_search)
+
+        def should_filter_logseq(file_path: Path) -> bool:
+            """Check if file is in a Logseq internal directory."""
+            # Check for .logseq directory anywhere in path
+            if '.logseq' in file_path.parts:
+                return True
+
+            # If we have a logseq_dir set, check for 'logseq' subdirectory within it
+            # (but not the base directory itself)
+            if self.logseq_dir:
+                try:
+                    # Get path relative to logseq_dir
+                    rel_path = file_path.relative_to(self.logseq_dir)
+                    # Check if first component of relative path is 'logseq'
+                    # (this means it's in a subdirectory named 'logseq')
+                    if rel_path.parts and rel_path.parts[0].lower() == 'logseq':
+                        return True
+                except (ValueError, AttributeError):
+                    # Not relative to logseq_dir, check path parts
+                    pass
+
+            return False
+
+        files_to_search = [f for f in files_to_search if not should_filter_logseq(f)]
+        filtered_logseq_count = initial_count - len(files_to_search)
+        if filtered_logseq_count > 0:
+            self.logger.info(f"Filtered out {filtered_logseq_count} files in logseq internal directories")
 
         # Filter out git-ignored files
         files_to_search = self._filter_gitignored_files(files_to_search)
+        self.logger.info(f"After filtering: {len(files_to_search)} files to search")
 
         # Search all files
         for file_path in files_to_search:

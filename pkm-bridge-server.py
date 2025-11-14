@@ -57,7 +57,7 @@ from pkm_bridge.db_repository import SessionRepository
 
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
-from pkm_bridge.tools.shell import ExecuteShellTool
+from pkm_bridge.tools.shell import ExecuteShellTool, WriteAndExecuteScriptTool
 from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.ticktick import TickTickTool
@@ -158,9 +158,15 @@ tool_registry = ToolRegistry()
 
 # Register tools
 execute_shell_tool = ExecuteShellTool(
-    logger, config.allowed_commands, config.org_dir, config.logseq_dir
+    logger, config.dangerous_patterns, config.org_dir, config.logseq_dir
 )
 tool_registry.register(execute_shell_tool)
+
+write_script_tool = WriteAndExecuteScriptTool(
+    logger, config.dangerous_patterns, config.org_dir, config.logseq_dir
+)
+tool_registry.register(write_script_tool)
+
 tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(FindContextTool(logger, config.org_dir, config.logseq_dir))
@@ -1295,7 +1301,7 @@ def health():
         "status": "ok",
         "org_dir": str(config.org_dir),
         "org_dir_exists": config.org_dir.exists(),
-        "allowed_commands": sorted(config.allowed_commands),
+        "dangerous_patterns_count": len(config.dangerous_patterns),
         "tools": tool_registry.list_tools(),
         "ticktick_configured": ticktick_oauth is not None,
     }
@@ -1372,7 +1378,7 @@ if __name__ == '__main__':
     logger.info(f"Org files (primary): {config.org_dir}")
     if config.logseq_dir:
         logger.info(f"Logseq notes (archival): {config.logseq_dir}")
-    logger.info(f"Allowed commands: {', '.join(sorted(config.allowed_commands))}")
+    logger.info(f"Security: {len(config.dangerous_patterns)} dangerous patterns blocked")
     logger.info(f"Tools: {', '.join(tool_registry.list_tools())}")
     logger.info(f"Server starting at http://{config.host}:{config.port}")
     logger.info(f"Log level: {config.log_level}")

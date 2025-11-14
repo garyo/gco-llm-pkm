@@ -64,12 +64,34 @@ class Config:
             print(f"Warning: Invalid timezone '{timezone_str}', using system default. Error: {e}")
             self.timezone = None  # Use system default
 
-        # Security - Allowed Shell Commands
-        allowed_commands_str = os.getenv(
-            "ALLOWED_COMMANDS",
-            "date,rg,ripgrep,grep,fd,find,cat,ls,emacs,git,sed,awk,head,tail,wc"
-        )
-        self.allowed_commands: Set[str] = set(allowed_commands_str.split(","))
+        # Security - Dangerous command patterns (blacklist)
+        # These patterns are blocked to prevent accidents and obvious disasters
+        # Real security comes from Docker isolation, limited filesystem access, and git backups
+        self.dangerous_patterns = [
+            # Destructive operations from root
+            r'rm\s+(-[rf]+\s+)?/',
+            r'rm\s+-[rf]*\s+\*\s*$',
+
+            # Fork bombs
+            r':\(\)\s*\{.*\:',
+            r'fork\s*\(',
+
+            # Download and execute
+            r'curl.*\|.*\b(sh|bash)\b',
+            r'wget.*\|.*\b(sh|bash)\b',
+
+            # Network sockets (if network access is not needed)
+            r'/dev/(tcp|udp)/',
+
+            # Kernel/system tampering
+            r'/proc/sys/',
+            r'/sys/class/',
+
+            # Package managers (prevent Claude from installing things)
+            r'\b(apt|yum|dnf|pacman|brew)\s+install',
+            r'\bpip\s+install',
+            r'\bnpm\s+install\s+-g',
+        ]
 
         # Authentication Configuration
         self.auth_enabled = os.getenv("AUTH_ENABLED", "true").lower() == "true"

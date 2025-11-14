@@ -52,6 +52,55 @@
   </div>
 </div>
 
+<!-- Conflict Resolution Modal -->
+<div id="conflict-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center" onclick="if(event.target === this) hideConflictModal()">
+  <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+    <h3 class="text-xl font-bold text-gray-800 mb-3">⚠️ File Modified Remotely</h3>
+
+    <p class="text-sm text-gray-700 mb-4">
+      This file was changed on disk while you were editing.
+    </p>
+
+    <div class="bg-gray-50 rounded p-3 mb-4 text-sm space-y-1">
+      <div class="flex justify-between">
+        <span class="text-gray-600">Your changes:</span>
+        <span class="font-mono text-gray-800" id="conflict-local-time"></span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-600">Remote changes:</span>
+        <span class="font-mono text-gray-800" id="conflict-remote-time"></span>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-2">
+      <button
+        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+        onclick="resolveConflict('save-mine')"
+      >
+        Save My Version (Overwrite Remote)
+      </button>
+      <button
+        class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium"
+        onclick="resolveConflict('reload-remote')"
+      >
+        Reload Remote Version (Discard Mine)
+      </button>
+      <button
+        class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
+        onclick="resolveConflict('backup-and-reload')"
+      >
+        Backup Mine & Reload Remote
+      </button>
+      <button
+        class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium"
+        onclick="hideConflictModal()"
+      >
+        Cancel (Keep Editing)
+      </button>
+    </div>
+  </div>
+</div>
+
 <style>
   /* CodeMirror styling */
   #editor-container {
@@ -78,6 +127,15 @@
   import { foldService, foldEffect } from '@codemirror/language';
   import { Tag, tags } from '@lezer/highlight';
   import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+
+  // Constants for localStorage keys
+  const STORAGE_KEYS = {
+    AUTO_SAVE_ENABLED: 'pkm-autoSave',
+    AUTO_SAVE_DELAY: 'pkm-autoSaveDelay',
+  } as const;
+
+  // Type definitions
+  type ConflictAction = 'save-mine' | 'reload-remote' | 'backup-and-reload';
 
   // Define custom tags for Org mode
   const orgTags = {
@@ -333,6 +391,16 @@
   let currentFileMtime: number | null = null;  // Track file modification time
   let eventSource: EventSource | null = null;  // SSE connection
 
+  // Auto-save state
+  let autoSaveTimeout: number | null = null;
+  let lastSaveTime: number | null = null;
+  let conflictDetected = false;
+  let statusUpdateInterval: number | null = null;
+
+  // Cached auto-save settings (for performance - avoid reading localStorage on every keystroke)
+  let cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
+  let cachedAutoSaveDelay = parseInt(localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000');
+
   // DOM elements
   const editorContainer = document.getElementById('editor-container')!;
   const fileSelector = document.getElementById('file-selector') as HTMLSelectElement;
@@ -417,6 +485,9 @@
           isDirty = true;
           updateStatus('Modified (unsaved)');
           saveButton.disabled = false;
+
+          // Schedule auto-save if enabled
+          scheduleAutoSave();
         }
       }),
       // Add bottom padding and font size for easier mobile editing
@@ -547,6 +618,11 @@
         return;
       }
     }
+
+    // Clean up auto-save timers from previous file
+    cleanupAutoSaveTimers();
+    lastSaveTime = null;
+    conflictDetected = false;
 
     try {
       updateStatus('Loading...');
@@ -680,6 +756,192 @@
     }
   }
 
+  // Auto-save functions
+  function cleanupAutoSaveTimers() {
+    if (autoSaveTimeout) {
+      clearTimeout(autoSaveTimeout);
+      autoSaveTimeout = null;
+    }
+    if (statusUpdateInterval) {
+      clearInterval(statusUpdateInterval);
+      statusUpdateInterval = null;
+    }
+  }
+
+  function refreshAutoSaveSettings() {
+    cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
+    cachedAutoSaveDelay = parseInt(localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000');
+  }
+
+  function scheduleAutoSave() {
+    if (!cachedAutoSaveEnabled || !isDirty || !currentFile || conflictDetected) {
+      return;
+    }
+
+    // Clear existing timeout
+    if (autoSaveTimeout) {
+      clearTimeout(autoSaveTimeout);
+    }
+
+    // Update status to show countdown
+    const seconds = (cachedAutoSaveDelay / 1000).toFixed(0);
+    updateStatus(`Modified • Auto-saving in ${seconds}s...`);
+
+    // Schedule save
+    autoSaveTimeout = setTimeout(async () => {
+      await performAutoSave();
+    }, cachedAutoSaveDelay) as unknown as number;
+  }
+
+  async function performAutoSave() {
+    if (!editorView || !currentFile || !isDirty) return;
+
+    // Check for conflict (detected by SSE in real-time)
+    if (conflictDetected) {
+      updateStatus('⚠️ Auto-save paused (conflict detected)', true);
+      return;
+    }
+
+    try {
+      updateStatus('Auto-saving...');
+      const content = editorView.state.doc.toString();
+
+      const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ content })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to save: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      // Update state
+      currentFileMtime = data.modified;
+      isDirty = false;
+      lastSaveTime = Date.now();
+      saveButton.disabled = true;
+
+      const size = (data.size / 1024).toFixed(1);
+      updateStatus(`Auto-saved (${size} KB)`);
+
+      // Start updating "X seconds ago"
+      startStatusUpdateTimer();
+    } catch (e: any) {
+      updateStatus(`Auto-save failed: ${e.message}`, true);
+      console.error('Auto-save error:', e);
+    }
+  }
+
+  function startStatusUpdateTimer() {
+    // Clear existing interval
+    if (statusUpdateInterval) {
+      clearInterval(statusUpdateInterval);
+    }
+
+    // Update every 5 seconds to show "Saved X seconds ago"
+    statusUpdateInterval = setInterval(() => {
+      if (!isDirty && lastSaveTime && !conflictDetected) {
+        const secondsAgo = Math.floor((Date.now() - lastSaveTime) / 1000);
+        if (secondsAgo < 60) {
+          updateStatus(`Saved ${secondsAgo}s ago`);
+        } else {
+          const minutesAgo = Math.floor(secondsAgo / 60);
+          updateStatus(`Saved ${minutesAgo}m ago`);
+        }
+      }
+    }, 5000) as unknown as number;
+  }
+
+  function showConflictModal(remoteMtime: number) {
+    const modal = document.getElementById('conflict-modal')!;
+    const localTime = document.getElementById('conflict-local-time')!;
+    const remoteTime = document.getElementById('conflict-remote-time')!;
+
+    if (currentFileMtime) {
+      const localDate = new Date(currentFileMtime * 1000);
+      localTime.textContent = localDate.toLocaleTimeString();
+    } else {
+      localTime.textContent = 'Unknown';
+    }
+
+    const remoteDate = new Date(remoteMtime * 1000);
+    remoteTime.textContent = remoteDate.toLocaleTimeString();
+
+    modal.classList.remove('hidden');
+  }
+
+  function hideConflictModal() {
+    const modal = document.getElementById('conflict-modal')!;
+    modal.classList.add('hidden');
+  }
+
+  async function resolveConflict(action: ConflictAction) {
+    hideConflictModal();
+    conflictDetected = false;
+
+    if (action === 'save-mine') {
+      // Force save, overwriting remote
+      updateStatus('Saving your version...');
+      await saveFile();
+
+    } else if (action === 'reload-remote') {
+      // Discard local, reload remote
+      if (currentFile) {
+        await loadFile(currentFile);
+      }
+
+    } else if (action === 'backup-and-reload') {
+      // Create backup, then reload
+      await createBackup();
+      if (currentFile) {
+        await loadFile(currentFile);
+      }
+    }
+  }
+
+  async function createBackup() {
+    if (!editorView || !currentFile) return;
+
+    const content = editorView.state.doc.toString();
+    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+
+    // Handle files with and without extensions correctly
+    const lastSlash = currentFile.lastIndexOf('/');
+    const fileName = lastSlash >= 0 ? currentFile.substring(lastSlash + 1) : currentFile;
+    const hasExtension = fileName.includes('.') && !fileName.startsWith('.');
+
+    let backupPath: string;
+    if (hasExtension) {
+      backupPath = currentFile.replace(/(\.\w+)$/, `.backup-${timestamp}$1`);
+    } else {
+      // Files without extensions (README, Makefile, etc.)
+      backupPath = `${currentFile}.backup-${timestamp}`;
+    }
+
+    try {
+      updateStatus('Creating backup...');
+
+      const res = await fetch(`/api/file/${encodeURIComponent(backupPath)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ content })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to create backup: ${res.status}`);
+      }
+
+      const filename = backupPath.split('/').pop() || 'backup';
+      updateStatus(`Backup created: ${filename}`);
+    } catch (e: any) {
+      console.error('Failed to create backup:', e);
+      updateStatus('Failed to create backup', true);
+    }
+  }
+
   // Connect to SSE for real-time file updates
   function connectSSE() {
     if (eventSource) {
@@ -759,7 +1021,13 @@
 
     if (isDirty) {
       // File is modified, show notification but don't auto-reload
-      updateStatus('File changed on disk (unsaved changes)', true);
+      conflictDetected = true;
+      updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
+
+      // If auto-save is enabled, show conflict modal
+      if (cachedAutoSaveEnabled) {
+        showConflictModal(mtime);
+      }
       return;
     }
 
@@ -880,6 +1148,20 @@
   }
   waitForSessionAndConnect();
 
-  // Make functions globally available for tab switching
+  // Listen for localStorage changes from other tabs (settings page)
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORAGE_KEYS.AUTO_SAVE_ENABLED) {
+      cachedAutoSaveEnabled = e.newValue !== 'false';
+    }
+    if (e.key === STORAGE_KEYS.AUTO_SAVE_DELAY) {
+      cachedAutoSaveDelay = parseInt(e.newValue || '2000');
+    }
+  });
+
+  // Make functions globally available for tab switching and conflict resolution
   (window as any).refreshFileList = loadFileList;
+  (window as any).resolveConflict = resolveConflict;
+  (window as any).hideConflictModal = hideConflictModal;
+  (window as any).cleanupAutoSaveTimers = cleanupAutoSaveTimers;
+  (window as any).refreshAutoSaveSettings = refreshAutoSaveSettings;
 </script>

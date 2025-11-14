@@ -44,6 +44,40 @@ import Layout from '../layouts/Layout.astro';
             </div>
         </section>
 
+        <section class="editor-autosave-section">
+            <h2>Editor Auto-Save</h2>
+            <p class="section-description">
+                Automatically save your changes while editing files in the editor.
+            </p>
+
+            <div class="autosave-settings">
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="auto-save-toggle" class="toggle-input">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">Enable auto-save</span>
+                    </label>
+                    <p class="setting-description">
+                        Automatically save changes after you stop typing. Conflicts with remote file changes will be detected.
+                    </p>
+                </div>
+
+                <div id="auto-save-delay-setting" class="setting-item" style="display: none;">
+                    <label class="setting-label">Auto-save delay:</label>
+                    <select id="auto-save-delay" class="setting-select">
+                        <option value="1000">1 second</option>
+                        <option value="2000" selected>2 seconds</option>
+                        <option value="3000">3 seconds</option>
+                        <option value="5000">5 seconds</option>
+                        <option value="10000">10 seconds</option>
+                    </select>
+                    <p class="setting-description">
+                        How long to wait after you stop typing before saving.
+                    </p>
+                </div>
+            </div>
+        </section>
+
         <section class="integrations-section">
             <h2>Integrations</h2>
 
@@ -155,6 +189,7 @@ import Layout from '../layouts/Layout.astro';
     }
 
     .user-context-section,
+    .editor-autosave-section,
     .integrations-section,
     .account-section,
     .version-section {
@@ -334,9 +369,107 @@ import Layout from '../layouts/Layout.astro';
         font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
         font-size: 0.9rem;
     }
+
+    /* Auto-save settings */
+    .autosave-settings {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1.5rem;
+        background: white;
+    }
+
+    .setting-item {
+        margin-bottom: 1.5rem;
+    }
+
+    .setting-item:last-child {
+        margin-bottom: 0;
+    }
+
+    .setting-description {
+        color: #666;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+        margin-bottom: 0;
+    }
+
+    .toggle-label {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .toggle-input {
+        position: relative;
+        width: 48px;
+        height: 24px;
+        -webkit-appearance: none;
+        appearance: none;
+        background: #ccc;
+        outline: none;
+        border-radius: 24px;
+        transition: background 0.3s;
+        cursor: pointer;
+    }
+
+    .toggle-input:checked {
+        background: #007bff;
+    }
+
+    .toggle-input::before {
+        content: '';
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        top: 2px;
+        left: 2px;
+        background: white;
+        transition: left 0.3s;
+    }
+
+    .toggle-input:checked::before {
+        left: 26px;
+    }
+
+    .toggle-text {
+        font-weight: 500;
+        font-size: 1rem;
+    }
+
+    .setting-label {
+        display: block;
+        font-weight: 500;
+        margin-bottom: 0.5rem;
+        font-size: 0.95rem;
+    }
+
+    .setting-select {
+        width: 100%;
+        max-width: 200px;
+        padding: 0.5rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.95rem;
+        background: white;
+    }
+
+    .setting-select:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+    }
 </style>
 
 <script>
+    // Constants for localStorage keys
+    const STORAGE_KEYS = {
+        AUTO_SAVE_ENABLED: 'pkm-autoSave',
+        AUTO_SAVE_DELAY: 'pkm-autoSaveDelay',
+    } as const;
+
     // User Context Management
     let originalContext = '';
     const contextTextarea = document.getElementById('user-context-textarea');
@@ -603,6 +736,37 @@ import Layout from '../layouts/Layout.astro';
             buildVersionEl.textContent = 'Error';
         }
     }
+
+    // Auto-save settings management
+    const autoSaveToggle = document.getElementById('auto-save-toggle');
+    const autoSaveDelaySetting = document.getElementById('auto-save-delay-setting');
+    const autoSaveDelay = document.getElementById('auto-save-delay');
+
+    // Load settings - default to enabled unless explicitly set to 'false'
+    if (autoSaveToggle) {
+        autoSaveToggle.checked = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
+        if (autoSaveToggle.checked) {
+            autoSaveDelaySetting.style.display = 'block';
+        }
+    }
+
+    if (autoSaveDelay) {
+        autoSaveDelay.value = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000';
+    }
+
+    // Save on change
+    autoSaveToggle?.addEventListener('change', () => {
+        localStorage.setItem(STORAGE_KEYS.AUTO_SAVE_ENABLED, autoSaveToggle.checked.toString());
+        if (autoSaveToggle.checked) {
+            autoSaveDelaySetting.style.display = 'block';
+        } else {
+            autoSaveDelaySetting.style.display = 'none';
+        }
+    });
+
+    autoSaveDelay?.addEventListener('change', () => {
+        localStorage.setItem(STORAGE_KEYS.AUTO_SAVE_DELAY, autoSaveDelay.value);
+    });
 
     // Load data on page load
     loadUserContext();

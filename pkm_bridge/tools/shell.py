@@ -42,6 +42,7 @@ Available tools:
 - emacs: batch mode for org-ql, etc.
 - cat/head/tail, git
 - sed: use for editing files
+- awk: use for parsing and editing files
 
 Directories:
 {dirs_info}

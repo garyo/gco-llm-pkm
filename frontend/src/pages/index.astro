@@ -451,6 +451,10 @@ import EditorInterface from '../components/EditorInterface.astro';
       editorTab?.classList.remove('bg-white/20');
       editorTab?.classList.add('bg-white/0');
 
+      // Clean up editor timers when switching away
+      const cleanup = (window as any).cleanupAutoSaveTimers;
+      if (cleanup) cleanup();
+
       // Scroll chat to bottom when switching to it
       setTimeout(() => {
         const chatDiv = document.getElementById('chat');
@@ -470,6 +474,11 @@ import EditorInterface from '../components/EditorInterface.astro';
       editorTab?.classList.add('bg-white/20');
       chatTab?.classList.remove('bg-white/20');
       chatTab?.classList.add('bg-white/0');
+
+      // Refresh auto-save settings when switching to editor
+      // (in case user changed settings in settings page via same tab navigation)
+      const refresh = (window as any).refreshAutoSaveSettings;
+      if (refresh) refresh();
     }
 
     // Save current tab preference

@@ -177,6 +177,13 @@ class FileChangeHandler(FileSystemEventHandler):
 
     def _is_relevant_file(self, path: str) -> bool:
         """Check if this is a file type we care about."""
+        # Get filename from path
+        filename = Path(path).name
+
+        # Ignore dotfiles (hidden files, Syncthing temp files like .!12345!file.md, etc.)
+        if filename.startswith('.'):
+            return False
+
         # Only notify about org, md, and txt files
         return path.endswith(('.org', '.md', '.txt'))
 

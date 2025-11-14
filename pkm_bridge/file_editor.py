@@ -60,6 +60,11 @@ class FileEditor:
             for file_path in self.org_dir.rglob("*.org"):
                 if file_path.is_file():
                     rel_path = file_path.relative_to(self.org_dir)
+
+                    # Skip dotfiles (hidden files, Syncthing temp files, etc.)
+                    if any(part.startswith('.') for part in rel_path.parts):
+                        continue
+
                     parts_lower = [part.lower() for part in rel_path.parts]
 
                     # Classify: journals, pages (default), or other (bak)
@@ -86,6 +91,11 @@ class FileEditor:
             for file_path in self.logseq_dir.rglob("*.md"):
                 if file_path.is_file():
                     rel_path = file_path.relative_to(self.logseq_dir)
+
+                    # Skip dotfiles (hidden files, Syncthing temp files, etc.)
+                    if any(part.startswith('.') for part in rel_path.parts):
+                        continue
+
                     parts_lower = [part.lower() for part in rel_path.parts]
 
                     # Classify: journals (*/journals/), pages (*/pages/), or other

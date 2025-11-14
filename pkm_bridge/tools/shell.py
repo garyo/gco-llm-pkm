@@ -65,9 +65,28 @@ Available tools:
 - ripgrep (rg): fast PCRE2 search
 - fd: better find replacement (faster, regex patterns, smart case)
 - emacs: batch mode for org-ql, etc.
-- git: version control operations
 - sed/awk: text processing
 - Standard Unix tools: cat, head, tail, sort, uniq, etc.
+
+FD (fast file find) useful args:
+- Basic structure: fd [args] <pattern> <path...>
+- Pattern is a regex, not glob
+- --max-results N
+- --type file: search for files only (not dirs)
+- --extension .md --extension .org: search for those extensions only
+- --changed-within date|duration (e.g.: 1d, 2w, or 2025-07-15)
+  --changed-before date|duration
+- --exec-batch <cmd>: execute cmd once with all files, using {{}} as placeholder
+
+Ripgrep (rg) useful args:
+- --iglob=GLOB: include or exclude (with !) files/dirs.
+- --type=md and/or --type=org: search md and/or org files.
+- -C/-B/-A <num>: include context around/before/after match
+- --with-filename: print filename for each matching line (always use this, and --no-heading)
+- --sortr=path: sort reverse by file path (gives most recent first for journals, but is slower)
+- --files-with-matches: only show filenames containing matches.
+- --ignore-case: search case-insensitively.
+- --multiline: search across multiple lines (add --multiline-dotall to make "." match newlines)
 
 Directories:
 {dirs_info}

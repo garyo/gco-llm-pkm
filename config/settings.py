@@ -67,7 +67,7 @@ class Config:
         # Security - Allowed Shell Commands
         allowed_commands_str = os.getenv(
             "ALLOWED_COMMANDS",
-            "date,rg,ripgrep,grep,fd,find,cat,ls,emacs,git,sed,head,tail,wc"
+            "date,rg,ripgrep,grep,fd,find,cat,ls,emacs,git,sed,awk,head,tail,wc"
         )
         self.allowed_commands: Set[str] = set(allowed_commands_str.split(","))
 

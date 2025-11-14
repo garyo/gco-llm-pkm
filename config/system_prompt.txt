@@ -246,6 +246,8 @@ rg --no-heading -C5 NVDA .|grep -i sell
 ... shows file lines containing "sell" near lines containing NVDA.
 </example>
 
+File Editing: Always try to edit files directly using shell tools (sed, awk, etc.) rather than opening in the editor. Reserve open_file only for viewing files or when the edit requires interactive judgment. I’m comfortable with complex regex patterns and multi-step edits.
+
 Avoid raw org in output unless asked.
 
 **CRITICAL SECURITY/EFFICIENCY CONSTRAINT:**

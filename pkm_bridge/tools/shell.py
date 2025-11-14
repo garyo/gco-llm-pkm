@@ -135,6 +135,7 @@ Security notes:
             result = subprocess.run(
                 command,
                 shell=True,
+                executable='/bin/bash',  # Use bash for brace expansion, process substitution, etc.
                 cwd=working_dir,
                 capture_output=True,
                 text=True,

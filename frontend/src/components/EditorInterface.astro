@@ -390,6 +390,9 @@
   let allFiles: any[] = [];
   let currentFileMtime: number | null = null;  // Track file modification time
   let eventSource: EventSource | null = null;  // SSE connection
+  let lastEventTime: number = 0;  // Track last SSE event for stale detection
+  let reconnectAttempts: number = 0;  // For exponential backoff
+  const MAX_RECONNECT_DELAY = 30000;  // Cap reconnect delay at 30 seconds
 
   // Auto-save state
   let autoSaveTimeout: number | null = null;
@@ -956,10 +959,35 @@
     }
   }
 
+  // Update SSE connection status indicator
+  function updateConnectionStatus(status: 'connecting' | 'connected' | 'disconnected') {
+    const indicator = document.getElementById('sse-status');
+    if (!indicator) return;
+
+    // Remove all state classes
+    indicator.classList.remove('bg-gray-400', 'bg-green-500', 'bg-red-500');
+
+    switch (status) {
+      case 'connecting':
+        indicator.classList.add('bg-gray-400');
+        indicator.title = 'Connecting to real-time updates...';
+        break;
+      case 'connected':
+        indicator.classList.add('bg-green-500');
+        indicator.title = 'Real-time updates active';
+        break;
+      case 'disconnected':
+        indicator.classList.add('bg-red-500');
+        indicator.title = 'Connection lost - reconnecting...';
+        break;
+    }
+  }
+
   // Connect to SSE for real-time file updates
   function connectSSE() {
-    if (eventSource) {
-      return; // Already connected
+    // Guard against multiple connection attempts
+    if (eventSource && eventSource.readyState !== EventSource.CLOSED) {
+      return; // Already connected or connecting
     }
 
     try {
@@ -967,15 +995,25 @@
       const getSessionId = (window as any).getSessionId;
       const sessionId = getSessionId ? getSessionId() : null;
 
+      if (!sessionId) {
+        console.warn('No session ID available - SSE events will not be session-scoped');
+      }
+
       // Connect with session ID as query parameter
       const url = sessionId ? `/api/events?session_id=${encodeURIComponent(sessionId)}` : '/api/events';
+
+      updateConnectionStatus('connecting');
       eventSource = new EventSource(url);
 
       eventSource.onopen = () => {
-        // Connection established
+        console.log('SSE connected' + (sessionId ? ` (session: ${sessionId})` : ''));
+        reconnectAttempts = 0;
+        lastEventTime = Date.now();
+        updateConnectionStatus('connected');
       };
 
       eventSource.onmessage = (event) => {
+        lastEventTime = Date.now();
         try {
           const message = JSON.parse(event.data);
           handleSSEEvent(message);
@@ -984,15 +1022,27 @@
         }
       };
 
-      eventSource.onerror = (error) => {
-        console.error('SSE error:', error, 'ReadyState:', eventSource?.readyState);
-        eventSource?.close();
-        eventSource = null;
-        // Reconnect after 5 seconds
-        setTimeout(connectSSE, 5000);
+      eventSource.onerror = () => {
+        updateConnectionStatus('disconnected');
+
+        // Check the readyState to determine action
+        // CONNECTING (0) = EventSource is auto-reconnecting, let it
+        // OPEN (1) = shouldn't happen in onerror
+        // CLOSED (2) = connection failed, need manual reconnect
+        if (eventSource?.readyState === EventSource.CLOSED) {
+          // Calculate exponential backoff delay
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+          reconnectAttempts++;
+          console.log(`SSE connection closed, reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+
+          eventSource = null;
+          setTimeout(connectSSE, delay);
+        }
+        // If readyState is CONNECTING, EventSource is auto-reconnecting - let it
       };
     } catch (e) {
       console.error('Failed to connect SSE:', e);
+      updateConnectionStatus('disconnected');
     }
   }
 
@@ -1001,6 +1051,11 @@
     const { type, data } = message;
 
     if (type === 'connected') {
+      return;
+    }
+
+    if (type === 'keepalive') {
+      // Keepalive event - connection is alive
       return;
     }
 
@@ -1167,6 +1222,44 @@
     }
   }
   waitForSessionAndConnect();
+
+  // Reconnect SSE when tab becomes visible (handles mobile backgrounding)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      // Tab became visible - check if we need to reconnect
+      if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+        console.log('Tab visible, reconnecting SSE');
+        reconnectAttempts = 0; // Reset backoff on manual trigger
+        connectSSE();
+      } else if (eventSource.readyState === EventSource.OPEN) {
+        // Connection is open but might be stale - check last event time
+        const staleDuration = Date.now() - lastEventTime;
+        if (staleDuration > 60000) { // No events for 60 seconds
+          console.log('SSE connection may be stale after tab visibility change, reconnecting');
+          eventSource.close();
+          eventSource = null;
+          reconnectAttempts = 0;
+          connectSSE();
+        }
+      }
+    }
+  });
+
+  // Monitor for stale connections (no events in 60 seconds despite keepalives)
+  setInterval(() => {
+    if (eventSource && eventSource.readyState === EventSource.OPEN && lastEventTime > 0) {
+      const staleDuration = Date.now() - lastEventTime;
+      // Server sends keepalive every 30s, so 60s without any event means connection is dead
+      if (staleDuration > 60000) {
+        console.warn('SSE connection appears stale (no events for 60s), reconnecting');
+        updateConnectionStatus('disconnected');
+        eventSource.close();
+        eventSource = null;
+        reconnectAttempts = 0;
+        connectSSE();
+      }
+    }
+  }, 30000); // Check every 30 seconds
 
   // Listen for localStorage changes from other tabs (settings page)
   window.addEventListener('storage', (e) => {

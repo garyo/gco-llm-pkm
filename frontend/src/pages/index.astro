@@ -34,6 +34,13 @@ import EditorInterface from '../components/EditorInterface.astro';
 
       <!-- Right side content -->
       <div class="ml-auto flex items-center gap-4">
+        <!-- SSE connection status indicator -->
+        <div
+          id="sse-status"
+          class="w-2.5 h-2.5 rounded-full bg-gray-400 transition-colors duration-300"
+          title="Connecting..."
+        ></div>
+
         <!-- Editor status (shown only when in editor tab) -->
         <div id="editor-header-status" class="hidden items-center gap-4">
           <span id="editor-status" class="text-sm"></span>

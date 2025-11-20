@@ -1371,8 +1371,8 @@ def sse_events():
                     message = client_queue.get(timeout=30)
                     yield f"data: {json.dumps(message)}\n\n"
                 except queue.Empty:
-                    # Send keepalive comment every 30 seconds
-                    yield ": keepalive\n\n"
+                    # Send keepalive event every 30 seconds
+                    yield f"data: {json.dumps({'type': 'keepalive', 'data': {}, 'timestamp': int(time.time())})}\n\n"
         except GeneratorExit:
             # Client disconnected, clean up silently
             pass

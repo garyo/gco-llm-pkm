@@ -796,6 +796,10 @@ import EditorInterface from '../components/EditorInterface.astro';
     // Load new session history
     await loadHistory();
 
+    // Reconnect SSE with new session ID
+    const reconnectSSE = (window as any).reconnectSSEForNewSession;
+    if (reconnectSSE) reconnectSSE();
+
     hideSessionHistory();
     console.log('Switched to session:', sessionId);
   }
@@ -809,6 +813,10 @@ import EditorInterface from '../components/EditorInterface.astro';
     messages.forEach(msg => msg.remove());
 
     emptyState.style.display = 'block';
+
+    // Reconnect SSE with new session ID
+    const reconnectSSE = (window as any).reconnectSSEForNewSession;
+    if (reconnectSSE) reconnectSSE();
 
     console.log('New session started:', sessionId);
   }

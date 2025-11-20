@@ -1360,6 +1360,7 @@ def sse_events():
     def event_stream():
         """Generator for SSE events."""
         client_queue = event_manager.add_client(session_id=session_id)
+        keepalive_count = 0
         try:
             # Send initial connection event
             yield f"data: {json.dumps({'type': 'connected', 'data': {}, 'timestamp': int(time.time())})}\n\n"
@@ -1372,10 +1373,15 @@ def sse_events():
                     yield f"data: {json.dumps(message)}\n\n"
                 except queue.Empty:
                     # Send keepalive event every 30 seconds
+                    keepalive_count += 1
+                    logger.debug(f"SSE: Sending keepalive #{keepalive_count} to session {session_id}")
                     yield f"data: {json.dumps({'type': 'keepalive', 'data': {}, 'timestamp': int(time.time())})}\n\n"
         except GeneratorExit:
-            # Client disconnected, clean up silently
-            pass
+            # Client disconnected, clean up
+            logger.info(f"SSE: Client disconnected normally (keepalives sent: {keepalive_count})")
+        except Exception as e:
+            # Unexpected error in event stream
+            logger.error(f"SSE: Error in event stream (session: {session_id}): {e}", exc_info=True)
         finally:
             event_manager.remove_client(client_queue)
 

@@ -383,16 +383,21 @@
     }
   });
 
+  // Global singleton guard to prevent duplicate SSE connections
+  const SSE_GLOBAL_KEY = '__sse_global_connection__';
+
+  // Use global EventSource if it exists, otherwise create new one
+  let eventSource: EventSource | null = (window as any)[SSE_GLOBAL_KEY] || null;
+  let lastEventTime: number = 0;  // Track last SSE event for stale detection
+  let reconnectAttempts: number = 0;  // For exponential backoff
+  const MAX_RECONNECT_DELAY = 30000;  // Cap reconnect delay at 30 seconds
+
   // State
   let editorView: EditorView | null = null;
   let currentFile: string | null = null;
   let isDirty = false;
   let allFiles: any[] = [];
   let currentFileMtime: number | null = null;  // Track file modification time
-  let eventSource: EventSource | null = null;  // SSE connection
-  let lastEventTime: number = 0;  // Track last SSE event for stale detection
-  let reconnectAttempts: number = 0;  // For exponential backoff
-  const MAX_RECONNECT_DELAY = 30000;  // Cap reconnect delay at 30 seconds
 
   // Auto-save state
   let autoSaveTimeout: number | null = null;
@@ -985,10 +990,21 @@
 
   // Connect to SSE for real-time file updates
   function connectSSE() {
+    // Global singleton guard - prevent duplicate connections across component instances
+    const globalEventSource = (window as any)[SSE_GLOBAL_KEY];
+    if (globalEventSource && globalEventSource.readyState !== EventSource.CLOSED) {
+      console.warn('⚠️ SSE connection already active globally (readyState:', globalEventSource.readyState, '), prevented duplicate!');
+      eventSource = globalEventSource; // Use the existing one
+      return;
+    }
+
     // Guard against multiple connection attempts
     if (eventSource && eventSource.readyState !== EventSource.CLOSED) {
+      console.log('SSE connection already exists (readyState:', eventSource.readyState, '), skipping');
       return; // Already connected or connecting
     }
+
+    console.log('connectSSE() called - creating new connection');
 
     try {
       // Get session ID from global context
@@ -1001,6 +1017,9 @@
 
       // Connect with session ID as query parameter
       const url = sessionId ? `/api/events?session_id=${encodeURIComponent(sessionId)}` : '/api/events';
+
+      // Mark connection as active globally
+      (window as any)[SSE_GLOBAL_KEY] = eventSource;
 
       updateConnectionStatus('connecting');
       eventSource = new EventSource(url);
@@ -1030,6 +1049,9 @@
         // OPEN (1) = shouldn't happen in onerror
         // CLOSED (2) = connection failed, need manual reconnect
         if (eventSource?.readyState === EventSource.CLOSED) {
+          // Clear global lock so we can reconnect
+          (window as any)[SSE_GLOBAL_KEY] = null;
+
           // Calculate exponential backoff delay
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
           reconnectAttempts++;
@@ -1043,6 +1065,8 @@
     } catch (e) {
       console.error('Failed to connect SSE:', e);
       updateConnectionStatus('disconnected');
+      // Clear global lock on error
+      (window as any)[SSE_GLOBAL_KEY] = null;
     }
   }
 
@@ -1223,25 +1247,53 @@
   }
   waitForSessionAndConnect();
 
-  // Reconnect SSE when tab becomes visible (handles mobile backgrounding)
+  // Reconnect SSE when tab becomes visible (handles mobile backgrounding & PWA focus)
   document.addEventListener('visibilitychange', () => {
+    console.log(`Visibility changed: ${document.visibilityState}`);
     if (document.visibilityState === 'visible') {
       // Tab became visible - check if we need to reconnect
+      const staleDuration = lastEventTime > 0 ? Date.now() - lastEventTime : -1;
+      console.log(`Tab visible - SSE state: ${eventSource?.readyState}, stale duration: ${staleDuration}ms`);
+
       if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
-        console.log('Tab visible, reconnecting SSE');
-        reconnectAttempts = 0; // Reset backoff on manual trigger
+        console.log('Tab visible, reconnecting SSE (connection closed)');
+        (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+        reconnectAttempts = 0;
         connectSSE();
       } else if (eventSource.readyState === EventSource.OPEN) {
-        // Connection is open but might be stale - check last event time
-        const staleDuration = Date.now() - lastEventTime;
-        if (staleDuration > 60000) { // No events for 60 seconds
-          console.log('SSE connection may be stale after tab visibility change, reconnecting');
+        // Always reconnect on visibility change if it's been more than 45 seconds
+        // (server sends keepalive every 30s, so >45s means something is wrong)
+        if (staleDuration > 45000) {
+          console.log(`Tab visible, SSE appears stale (${Math.floor(staleDuration/1000)}s since last event), reconnecting`);
           eventSource.close();
           eventSource = null;
+          (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
           reconnectAttempts = 0;
           connectSSE();
+        } else {
+          console.log(`Tab visible, SSE looks healthy (${Math.floor(staleDuration/1000)}s since last event)`);
         }
       }
+    }
+  });
+
+  // Also handle window focus for PWAs (more reliable than visibilitychange in some cases)
+  window.addEventListener('focus', () => {
+    console.log('Window focused');
+    const staleDuration = lastEventTime > 0 ? Date.now() - lastEventTime : -1;
+
+    if (eventSource && eventSource.readyState === EventSource.OPEN && staleDuration > 45000) {
+      console.log(`Window focused, SSE appears stale (${Math.floor(staleDuration/1000)}s), reconnecting`);
+      eventSource.close();
+      eventSource = null;
+      (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+      reconnectAttempts = 0;
+      connectSSE();
+    } else if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+      console.log('Window focused, reconnecting closed SSE');
+      (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+      reconnectAttempts = 0;
+      connectSSE();
     }
   });
 
@@ -1251,13 +1303,21 @@
       const staleDuration = Date.now() - lastEventTime;
       // Server sends keepalive every 30s, so 60s without any event means connection is dead
       if (staleDuration > 60000) {
-        console.warn('SSE connection appears stale (no events for 60s), reconnecting');
+        console.warn(`SSE connection appears stale (no events for ${Math.floor(staleDuration/1000)}s), reconnecting`);
         updateConnectionStatus('disconnected');
         eventSource.close();
         eventSource = null;
+        (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
         reconnectAttempts = 0;
         connectSSE();
+      } else if (staleDuration > 45000) {
+        // Log a warning if getting close to stale threshold
+        console.debug(`SSE: ${Math.floor(staleDuration/1000)}s since last event (will reconnect at 60s)`);
       }
+    } else if (!eventSource) {
+      console.debug('SSE: No connection');
+    } else if (eventSource.readyState !== EventSource.OPEN) {
+      console.debug(`SSE: Connection not open (state: ${eventSource.readyState})`);
     }
   }, 30000); // Check every 30 seconds
 
@@ -1271,10 +1331,33 @@
     }
   });
 
+  // Reconnect SSE with new session (called when user starts new session or switches)
+  function reconnectSSEForNewSession() {
+    console.log('Reconnecting SSE for new session');
+    console.log('  Current eventSource state:', eventSource?.readyState);
+    console.log('  Global SSE:', (window as any)[SSE_GLOBAL_KEY]);
+
+    if (eventSource) {
+      console.log('  Closing existing eventSource');
+      eventSource.close();
+      eventSource = null;
+    }
+    (window as any)[SSE_GLOBAL_KEY] = null;
+    reconnectAttempts = 0;
+    lastEventTime = 0;
+
+    // Wait a bit for new session ID to be set, then reconnect
+    setTimeout(() => {
+      console.log('  Calling connectSSE() for new session');
+      connectSSE();
+    }, 100);
+  }
+
   // Make functions globally available for tab switching and conflict resolution
   (window as any).refreshFileList = loadFileList;
   (window as any).resolveConflict = resolveConflict;
   (window as any).hideConflictModal = hideConflictModal;
   (window as any).cleanupAutoSaveTimers = cleanupAutoSaveTimers;
   (window as any).refreshAutoSaveSettings = refreshAutoSaveSettings;
+  (window as any).reconnectSSEForNewSession = reconnectSSEForNewSession;
 </script>

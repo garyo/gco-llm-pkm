@@ -360,7 +360,7 @@ Examples:
 
     parser.add_argument(
         "--model", "-m",
-        help="Claude model to use (overrides server default). Options: claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-1"
+        help="Claude model to use (overrides server default). Options: claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5"
     )
 
     args = parser.parse_args()

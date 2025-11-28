@@ -282,29 +282,16 @@ import EditorInterface from '../components/EditorInterface.astro';
         }
         // Ignore interim results entirely - don't show them in input
 
-        // Reset inactivity timer on any speech (interim or final)
-        // This detects when user has stopped speaking
+        // Auto-send disabled - user must manually send
+        // Clear any existing inactivity timer
         if (inactivityTimeout) {
           clearTimeout(inactivityTimeout);
+          inactivityTimeout = null;
         }
-
-        // Start countdown to auto-send after 3 seconds of silence
-        inactivityTimeout = window.setTimeout(() => {
-          if (voiceInput && voiceInput.isActive() && input.value.trim()) {
-            // User stopped speaking - stop recording and start auto-send
-            voiceInput.stop();
-            voiceStatusText.textContent = 'Sending in 3 seconds... (edit to cancel)';
-
-            autoSendTimeout = window.setTimeout(() => {
-              send();
-              autoSendTimeout = null;
-            }, 3000);
-          }
-        }, 3000);
 
         // Update status text (show interim results there, not in input)
         if (isFinal) {
-          voiceStatusText.textContent = 'Listening... (pause 3s to send)';
+          voiceStatusText.textContent = 'Listening...';
         } else {
           voiceStatusText.textContent = `Listening: "${text}"`;
         }
@@ -334,22 +321,12 @@ import EditorInterface from '../components/EditorInterface.astro';
           inactivityTimeout = null;
         }
 
-        // If we have text and no auto-send timer yet, start one
-        if (input.value.trim() && !autoSendTimeout) {
-          voiceStatusText.textContent = 'Sending in 3 seconds... (edit to cancel)';
-
-          autoSendTimeout = window.setTimeout(() => {
-            send();
-            autoSendTimeout = null;
-          }, 3000);
-
-          // Hide status bar after auto-send completes
-          setTimeout(() => {
-            if (!autoSendTimeout) {
-              voiceStatus.classList.add('hidden');
-            }
-          }, 3500);
-        } else if (!input.value.trim()) {
+        // Auto-send disabled - just show completion message
+        if (input.value.trim()) {
+          voiceStatusText.textContent = 'Voice input complete. Press Send when ready.';
+          // Hide status bar after a moment
+          setTimeout(() => voiceStatus.classList.add('hidden'), 3000);
+        } else {
           // No text captured, just hide status
           setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
         }

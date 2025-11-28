@@ -596,12 +596,12 @@ def query():
                 cost_cache_write = (cache_write * 3.75) / 1_000_000
                 cost_cache_read = (cache_read * 0.30) / 1_000_000
                 cost_output = (output_tokens * 15.00) / 1_000_000
-            elif model == 'claude-opus-4-1':
-                # Opus 4.1: $15/M input, $1.50/M cached, $75/M output
-                cost_input = (input_tokens * 15.00) / 1_000_000
-                cost_cache_write = (cache_write * 18.75) / 1_000_000
-                cost_cache_read = (cache_read * 1.50) / 1_000_000
-                cost_output = (output_tokens * 75.00) / 1_000_000
+            elif model == 'claude-opus-4-5':
+                # Opus 4.5: $5/M input, $0.50/M cached, $25/M output
+                cost_input = (input_tokens * 5.00) / 1_000_000
+                cost_cache_write = (cache_write * 6.25) / 1_000_000
+                cost_cache_read = (cache_read * 0.50) / 1_000_000
+                cost_output = (output_tokens * 25.00) / 1_000_000
             else:
                 # Unknown model, use Haiku rates as fallback
                 cost_input = (input_tokens * 0.80) / 1_000_000

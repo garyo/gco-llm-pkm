@@ -44,6 +44,11 @@
 
       <span id="file-count" class="text-sm text-gray-500 whitespace-nowrap"></span>
     </div>
+
+    <!-- Current File Display -->
+    <div id="current-file-display" class="hidden px-2 py-1 text-xs text-gray-600 font-mono bg-gray-100 border-t border-gray-200">
+      <span id="current-file-path"></span>
+    </div>
   </div>
 
   <!-- Editor Container -->
@@ -420,6 +425,8 @@
   const typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
   const searchFilter = document.getElementById('search-filter') as HTMLInputElement;
   const fileCount = document.getElementById('file-count')!;
+  const currentFileDisplay = document.getElementById('current-file-display')!;
+  const currentFilePath = document.getElementById('current-file-path')!;
 
   // Debounce helper - calls function on trailing edge after delay
   function debounce<T extends (...args: any[]) => any>(func: T, delay: number): (...args: Parameters<T>) => void {
@@ -674,6 +681,9 @@
       isDirty = false;
       saveButton.disabled = true;
 
+      // Update file display
+      updateFileDisplay(filepath);
+
       // Update file selector to show current file
       // If the file isn't in the dropdown (due to filtering), add it temporarily
       const existingOption = Array.from(fileSelector.options).find(
@@ -693,6 +703,7 @@
       updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
     } catch (e: any) {
       updateStatus(`Error loading file: ${e.message}`, true);
+      updateFileDisplay(null);
       console.error('Failed to load file:', e);
     }
   }
@@ -770,6 +781,22 @@
     } else {
       editorStatus.style.color = 'inherit';
     }
+  }
+
+  // Update current file display
+  function updateFileDisplay(filepath: string | null) {
+    if (!filepath) {
+      currentFileDisplay.classList.add('hidden');
+      currentFilePath.textContent = '';
+      return;
+    }
+
+    // Find the file in allFiles to get its display path
+    const fileInfo = allFiles.find((f: any) => f.full_path === filepath);
+    const displayPath = fileInfo ? fileInfo.path : filepath;
+
+    currentFilePath.textContent = displayPath;
+    currentFileDisplay.classList.remove('hidden');
   }
 
   // Auto-save functions

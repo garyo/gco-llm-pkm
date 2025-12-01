@@ -142,7 +142,9 @@ class TickTickClient:
         due_date: Optional[datetime] = None,
         priority: int = 0,
         project_id: Optional[str] = None,
-        user_timezone: str = None
+        user_timezone: str = None,
+        reminders: Optional[List[str]] = None,
+        is_all_day: Optional[bool] = None
     ) -> Dict[str, Any]:
         """Create a new task.
 
@@ -152,7 +154,10 @@ class TickTickClient:
             due_date: Due date for the task (datetime object or None)
             priority: Priority level (0=None, 1=Low, 3=Medium, 5=High)
             project_id: Project ID to add task to
-            user_timezone: User's timezone (e.g., 'America/New_York'). Used for all-day tasks.
+            user_timezone: User's timezone (e.g., 'America/New_York'). Used for timezone-aware tasks.
+            reminders: List of reminder trigger strings in ISO 8601 duration format.
+                      Examples: ['TRIGGER:-PT30M'] (30 min before), ['TRIGGER:-PT1H'] (1 hour before)
+            is_all_day: Whether this is an all-day task. If None, auto-detected from due_date time.
 
         Returns:
             Created task dictionary
@@ -169,40 +174,73 @@ class TickTickClient:
                 task_data['content'] = content
 
             if due_date:
-                # For all-day tasks in America/New_York timezone:
-                # Use 05:00:00 UTC (midnight EST/America/New_York)
-                # This matches the pattern used by existing all-day tasks
-                if user_timezone:
-                    try:
-                        tz = ZoneInfo(user_timezone)
-                        # Ensure due_date is timezone-aware at midnight in user's timezone
-                        if due_date.tzinfo is None:
-                            due_date_local = due_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
-                        else:
-                            due_date_local = due_date.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-                        # Convert to UTC
-                        due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
-                        # Format with milliseconds as TickTick expects
-                        task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                        task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                        task_data['timeZone'] = user_timezone
-                    except Exception:
-                        # Fallback to simple format
+                # Auto-detect if this is an all-day task based on time component
+                # If time is midnight (00:00:00), treat as all-day unless explicitly specified
+                if is_all_day is None:
+                    is_all_day = (due_date.hour == 0 and due_date.minute == 0 and due_date.second == 0)
+
+                if is_all_day:
+                    # All-day task: convert to midnight in user's timezone, then to UTC
+                    if user_timezone:
+                        try:
+                            tz = ZoneInfo(user_timezone)
+                            # Ensure due_date is timezone-aware at midnight in user's timezone
+                            if due_date.tzinfo is None:
+                                due_date_local = due_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
+                            else:
+                                due_date_local = due_date.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+                            # Convert to UTC
+                            due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
+                            # Format with milliseconds as TickTick expects
+                            task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data['timeZone'] = user_timezone
+                        except Exception:
+                            # Fallback to simple format
+                            task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                    else:
+                        # No timezone provided, use UTC
                         task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
                         task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
                 else:
-                    # No timezone provided, use UTC
-                    task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                    task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                    # Timed task: preserve the time component
+                    if user_timezone:
+                        try:
+                            tz = ZoneInfo(user_timezone)
+                            # Ensure due_date is timezone-aware in user's timezone
+                            if due_date.tzinfo is None:
+                                due_date_local = due_date.replace(tzinfo=tz)
+                            else:
+                                due_date_local = due_date.astimezone(tz)
+                            # Convert to UTC
+                            due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
+                            # Format with milliseconds as TickTick expects
+                            task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data['timeZone'] = user_timezone
+                        except Exception:
+                            # Fallback to simple format
+                            task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                    else:
+                        # No timezone provided, assume UTC
+                        if due_date.tzinfo is None:
+                            due_date = due_date.replace(tzinfo=ZoneInfo('UTC'))
+                        due_date_utc = due_date.astimezone(ZoneInfo('UTC'))
+                        task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                        task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
 
-                # Mark as all-day task (no specific time, no timed reminders)
-                task_data['isAllDay'] = True
+                task_data['isAllDay'] = is_all_day
 
             if priority:
                 task_data['priority'] = priority
 
             if project_id:
                 task_data['projectId'] = project_id
+
+            if reminders:
+                task_data['reminders'] = reminders
 
             response = self.session.post(f"{self.BASE_URL}/task", json=task_data)
             response.raise_for_status()

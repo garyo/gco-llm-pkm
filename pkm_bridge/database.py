@@ -63,6 +63,25 @@ class UserSettings(Base):
         return f"<UserSettings(user_id='{self.user_id}', context_length={len(self.user_context or '')})"
 
 
+class ToolExecutionLog(Base):
+    """Store tool execution logs for debugging and activity tracking."""
+    __tablename__ = 'tool_execution_logs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(255), nullable=False, index=True)
+    query_id = Column(String(100), nullable=False, index=True)  # Unique ID for grouping logs from same query
+    user_message = Column(Text, nullable=False)  # The user's prompt
+    tool_name = Column(String(100), nullable=False)
+    tool_params = Column(JSON, nullable=False)
+    result_summary = Column(Text, nullable=True)  # Truncated result
+    exit_code = Column(Integer, nullable=True)  # For shell commands
+    execution_time_ms = Column(Integer, nullable=False)  # Duration in milliseconds
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ToolExecutionLog(tool='{self.tool_name}', session='{self.session_id}', time={self.execution_time_ms}ms)>"
+
+
 # Database connection management
 _engine = None
 _SessionLocal = None

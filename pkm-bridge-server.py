@@ -27,6 +27,7 @@ A modular server providing Claude API access to Personal Knowledge Management fi
 """
 
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Dict, Any
 
@@ -53,7 +54,7 @@ from pkm_bridge.auth import AuthManager
 
 # Import database
 from pkm_bridge.database import init_db, get_db
-from pkm_bridge.db_repository import SessionRepository
+from pkm_bridge.db_repository import SessionRepository, ToolExecutionLogRepository
 
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
@@ -372,6 +373,7 @@ def query():
             return jsonify({"error": "Invalid or expired token"}), 401
 
     request_start = time.time()
+    query_id = str(uuid.uuid4())  # Unique ID for this query
 
     data = request.json
     session_id = data.get('session_id', 'default')
@@ -495,6 +497,10 @@ def query():
                 if getattr(block, "type", None) == "tool_use":
                     tool_call_count += 1
                     logger.info(f">>> Tool call: {block.name} with params: {block.input}")
+
+                    # Capture start time for tool execution logging
+                    start_time = time.time()
+
                     with timer(f"Tool execution: {block.name}"):
                         # Pass session_id and user_timezone in context for tools that need it
                         context = {
@@ -502,6 +508,10 @@ def query():
                             "user_timezone": user_timezone
                         }
                         result = tool_registry.execute_tool(block.name, block.input, context=context)
+
+                    # Calculate execution time
+                    end_time = time.time()
+                    execution_time_ms = int((end_time - start_time) * 1000)
 
                     # Ensure result is never empty (API requirement)
                     if not result or (isinstance(result, str) and not result.strip()):
@@ -511,6 +521,39 @@ def query():
                     # Log if tool result contains an error
                     if result.startswith("❌"):
                         logger.error(f"Tool {block.name} returned error: {result[:200]}")
+
+                    # Extract result summary (first 500 chars)
+                    result_summary = result[:500] if result else ""
+
+                    # Extract exit code if shell command
+                    exit_code = None
+                    if block.name == "execute_shell" and "Exit code:" in result:
+                        try:
+                            # Parse exit code from result (format: "Exit code: N")
+                            exit_code = int(result.split("Exit code:")[1].split()[0])
+                        except (IndexError, ValueError):
+                            pass
+
+                    # Store tool execution log in database
+                    try:
+                        log_db = get_db()
+                        try:
+                            ToolExecutionLogRepository.create_log(
+                                db=log_db,
+                                session_id=session_id,
+                                query_id=query_id,
+                                user_message=user_message,
+                                tool_name=block.name,
+                                tool_params=block.input,
+                                result_summary=result_summary,
+                                exit_code=exit_code,
+                                execution_time_ms=execution_time_ms
+                            )
+                        finally:
+                            log_db.close()
+                    except Exception as log_error:
+                        # Don't fail the query if logging fails
+                        logger.warning(f"Failed to log tool execution: {log_error}")
 
                     tool_results.append({
                         "type": "tool_result",
@@ -575,6 +618,27 @@ def query():
                 logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
 
         logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
+
+        # Log query summary (always, even if no tools were used)
+        try:
+            log_db = get_db()
+            try:
+                ToolExecutionLogRepository.create_log(
+                    db=log_db,
+                    session_id=session_id,
+                    query_id=query_id,
+                    user_message=user_message,
+                    tool_name="__query_summary__",  # Special marker for query summary
+                    tool_params={"model": model, "api_calls": api_call_count, "tool_calls": tool_call_count},
+                    result_summary=assistant_text[:200] if assistant_text else "",
+                    exit_code=None,
+                    execution_time_ms=int(total_elapsed * 1000)
+                )
+            finally:
+                log_db.close()
+        except Exception as log_error:
+            # Don't fail the query if logging fails
+            logger.warning(f"Failed to log query summary: {log_error}")
 
         # Update session cost tracking
         if hasattr(usage, 'input_tokens') and hasattr(usage, 'output_tokens'):
@@ -679,6 +743,72 @@ def get_history(session_id):
                         history.append({"role": msg['role'], "text": text})
 
         return jsonify(history)
+    finally:
+        db.close()
+
+
+@app.route('/sessions/<session_id>/tool-logs', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_tool_logs(session_id):
+    """Get tool execution logs for a session.
+
+    Returns logs grouped by user message.
+
+    Response format:
+    [
+        {
+            "user_message": "What did I write about music?",
+            "timestamp": "2024-01-15T10:30:00Z",
+            "tools": [
+                {
+                    "tool_name": "execute_shell",
+                    "tool_params": {"command": "rg -i music"},
+                    "result_summary": "Found 5 matches...",
+                    "exit_code": 0,
+                    "execution_time_ms": 150
+                }
+            ]
+        }
+    ]
+    """
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            logger.warning(f"Unauthorized tool-logs access from {request.remote_addr}")
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            logger.warning(f"Unauthorized tool-logs access from {request.remote_addr}: invalid token")
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        logs = ToolExecutionLogRepository.get_logs_for_session(db, session_id)
+
+        # Group by query_id
+        grouped = {}
+        for log in logs:
+            # Use query_id as key to group all logs from same request
+            if log.query_id not in grouped:
+                grouped[log.query_id] = {
+                    "user_message": log.user_message,
+                    "timestamp": log.created_at.isoformat(),
+                    "tools": []
+                }
+            grouped[log.query_id]["tools"].append({
+                "tool_name": log.tool_name,
+                "tool_params": log.tool_params,
+                "result_summary": log.result_summary,
+                "exit_code": log.exit_code,
+                "execution_time_ms": log.execution_time_ms
+            })
+
+        # Convert to list and sort by timestamp (most recent first)
+        result = list(grouped.values())
+        result.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        return jsonify(result)
     finally:
         db.close()
 

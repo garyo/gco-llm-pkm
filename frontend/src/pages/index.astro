@@ -634,6 +634,12 @@ import EditorInterface from '../components/EditorInterface.astro';
 
       appendMessage('assistant', data.response);
 
+      // Auto-update Activity panel if it's open
+      const toolLogsPanel = document.getElementById('tool-logs-panel');
+      if (toolLogsPanel && !toolLogsPanel.classList.contains('hidden')) {
+        loadToolLogs();
+      }
+
       // Update cost warning if > $1.00
       if (data.session_cost && data.session_cost > 1.0) {
         const costWarning = document.getElementById('cost-warning');
@@ -961,6 +967,129 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Verify token and load app on page load
   verifyToken();
 
+  // Tool logs functions
+  function toggleToolLogs() {
+    const panel = document.getElementById('tool-logs-panel');
+    const btn = document.getElementById('tool-logs-btn');
+
+    if (panel && btn) {
+      if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
+        btn.classList.add('bg-blue-100', 'border-blue-300');
+        loadToolLogs();
+      } else {
+        panel.classList.add('hidden');
+        btn.classList.remove('bg-blue-100', 'border-blue-300');
+      }
+    }
+  }
+
+  async function loadToolLogs() {
+    const content = document.getElementById('tool-logs-content');
+    if (!content) return;
+
+    content.innerHTML = '<div class="text-center text-gray-500 py-4">Loading activity logs...</div>';
+
+    try {
+      const res = await fetch(`/sessions/${sessionId}/tool-logs`, {
+        headers: getAuthHeaders()
+      });
+
+      if (res.status === 401) {
+        handle401();
+        return;
+      }
+
+      const logs = await res.json();
+
+      if (logs.length === 0) {
+        content.innerHTML = '<div class="text-center text-gray-500 py-4">No tool activity yet</div>';
+        return;
+      }
+
+      // Render logs as cards
+      content.innerHTML = logs.map(renderLogCard).join('');
+    } catch (e: any) {
+      content.innerHTML = `<div class="text-center text-red-500 py-4">Error: ${e.message}</div>`;
+    }
+  }
+
+  function renderLogCard(log: any): string {
+    // Find query summary (contains total time)
+    const querySummary = log.tools.find((t: any) => t.tool_name === '__query_summary__');
+
+    // Filter out summary from individual tools
+    const actualTools = log.tools.filter((t: any) => t.tool_name !== '__query_summary__');
+
+    const toolsHtml = actualTools.map((tool: any) => {
+      const statusIcon = tool.exit_code === 0 || tool.exit_code === null ? '✓' : '✗';
+      const statusColor = tool.exit_code === 0 || tool.exit_code === null ? 'text-green-600' : 'text-red-600';
+
+      return `
+        <div class="ml-4 mb-2 p-3 bg-white rounded border border-gray-200">
+          <div class="flex items-start gap-2">
+            <span class="${statusColor} font-bold">${statusIcon}</span>
+            <div class="flex-1">
+              <div class="font-mono text-sm text-gray-700">
+                <span class="font-semibold">${tool.tool_name}</span>
+              </div>
+              <div class="text-xs text-gray-500 mt-1">
+                ${formatToolParams(tool.tool_params)}
+              </div>
+              <div class="text-xs text-gray-600 mt-1">
+                ${tool.result_summary}
+              </div>
+              <div class="text-xs text-gray-400 mt-1">
+                ${tool.execution_time_ms}ms
+                ${tool.exit_code !== null ? ` • Exit code: ${tool.exit_code}` : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="bg-white rounded-lg border border-gray-300 shadow-sm p-4">
+        <div class="font-semibold text-gray-900 mb-2">${escapeHtml(log.user_message)}</div>
+        <div class="flex items-center gap-2 text-xs text-gray-500 mb-3">
+          <span>${formatTimestamp(log.timestamp)}</span>
+          ${querySummary ? `<span>•</span><span class="font-medium">Total: ${querySummary.execution_time_ms}ms</span>` : ''}
+          ${querySummary && querySummary.tool_params ? `<span>•</span><span>${querySummary.tool_params.tool_calls || 0} tool${querySummary.tool_params.tool_calls !== 1 ? 's' : ''}</span>` : ''}
+        </div>
+        ${actualTools.length > 0 ? toolsHtml : '<div class="text-sm text-gray-500 italic">No tools used</div>'}
+      </div>
+    `;
+  }
+
+  function formatToolParams(params: any): string {
+    if (params.command) {
+      return `Command: <code class="bg-gray-100 px-1 rounded">${escapeHtml(params.command)}</code>`;
+    }
+    if (params.query) {
+      return `Query: <code class="bg-gray-100 px-1 rounded">${escapeHtml(params.query)}</code>`;
+    }
+    if (params.path) {
+      return `Path: <code class="bg-gray-100 px-1 rounded">${escapeHtml(params.path)}</code>`;
+    }
+    // Truncate if JSON is too long
+    const jsonStr = JSON.stringify(params);
+    if (jsonStr.length > 100) {
+      return `<code class="bg-gray-100 px-1 rounded">${escapeHtml(jsonStr.substring(0, 100))}...</code>`;
+    }
+    return `<code class="bg-gray-100 px-1 rounded">${escapeHtml(jsonStr)}</code>`;
+  }
+
+  function formatTimestamp(iso: string): string {
+    return new Date(iso).toLocaleString();
+  }
+
+  function escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
   // Make functions globally available
   (window as any).send = send;
   (window as any).sendExample = sendExample;
@@ -974,6 +1103,8 @@ import EditorInterface from '../components/EditorInterface.astro';
   (window as any).updateModel = updateModel;
   (window as any).updateThinking = updateThinking;
   (window as any).switchTab = switchTab;
+  (window as any).toggleToolLogs = toggleToolLogs;
+  (window as any).loadToolLogs = loadToolLogs;
 
   // Make sessionId available globally for SSE connection
   (window as any).getSessionId = () => sessionId;

@@ -61,6 +61,31 @@ import examples from '../../../config/examples.json';
     >
       New
     </button>
+    <button
+      onclick="toggleToolLogs()"
+      class="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors whitespace-nowrap"
+      id="tool-logs-btn"
+    >
+      Activity
+    </button>
+  </div>
+
+  <!-- Tool Logs Panel -->
+  <div id="tool-logs-panel" class="hidden border-t border-gray-200 bg-gray-50 overflow-y-auto" style="max-height: 300px;">
+    <div class="p-4">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="text-lg font-semibold text-gray-800">Tool Execution Activity</h3>
+        <button onclick="toggleToolLogs()" class="text-gray-500 hover:text-gray-700">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div id="tool-logs-content" class="space-y-3">
+        <div class="text-center text-gray-500 py-4">Loading activity logs...</div>
+      </div>
+    </div>
   </div>
 
   <!-- Model Settings Modal -->
@@ -405,5 +430,21 @@ import examples from '../../../config/examples.json';
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Tool logs panel */
+  #tool-logs-panel {
+    transition: max-height 0.3s ease-in-out;
+  }
+
+  #tool-logs-content code {
+    font-family: ui-monospace, monospace;
+    font-size: 0.875em;
+  }
+
+  /* Highlight active button */
+  #tool-logs-btn.bg-blue-100 {
+    background-color: rgb(219 234 254);
+    border-color: rgb(147 197 253);
   }
 </style>

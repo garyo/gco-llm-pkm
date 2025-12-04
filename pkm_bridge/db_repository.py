@@ -1,11 +1,11 @@
 """Repository pattern for database operations."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from .database import OAuthToken, ConversationSession, UserSettings
+from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog
 
 
 class OAuthRepository:
@@ -275,3 +275,84 @@ class UserSettingsRepository:
             db.commit()
             db.refresh(settings)
         return settings
+
+
+class ToolExecutionLogRepository:
+    """Repository for tool execution log operations."""
+
+    @staticmethod
+    def create_log(
+        db: Session,
+        session_id: str,
+        query_id: str,
+        user_message: str,
+        tool_name: str,
+        tool_params: dict,
+        result_summary: str,
+        exit_code: Optional[int],
+        execution_time_ms: int
+    ) -> ToolExecutionLog:
+        """Create a new tool execution log entry.
+
+        Args:
+            db: Database session
+            session_id: Session ID
+            query_id: Unique ID for this query (groups all logs from same request)
+            user_message: The user's prompt that triggered the tool
+            tool_name: Name of the tool executed
+            tool_params: Parameters passed to the tool
+            result_summary: Truncated result of tool execution
+            exit_code: Exit code for shell commands (None for other tools)
+            execution_time_ms: Execution time in milliseconds
+
+        Returns:
+            Created ToolExecutionLog object
+        """
+        log = ToolExecutionLog(
+            session_id=session_id,
+            query_id=query_id,
+            user_message=user_message,
+            tool_name=tool_name,
+            tool_params=tool_params,
+            result_summary=result_summary,
+            exit_code=exit_code,
+            execution_time_ms=execution_time_ms
+        )
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        return log
+
+    @staticmethod
+    def get_logs_for_session(db: Session, session_id: str, limit: int = 100) -> List[ToolExecutionLog]:
+        """Get tool execution logs for a session, ordered by creation time.
+
+        Args:
+            db: Database session
+            session_id: Session ID
+            limit: Maximum number of logs to return
+
+        Returns:
+            List of ToolExecutionLog objects
+        """
+        return db.query(ToolExecutionLog).filter_by(
+            session_id=session_id
+        ).order_by(ToolExecutionLog.created_at.desc()).limit(limit).all()
+
+    @staticmethod
+    def delete_old_logs(db: Session, days: int = 30) -> int:
+        """Delete logs older than specified days (for maintenance).
+
+        Args:
+            db: Database session
+            days: Delete logs older than this many days
+
+        Returns:
+            Number of logs deleted
+        """
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        count = db.query(ToolExecutionLog).filter(
+            ToolExecutionLog.created_at < cutoff_date
+        ).delete()
+        db.commit()
+        return count

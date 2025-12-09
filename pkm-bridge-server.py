@@ -18,6 +18,9 @@
 #   "google-auth-oauthlib>=1.2.0",
 #   "google-auth-httplib2>=0.2.0",
 #   "google-api-python-client>=2.147.0",
+#   "pgvector>=0.2.0",
+#   "voyageai>=0.2.0",
+#   "apscheduler>=3.10.0",
 # ]
 # ///
 """
@@ -65,6 +68,7 @@ from pkm_bridge.tools.ticktick import TickTickTool
 from pkm_bridge.tools.google_calendar import GoogleCalendarTool
 from pkm_bridge.tools.open_file import OpenFileTool
 from pkm_bridge.tools.find_context import FindContextTool
+from pkm_bridge.tools.semantic_search import SemanticSearchTool
 
 # Import database components
 from pkm_bridge.database import init_db, get_db
@@ -84,6 +88,14 @@ from pkm_bridge.events import event_manager
 # Import voice preprocessor
 from pkm_bridge.voice_preprocessor import VoicePreprocessor
 
+# Import RAG components
+from pkm_bridge.context_retriever import ContextRetriever
+from pkm_bridge.embeddings.voyage_client import VoyageClient
+from pkm_bridge.embeddings.embedding_service import run_incremental_embedding
+
+# Import scheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+
 # -------------------------
 # Setup & Configuration
 # -------------------------
@@ -99,6 +111,36 @@ client = Anthropic(api_key=config.anthropic_api_key)
 
 # Initialize voice preprocessor
 voice_preprocessor = VoicePreprocessor(client)
+
+# Initialize RAG components (if Voyage API key available)
+voyage_api_key = os.getenv('VOYAGE_API_KEY')
+voyage_client = None
+context_retriever = None
+embedding_scheduler = None
+
+if voyage_api_key:
+    try:
+        voyage_client = VoyageClient(api_key=voyage_api_key)
+        context_retriever = ContextRetriever(voyage_client)
+        logger.info("RAG auto-injection enabled (Voyage AI)")
+
+        # Initialize background scheduler for periodic embedding
+        embedding_scheduler = BackgroundScheduler()
+        embedding_scheduler.add_job(
+            func=run_incremental_embedding,
+            trigger="cron",
+            hour=3,  # Run at 3am daily
+            args=[logger, voyage_client, config],
+            id='incremental_embedding',
+            name='Incremental note embedding',
+            misfire_grace_time=3600  # Allow 1 hour grace if server was down
+        )
+        embedding_scheduler.start()
+        logger.info("Background embedding scheduler started (runs daily at 3am)")
+    except Exception as e:
+        logger.warning(f"Failed to initialize Voyage client: {e}")
+else:
+    logger.warning("VOYAGE_API_KEY not set - RAG auto-injection disabled")
 
 # Flask app
 app = Flask(__name__)
@@ -182,6 +224,11 @@ if ticktick_oauth:
 if google_oauth:
     tool_registry.register(GoogleCalendarTool(logger, google_oauth))
     logger.info("Google Calendar tool registered")
+
+# Register semantic search tool if RAG is enabled
+if context_retriever:
+    tool_registry.register(SemanticSearchTool(logger, context_retriever))
+    logger.info("Semantic search tool registered (RAG)")
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
@@ -390,6 +437,9 @@ def query():
         if user_message != original_message:
             logger.info(f"🎤 Voice preprocessing applied")
 
+    # Log user query at the start
+    logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
+
     # Get or create session from database
     db = get_db()
     try:
@@ -404,6 +454,28 @@ def query():
             user_context=user_context,
             user_timezone=user_timezone
         )
+
+        # NEW: Auto-retrieve relevant note context for RAG
+        if context_retriever:
+            try:
+                context_block_text = context_retriever.retrieve_and_format(
+                    query=user_message,
+                    limit=12,
+                    min_similarity=0.60
+                )
+
+                if context_block_text:
+                    # Insert context block before the last block (current date)
+                    # This allows retrieved context to be cached separately
+                    context_block = {
+                        "type": "text",
+                        "text": context_block_text,
+                        "cache_control": {"type": "ephemeral"}  # Cache retrieved context
+                    }
+                    system_prompt_blocks.insert(-1, context_block)
+                    logger.info(f"🔍 Auto-retrieved relevant context ({len(context_block_text)} chars)")
+            except Exception as e:
+                logger.warning(f"Context retrieval failed: {e}")
 
         # Debug: log system block structure
         if logger.level <= 10:  # DEBUG level
@@ -446,8 +518,6 @@ def query():
 
     # Validate all messages have non-empty content (API requirement)
     validate_history(history)
-
-    logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
     try:
         # Build beta headers - include prompt caching for cost optimization
@@ -1477,6 +1547,41 @@ def health():
     return jsonify(health_data)
 
 
+@app.route('/admin/trigger-embedding', methods=['POST'])
+def trigger_embedding():
+    """Manually trigger incremental embedding (admin endpoint)."""
+    if not voyage_client:
+        return jsonify({
+            "error": "RAG not configured",
+            "message": "VOYAGE_API_KEY not set"
+        }), 503
+
+    try:
+        # Run embedding in background thread to avoid blocking
+        import threading
+
+        def run_embedding():
+            try:
+                stats = run_incremental_embedding(logger, voyage_client, config)
+                logger.info(f"Manual embedding complete: {stats}")
+            except Exception as e:
+                logger.error(f"Manual embedding failed: {e}")
+
+        thread = threading.Thread(target=run_embedding, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "status": "started",
+            "message": "Incremental embedding started in background"
+        })
+    except Exception as e:
+        logger.error(f"Failed to trigger embedding: {e}")
+        return jsonify({
+            "error": "Failed to start embedding",
+            "message": str(e)
+        }), 500
+
+
 @app.route('/api/events')
 def sse_events():
     """Server-Sent Events endpoint for real-time notifications."""
@@ -1554,6 +1659,10 @@ if __name__ == '__main__':
     try:
         app.run(host=config.host, port=config.port, debug=config.debug, threaded=True)
     finally:
-        # Clean up file watcher on shutdown
+        # Clean up on shutdown
         event_manager.stop_file_watcher()
         logger.info("File watcher stopped")
+
+        if embedding_scheduler:
+            embedding_scheduler.shutdown()
+            logger.info("Embedding scheduler stopped")

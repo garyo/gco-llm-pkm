@@ -4,9 +4,10 @@ import os
 from datetime import datetime
 from typing import Optional
 from urllib.parse import quote_plus
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, JSON, Text
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, JSON, Text, Index, ForeignKey
+from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from sqlalchemy.pool import QueuePool
+from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
 
@@ -166,3 +167,55 @@ def close_db() -> None:
     if _engine:
         _engine.dispose()
         _engine = None
+
+
+class Document(Base):
+    """Track which files have been embedded for RAG."""
+    __tablename__ = 'documents'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    file_path = Column(String(1024), unique=True, nullable=False, index=True)
+    file_type = Column(String(10), nullable=False)  # 'org' or 'md'
+    file_hash = Column(String(64), nullable=False)  # SHA256 for change detection
+    date_extracted = Column(String(20), nullable=True)  # YYYY-MM-DD
+    total_chunks = Column(Integer, nullable=False, default=0)
+    last_embedded_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Document(file_path='{self.file_path}', chunks={self.total_chunks})>"
+
+
+class DocumentChunk(Base):
+    """Store note chunks with vector embeddings for semantic search."""
+    __tablename__ = 'document_chunks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)  # Position within document
+    chunk_type = Column(String(20), nullable=False)  # 'heading', 'content', 'bullet'
+    heading_path = Column(Text, nullable=True)  # "* Top\n** Second\n*** Current"
+    content = Column(Text, nullable=False)  # Actual text content
+    start_line = Column(Integer, nullable=True)  # Line number in original file
+    token_count = Column(Integer, nullable=False)  # Approximate tokens
+
+    # pgvector embedding (voyage-3 uses 1024 dimensions)
+    embedding = Column(Vector(1024), nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    document = relationship("Document", back_populates="chunks")
+
+    def __repr__(self):
+        return f"<DocumentChunk(document_id={self.document_id}, chunk={self.chunk_index}, tokens={self.token_count})>"
+
+    # Vector similarity search index
+    __table_args__ = (
+        Index('idx_embedding_cosine', embedding, postgresql_using='ivfflat',
+              postgresql_with={'lists': 100}, postgresql_ops={'embedding': 'vector_cosine_ops'}),
+    )

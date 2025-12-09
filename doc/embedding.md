@@ -159,6 +159,47 @@ Creates 2 chunks:
 1. Heading: "Daily Log" | Content: work-related bullet + sub-bullets
 2. Heading: "Daily Log" | Content: music-related bullet
 
+## Date Extraction
+
+The system extracts dates from files to enable temporal filtering in search results. Date extraction uses multiple strategies in order of priority:
+
+### Strategy 1: Journal Directory Path
+
+Extract from file path for journal entries:
+- **Org-mode**: `/journals/2025-12-09.org` → `2025-12-09`
+- **Logseq**: `/journals/2025_12_09.md` → `2025-12-09`
+
+This ensures all journal entries have accurate dates.
+
+### Strategy 2: Filename Pattern
+
+Extract date patterns from filename:
+- **Standard format**: `2025-12-09-notes.org` → `2025-12-09`
+- **Logseq format**: `2025_12_09.md` → `2025-12-09`
+
+### Strategy 3: Org-mode Content
+
+For `.org` files, check content headers:
+- **`#+title`**: Extract date from title line
+  ```org
+  #+title: 2025-12-09 Daily Notes
+  ```
+- **Property drawer**: Extract from `:DATE:` or `:CREATED:` properties
+  ```org
+  :PROPERTIES:
+  :DATE: 2025-12-09
+  :END:
+  ```
+
+### Strategy 4: File Modification Time (Fallback)
+
+If no date found using above strategies, use file's last modification time as fallback. This ensures **all files have dates** for filtering, even if the date isn't perfectly accurate.
+
+**Why fallback to mtime?**
+- Approximate dates are preferable to NULL dates for filtering
+- Enables date filtering for non-journal files
+- Most files are modified around their creation date
+
 ## Embedding Pipeline
 
 ### Script: `scripts/embed_notes.py`

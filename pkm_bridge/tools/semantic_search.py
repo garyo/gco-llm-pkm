@@ -116,10 +116,11 @@ Results are sorted by similarity (most similar first).
             })
 
         # Filter by date if requested
+        # Include chunks without dates (can't verify they're too old)
         if newer_date:
             chunks = [
                 c for c in chunks
-                if c.get('date') and c['date'] >= newer_date
+                if not c.get('date') or c['date'] >= newer_date
             ]
 
         # Format results

@@ -24,33 +24,101 @@ def compute_file_hash(file_path: Path) -> str:
     return sha256.hexdigest()
 
 
-def extract_date_from_file(file_path: Path) -> Optional[str]:
-    """Extract date from filename or file content.
+def extract_date_from_file(file_path: Path, logger=None) -> Optional[str]:
+    """Extract date from filename, path, or file content.
+
+    Tries multiple strategies in order:
+    1. Journal directory path (e.g., /journals/2024-12-09.org or /journals/2024_12_09.md)
+    2. Filename pattern (YYYY-MM-DD or YYYY_MM_DD)
+    3. Org-mode #+title or property drawer
+    4. File modification time as fallback
 
     Returns:
         Date string in YYYY-MM-DD format or None
     """
     import re
 
-    # Try to extract from filename (e.g., 2024-12-09.org)
+    def log(msg):
+        if logger:
+            logger.debug(msg)
+
+    # Strategy 1: Extract from journal path
+    # Handle both org-mode (/journals/YYYY-MM-DD.org) and Logseq (/journals/YYYY_MM_DD.md)
+    if '/journals/' in str(file_path):
+        # Try YYYY-MM-DD format
+        date_match = re.search(r'/journals/(\d{4}-\d{2}-\d{2})', str(file_path))
+        if date_match:
+            log(f"Date from journal path: {date_match.group(1)}")
+            return date_match.group(1)
+
+        # Try YYYY_MM_DD format (Logseq)
+        date_match = re.search(r'/journals/(\d{4}_\d{2}_\d{2})', str(file_path))
+        if date_match:
+            date_str = date_match.group(1).replace('_', '-')
+            log(f"Date from Logseq journal path: {date_str}")
+            return date_str
+
+    # Strategy 2: Extract from filename
+    # Try YYYY-MM-DD format
     filename_match = re.search(r'(\d{4}-\d{2}-\d{2})', file_path.name)
     if filename_match:
+        log(f"Date from filename: {filename_match.group(1)}")
         return filename_match.group(1)
 
-    # Try to extract from org-mode #+title (for org files)
+    # Try YYYY_MM_DD format (Logseq)
+    filename_match = re.search(r'(\d{4}_\d{2}_\d{2})', file_path.name)
+    if filename_match:
+        date_str = filename_match.group(1).replace('_', '-')
+        log(f"Date from Logseq filename: {date_str}")
+        return date_str
+
+    # Strategy 3: Extract from org-mode content
     if file_path.suffix == '.org':
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
+                in_properties = False
                 for line in f:
+                    line = line.strip()
+
+                    # Check #+title
                     if line.startswith('#+title:'):
                         title = line.split(':', 1)[1].strip()
                         title_match = re.search(r'(\d{4}-\d{2}-\d{2})', title)
                         if title_match:
+                            log(f"Date from #+title: {title_match.group(1)}")
                             return title_match.group(1)
-                    if not line.startswith('#'):
+
+                    # Check property drawer
+                    if line == ':PROPERTIES:':
+                        in_properties = True
+                        continue
+                    if line == ':END:':
+                        in_properties = False
+                        continue
+
+                    if in_properties:
+                        # Look for :DATE: or :CREATED: properties
+                        if line.startswith(':DATE:') or line.startswith(':CREATED:'):
+                            prop_value = line.split(':', 2)[2].strip()
+                            prop_match = re.search(r'(\d{4}-\d{2}-\d{2})', prop_value)
+                            if prop_match:
+                                log(f"Date from property drawer: {prop_match.group(1)}")
+                                return prop_match.group(1)
+
+                    # Stop reading after first heading or non-header content
+                    if not line.startswith('#') and not line.startswith(':') and not in_properties and line:
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"Error reading file content: {e}")
+
+    # Strategy 4: Use file modification time as fallback
+    try:
+        mtime = file_path.stat().st_mtime
+        date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+        log(f"Date from mtime fallback: {date_str}")
+        return date_str
+    except Exception as e:
+        log(f"Error getting mtime: {e}")
 
     return None
 
@@ -120,7 +188,7 @@ def embed_document(
         return False
 
     # Extract date
-    date_extracted = extract_date_from_file(file_path)
+    date_extracted = extract_date_from_file(file_path, logger=logger)
 
     # Save to database
     try:

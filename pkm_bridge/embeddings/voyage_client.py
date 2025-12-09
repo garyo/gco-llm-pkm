@@ -24,15 +24,15 @@ class EmbeddingResult:
 class VoyageClient:
     """Wrapper for Voyage AI API with batching and error handling."""
 
-    # Voyage pricing (as of Dec 2024)
-    PRICE_PER_MILLION_TOKENS = 0.06  # $0.06 per 1M tokens for voyage-3
+    # Voyage pricing (as of May 2025)
+    PRICE_PER_MILLION_TOKENS = 0.06  # $0.06 per 1M tokens for voyage-3.5
 
-    def __init__(self, api_key: str, model: str = "voyage-3"):
+    def __init__(self, api_key: str, model: str = "voyage-3.5"):
         """Initialize Voyage client.
 
         Args:
             api_key: Voyage AI API key
-            model: Model to use (default: voyage-3)
+            model: Model to use (default: voyage-3.5)
         """
         self.api_key = api_key
         self.model = model

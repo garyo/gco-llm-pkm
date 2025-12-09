@@ -203,7 +203,7 @@ class DocumentChunk(Base):
     start_line = Column(Integer, nullable=True)  # Line number in original file
     token_count = Column(Integer, nullable=False)  # Approximate tokens
 
-    # pgvector embedding (voyage-3 uses 1024 dimensions)
+    # pgvector embedding (voyage-3.5 uses 1024 dimensions)
     embedding = Column(Vector(1024), nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

@@ -16,7 +16,7 @@ The PKM system uses **Retrieval-Augmented Generation (RAG)** to automatically pr
 ### Components
 
 1. **PostgreSQL with pgvector**: Stores document chunks and their vector embeddings
-2. **Voyage AI (voyage-3)**: Generates 1024-dimensional embeddings for text chunks
+2. **Voyage AI (voyage-3.5)**: Generates 1024-dimensional embeddings for text chunks
 3. **Semantic Chunker**: Splits notes into coherent chunks (500-800 tokens)
 4. **Context Retriever**: Automatically retrieves relevant chunks for each query
 5. **APScheduler**: Runs incremental embedding updates daily

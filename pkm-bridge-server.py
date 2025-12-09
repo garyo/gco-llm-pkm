@@ -461,12 +461,13 @@ def query():
             try:
                 # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
                 # This provides temporal context for "what I did yesterday" queries
+                # NOTE: Not cached since it changes daily
                 recent_journals_text = context_retriever.retrieve_and_format_recent(days=rag_recent_days)
                 if recent_journals_text:
                     recent_block = {
                         "type": "text",
-                        "text": recent_journals_text,
-                        "cache_control": {"type": "ephemeral"}  # Cache recent journals
+                        "text": recent_journals_text
+                        # No cache_control - changes daily, not worth caching
                     }
                     system_prompt_blocks.insert(-1, recent_block)
                     logger.info(f"📅 Added recent journals context ({len(recent_journals_text)} chars)")

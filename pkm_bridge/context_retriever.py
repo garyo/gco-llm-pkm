@@ -160,3 +160,128 @@ class ContextRetriever:
         """
         chunks = self.retrieve_context(query, limit, min_similarity)
         return self.format_as_context_block(chunks)
+
+    def retrieve_recent_journals(self, days: int = 3) -> List[Dict[str, Any]]:
+        """Retrieve recent journal entries (last N days) from files directly.
+
+        Uses the same file discovery as embedding service (ripgrep with .gitignore).
+
+        Args:
+            days: Number of recent days to retrieve
+
+        Returns:
+            List of documents with their content, sorted by date (newest first)
+        """
+        from datetime import datetime, timedelta
+        from pathlib import Path
+        import os
+        import re
+
+        # Reuse find_note_files from embedding service
+        from pkm_bridge.embeddings.embedding_service import find_note_files
+
+        # Get directory paths from environment
+        org_dir = Path(os.getenv('ORG_DIR', ''))
+        logseq_dir = Path(os.getenv('LOGSEQ_DIR', ''))
+
+        directories = [d for d in [org_dir, logseq_dir] if d.exists()]
+        if not directories:
+            logger.warning("Neither ORG_DIR nor LOGSEQ_DIR found")
+            return []
+
+        # Find all note files (respects .gitignore via ripgrep)
+        all_files = find_note_files(directories, logger=logger)
+
+        # Calculate cutoff date
+        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_timestamp = cutoff_date.timestamp()
+
+        journals = []
+
+        # Filter for recent journal files only
+        for file_path in all_files:
+            # Check if this is a journal file (contains /journals/ in path)
+            if '/journals/' not in str(file_path):
+                continue
+
+            # Check if file is recent enough (by mtime)
+            if file_path.stat().st_mtime < cutoff_timestamp:
+                continue
+
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Extract date from filename
+                # Org: YYYY-MM-DD.org
+                # Logseq: YYYY_MM_DD.md
+                if file_path.suffix == '.org':
+                    date_str = file_path.stem  # Already in YYYY-MM-DD format
+                    file_type = 'org'
+                else:  # .md
+                    date_str = file_path.stem.replace('_', '-')  # Convert YYYY_MM_DD to YYYY-MM-DD
+                    file_type = 'md'
+
+                journals.append({
+                    'date': date_str,
+                    'file_path': str(file_path),
+                    'content': content,
+                    'file_type': file_type
+                })
+            except Exception as e:
+                logger.warning(f"Failed to read {file_path}: {e}")
+
+        # Sort by date, newest first
+        journals.sort(key=lambda x: x['date'], reverse=True)
+
+        logger.info(f"Retrieved {len(journals)} journal entries from last {days} days (from files)")
+        return journals
+
+    def format_recent_journals(self, journals: List[Dict[str, Any]]) -> str:
+        """Format recent journal entries as a context block.
+
+        Args:
+            journals: List of journal dictionaries
+
+        Returns:
+            Formatted markdown string
+        """
+        if not journals:
+            return ""
+
+        from pathlib import Path
+
+        lines = [
+            "# RECENT JOURNAL ENTRIES",
+            "",
+            "The following are your most recent daily journal entries.",
+            "These provide temporal context for recent activities and thoughts.",
+            ""
+        ]
+
+        for journal in journals:
+            # Format date nicely
+            date_str = journal['date']
+            filename = Path(journal['file_path']).name
+
+            lines.append(f"## {date_str}")
+            lines.append(f"**File:** {filename}")
+            lines.append("")
+            lines.append(journal['content'])
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def retrieve_and_format_recent(self, days: int = 3) -> str:
+        """Convenience method: retrieve and format recent journals.
+
+        Args:
+            days: Number of recent days
+
+        Returns:
+            Formatted context block (empty string if no results)
+        """
+        journals = self.retrieve_recent_journals(days)
+        return self.format_recent_journals(journals)

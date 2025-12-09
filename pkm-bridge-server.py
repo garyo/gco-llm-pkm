@@ -114,6 +114,7 @@ voice_preprocessor = VoicePreprocessor(client)
 
 # Initialize RAG components (if Voyage API key available)
 voyage_api_key = os.getenv('VOYAGE_API_KEY')
+rag_recent_days = int(os.getenv('RAG_RECENT_DAYS', '3'))  # Number of recent days to include
 voyage_client = None
 context_retriever = None
 embedding_scheduler = None
@@ -128,15 +129,15 @@ if voyage_api_key:
         embedding_scheduler = BackgroundScheduler()
         embedding_scheduler.add_job(
             func=run_incremental_embedding,
-            trigger="cron",
-            hour=3,  # Run at 3am daily
+            trigger="interval",
+            hours=1,  # Run every hour
             args=[logger, voyage_client, config],
             id='incremental_embedding',
             name='Incremental note embedding',
             misfire_grace_time=3600  # Allow 1 hour grace if server was down
         )
         embedding_scheduler.start()
-        logger.info("Background embedding scheduler started (runs daily at 3am)")
+        logger.info("Background embedding scheduler started (runs hourly)")
     except Exception as e:
         logger.warning(f"Failed to initialize Voyage client: {e}")
 else:
@@ -458,6 +459,19 @@ def query():
         # NEW: Auto-retrieve relevant note context for RAG
         if context_retriever:
             try:
+                # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
+                # This provides temporal context for "what I did yesterday" queries
+                recent_journals_text = context_retriever.retrieve_and_format_recent(days=rag_recent_days)
+                if recent_journals_text:
+                    recent_block = {
+                        "type": "text",
+                        "text": recent_journals_text,
+                        "cache_control": {"type": "ephemeral"}  # Cache recent journals
+                    }
+                    system_prompt_blocks.insert(-1, recent_block)
+                    logger.info(f"📅 Added recent journals context ({len(recent_journals_text)} chars)")
+
+                # 2. Retrieve semantically relevant chunks
                 context_block_text = context_retriever.retrieve_and_format(
                     query=user_message,
                     limit=12,
@@ -473,7 +487,7 @@ def query():
                         "cache_control": {"type": "ephemeral"}  # Cache retrieved context
                     }
                     system_prompt_blocks.insert(-1, context_block)
-                    logger.info(f"🔍 Auto-retrieved relevant context ({len(context_block_text)} chars)")
+                    logger.info(f"🔍 Auto-retrieved semantic context ({len(context_block_text)} chars)")
             except Exception as e:
                 logger.warning(f"Context retrieval failed: {e}")
 

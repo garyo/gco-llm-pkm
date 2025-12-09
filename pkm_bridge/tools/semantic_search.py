@@ -42,7 +42,7 @@ IMPORTANT: You already have auto-retrieved context in your system prompt. Only u
 Arguments:
 - query: natural language search query (describe what you're looking for)
 - limit: maximum results to return (default: 10)
-- min_similarity: minimum similarity threshold 0-1 (default: 0.7, higher = more strict)
+- min_similarity: minimum similarity threshold 0-1 (default: 0.6, higher = more strict)
 - newer: optional YYYY-MM-DD date filter (only return notes >= this date)
 
 Returns YAML with:
@@ -73,7 +73,7 @@ Results are sorted by similarity (most similar first).
                 },
                 "min_similarity": {
                     "type": "number",
-                    "default": 0.7,
+                    "default": 0.6,
                     "description": "Minimum similarity threshold (0-1)"
                 },
                 "newer": {
@@ -96,7 +96,7 @@ Results are sorted by similarity (most similar first).
         """
         query = params["query"]
         limit = params.get("limit", 10)
-        min_similarity = params.get("min_similarity", 0.7)
+        min_similarity = params.get("min_similarity", 0.6)
         newer_date = params.get("newer")
 
         self.logger.info(f"Semantic search: '{query[:50]}...' (limit={limit}, min_sim={min_similarity})")

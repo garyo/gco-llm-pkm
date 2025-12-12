@@ -29,7 +29,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - network first, cache fallback for static assets
+// Fetch event - network first with timeout, cache fallback for static assets
 self.addEventListener('fetch', (event) => {
   // Skip non-GET requests
   if (event.request.method !== 'GET') return;
@@ -42,7 +42,12 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(
-    fetch(event.request)
+    Promise.race([
+      fetch(event.request),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Network timeout')), 5000)
+      )
+    ])
       .then(response => {
         // Cache successful responses
         if (response.ok) {
@@ -54,7 +59,7 @@ self.addEventListener('fetch', (event) => {
         return response;
       })
       .catch(() => {
-        // Network failed, try cache
+        // Network failed or timed out, try cache
         return caches.match(event.request);
       })
   );

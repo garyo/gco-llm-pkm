@@ -448,6 +448,61 @@
   let cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
   let cachedAutoSaveDelay = parseInt(localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000');
 
+  // Fetch with timeout to prevent hanging on poor connectivity
+  function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    return fetch(url, { ...options, signal: controller.signal })
+      .finally(() => clearTimeout(timeout));
+  }
+
+  // Verify if a save actually completed despite timeout
+  async function verifySaveCompleted(filepath: string, expectedContent: string): Promise<boolean> {
+    // Skip verification if offline - no point waiting for another timeout
+    if (!navigator.onLine) {
+      console.log('Skipping save verification - offline');
+      return false;
+    }
+
+    try {
+      // Fetch the file from server to check if it was saved
+      // Use short timeout - if network is slow, we'll know quickly
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}`, {
+        headers: getAuthHeaders()
+      }, 3000);
+
+      if (!res.ok) return false;
+
+      const data = await res.json();
+
+      // Compare content to see if our save went through
+      return data.content === expectedContent;
+    } catch (e) {
+      console.error('Failed to verify save:', e);
+      return false;
+    }
+  }
+
+  // Check if a backup file was created
+  async function checkBackupExists(backupPath: string): Promise<boolean> {
+    // Skip verification if offline
+    if (!navigator.onLine) {
+      console.log('Skipping backup verification - offline');
+      return false;
+    }
+
+    try {
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(backupPath)}`, {
+        headers: getAuthHeaders()
+      }, 3000); // Short timeout
+
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // DOM elements
   const editorContainer = document.getElementById('editor-container')!;
   const fileSelector = document.getElementById('file-selector') as HTMLSelectElement;
@@ -578,9 +633,9 @@
   // Load all files from backend
   async function loadFileList() {
     try {
-      const res = await fetch('/api/files', {
+      const res = await fetchWithTimeout('/api/files', {
         headers: getAuthHeaders()
-      });
+      }, 15000);
 
       if (!res.ok) {
         throw new Error(`Failed to load files: ${res.status}`);
@@ -683,9 +738,9 @@
     try {
       updateStatus('Loading...');
 
-      const res = await fetch(`/api/file/${encodeURIComponent(filepath)}`, {
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}`, {
         headers: getAuthHeaders()
-      });
+      }, 15000);
 
       if (!res.ok) {
         throw new Error(`Failed to load file: ${res.status}`);
@@ -764,11 +819,11 @@
 
       const content = editorView.state.doc.toString();
 
-      const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({ content })
-      });
+      }, 30000); // 30s timeout for saves
 
       if (!res.ok) {
         throw new Error(`Failed to save file: ${res.status}`);
@@ -789,9 +844,29 @@
         }
       }, 500);
     } catch (e: any) {
-      updateStatus(`Error saving file: ${e.message}`, true);
-      console.error('Failed to save file:', e);
-      saveButton.disabled = false;
+      // If timeout, verify if save actually completed
+      if (e.name === 'AbortError') {
+        updateStatus('Save timed out, verifying...', true);
+
+        const verified = await verifySaveCompleted(currentFile, content);
+
+        if (verified) {
+          // Save actually succeeded despite timeout
+          updateStatus('Saved (response was slow)');
+          isDirty = false;
+          saveButton.disabled = true;
+          currentFileMtime = Date.now() / 1000; // Approximate, but better than nothing
+        } else {
+          // Save genuinely failed or couldn't verify
+          updateStatus('⚠️ Save timed out. Verify file before closing!', true);
+          saveButton.disabled = false;
+        }
+      } else {
+        // Other error (not timeout)
+        updateStatus(`Error saving file: ${e.message}`, true);
+        console.error('Failed to save file:', e);
+        saveButton.disabled = false;
+      }
     } finally {
       saveInProgress = false;
     }
@@ -895,11 +970,11 @@
       updateStatus('Auto-saving...');
       const content = editorView.state.doc.toString();
 
-      const res = await fetch(`/api/file/${encodeURIComponent(currentFile)}`, {
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({ content })
-      });
+      }, 30000); // 30s timeout for auto-saves
 
       if (!res.ok) {
         throw new Error(`Failed to save: ${res.status}`);
@@ -919,8 +994,29 @@
       // Start updating "X seconds ago"
       startStatusUpdateTimer();
     } catch (e: any) {
-      updateStatus(`Auto-save failed: ${e.message}`, true);
-      console.error('Auto-save error:', e);
+      // If timeout, verify if save actually completed
+      if (e.name === 'AbortError') {
+        updateStatus('Auto-save timed out, verifying...', true);
+
+        const content = editorView!.state.doc.toString();
+        const verified = await verifySaveCompleted(currentFile, content);
+
+        if (verified) {
+          // Save actually succeeded despite timeout
+          updateStatus('Auto-saved (response was slow)');
+          isDirty = false;
+          lastSaveTime = Date.now();
+          saveButton.disabled = true;
+          startStatusUpdateTimer();
+        } else {
+          // Save genuinely failed or couldn't verify
+          updateStatus('⚠️ Auto-save timed out. Manual save recommended.', true);
+        }
+      } else {
+        // Other error (not timeout)
+        updateStatus(`Auto-save failed: ${e.message}`, true);
+        console.error('Auto-save error:', e);
+      }
     } finally {
       // Always clear the flag, even on error
       saveInProgress = false;
@@ -1016,11 +1112,11 @@
     try {
       updateStatus('Creating backup...');
 
-      const res = await fetch(`/api/file/${encodeURIComponent(backupPath)}`, {
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(backupPath)}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({ content })
-      });
+      }, 30000);
 
       if (!res.ok) {
         throw new Error(`Failed to create backup: ${res.status}`);
@@ -1029,8 +1125,21 @@
       const filename = backupPath.split('/').pop() || 'backup';
       updateStatus(`Backup created: ${filename}`);
     } catch (e: any) {
-      console.error('Failed to create backup:', e);
-      updateStatus('Failed to create backup', true);
+      if (e.name === 'AbortError') {
+        updateStatus('Backup timed out, verifying...', true);
+
+        const exists = await checkBackupExists(backupPath);
+
+        if (exists) {
+          const filename = backupPath.split('/').pop() || 'backup';
+          updateStatus(`Backup created: ${filename} (response was slow)`);
+        } else {
+          updateStatus('⚠️ Backup creation timed out. Backup may not exist.', true);
+        }
+      } else {
+        console.error('Failed to create backup:', e);
+        updateStatus('Failed to create backup', true);
+      }
     }
   }
 
@@ -1288,11 +1397,11 @@
 
     try {
       // Create the file
-      const res = await fetch(`/api/file/${encodeURIComponent(filepath)}`, {
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({ content: template })
-      });
+      }, 15000);
 
       if (!res.ok) {
         throw new Error(`Failed to create journal: ${res.status}`);

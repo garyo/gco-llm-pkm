@@ -220,6 +220,15 @@ import EditorInterface from '../components/EditorInterface.astro';
   let inactivityTimeout: number | null = null;  // Timer for auto-send after speech stops
   let lastFinalText = '';  // Track last final text to avoid duplicates
 
+  // Fetch with timeout to prevent hanging on poor connectivity
+  function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    return fetch(url, { ...options, signal: controller.signal })
+      .finally(() => clearTimeout(timeout));
+  }
+
   // Handle login
   async function handleLogin(event: Event) {
     event.preventDefault();
@@ -229,11 +238,11 @@ import EditorInterface from '../components/EditorInterface.astro';
     loginError.classList.add('hidden');
 
     try {
-      const res = await fetch('/login', {
+      const res = await fetchWithTimeout('/login', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({password})
-      });
+      }, 10000);
 
       const data = await res.json();
 
@@ -521,11 +530,11 @@ import EditorInterface from '../components/EditorInterface.astro';
     }
 
     try {
-      const res = await fetch('/verify-token', {
+      const res = await fetchWithTimeout('/verify-token', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({token: authToken})
-      });
+      }, 10000);
 
       const data = await res.json();
 
@@ -627,11 +636,11 @@ import EditorInterface from '../components/EditorInterface.astro';
       // Reset voice flag after using it
       isVoiceMessage = false;
 
-      const res = await fetch('/query', {
+      const res = await fetchWithTimeout('/query', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(requestBody)
-      });
+      }, 60000); // 60s timeout for streaming queries
 
       if (res.status === 401) {
         handle401();
@@ -663,7 +672,68 @@ import EditorInterface from '../components/EditorInterface.astro';
     } catch (e: any) {
       loading.classList.add('hidden');
       loading.classList.remove('flex');
-      appendMessage('assistant', '❌ Error: ' + e.message);
+
+      if (e.name === 'AbortError') {
+        // Query timed out - verify if it completed on server
+        // Skip verification if offline - recovery will be faster
+        if (!navigator.onLine) {
+          appendMessage('assistant', '❌ Query timed out (offline)');
+          return;
+        }
+
+        appendMessage('assistant', '⏱️ Response timed out, checking server...');
+
+        try {
+          // Count messages before reload
+          const messagesBefore = chat.querySelectorAll('.message').length;
+
+          // Reload history to sync with server state
+          // Use short timeout to fail fast if network is still down
+          const res = await fetchWithTimeout(`/sessions/${sessionId}/history`, {
+            headers: getAuthHeaders()
+          }, 3000);
+
+          if (res.ok) {
+            const history = await res.json();
+
+            // Check if there are new messages (query completed on server)
+            if (history.length > messagesBefore) {
+              // Clear chat and reload all history
+              const messages = chat.querySelectorAll('.message');
+              messages.forEach(msg => msg.remove());
+
+              history.forEach((msg: any) => appendMessage(msg.role, msg.text));
+
+              // Remove the timeout message and show success
+              const timeoutMsg = chat.querySelector('.message.assistant:last-child');
+              if (timeoutMsg && timeoutMsg.textContent?.includes('timed out')) {
+                timeoutMsg.remove();
+              }
+              appendMessage('assistant', 'ℹ️ Response received (connection was slow)');
+            } else {
+              // Query truly failed - update timeout message
+              const timeoutMsg = chat.querySelector('.message.assistant:last-child');
+              if (timeoutMsg) {
+                timeoutMsg.textContent = '❌ Query timed out and did not complete on server';
+              }
+            }
+          } else {
+            // Couldn't verify - show warning
+            const timeoutMsg = chat.querySelector('.message.assistant:last-child');
+            if (timeoutMsg) {
+              timeoutMsg.textContent = '⚠️ Query timed out. Could not verify server state.';
+            }
+          }
+        } catch (verifyError) {
+          console.error('Failed to verify query completion:', verifyError);
+          const timeoutMsg = chat.querySelector('.message.assistant:last-child');
+          if (timeoutMsg) {
+            timeoutMsg.textContent = '⚠️ Query timed out. Could not verify server state.';
+          }
+        }
+      } else {
+        appendMessage('assistant', '❌ Error: ' + e.message);
+      }
     } finally {
       input.disabled = false;
       sendBtn.disabled = false;
@@ -715,9 +785,9 @@ import EditorInterface from '../components/EditorInterface.astro';
     sessionList.innerHTML = '<div class="text-center text-gray-500 py-8">Loading sessions...</div>';
 
     try {
-      const res = await fetch('/sessions', {
+      const res = await fetchWithTimeout('/sessions', {
         headers: getAuthHeaders()
-      });
+      }, 15000);
 
       if (res.status === 401) {
         handle401();
@@ -818,9 +888,9 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Load conversation history
   async function loadHistory() {
     try {
-      const res = await fetch(`/sessions/${sessionId}/history`, {
+      const res = await fetchWithTimeout(`/sessions/${sessionId}/history`, {
         headers: getAuthHeaders()
-      });
+      }, 15000);
 
       if (res.status === 401) {
         handle401();
@@ -1100,6 +1170,41 @@ import EditorInterface from '../components/EditorInterface.astro';
     div.textContent = text;
     return div.innerHTML;
   }
+
+  // Handle network connectivity changes
+  window.addEventListener('online', () => {
+    console.log('Network back online, forcing reconnect');
+
+    // Update UI
+    const statusBar = document.getElementById('status-bar');
+    const editorStatus = document.getElementById('editor-status');
+    if (statusBar && !statusBar.classList.contains('hidden')) {
+      if (editorStatus) {
+        editorStatus.textContent = 'Network reconnected';
+        editorStatus.style.color = 'inherit';
+      }
+    }
+
+    // Force SSE reconnect in editor
+    const reconnectSSE = (window as any).reconnectSSEForNewSession;
+    if (reconnectSSE) {
+      reconnectSSE();
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    console.log('Network offline');
+
+    // Update UI
+    const statusBar = document.getElementById('status-bar');
+    const editorStatus = document.getElementById('editor-status');
+    if (statusBar && !statusBar.classList.contains('hidden')) {
+      if (editorStatus) {
+        editorStatus.textContent = 'No internet connection';
+        editorStatus.style.color = '#ef4444';
+      }
+    }
+  });
 
   // Make functions globally available
   (window as any).send = send;

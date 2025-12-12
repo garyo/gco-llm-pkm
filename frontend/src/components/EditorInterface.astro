@@ -4,22 +4,55 @@
 
 <div id="editor-app" class="hidden flex flex-col h-full">
   <!-- File Selector with Filters -->
-  <div class="bg-gray-50 px-4 py-3 border-b">
-    <div class="flex flex-wrap items-center gap-3">
-      <label class="text-sm font-medium text-gray-700">Source:</label>
+  <div class="bg-gray-50 px-2 sm:px-4 py-2 sm:py-3 border-b">
+    <!-- Mobile: Only Today + Disclosure -->
+    <div class="flex items-center gap-2 sm:hidden mb-2">
+      <button
+        id="today-button"
+        class="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm font-medium whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-blue-500"
+        title="Open today's journal"
+      >
+        📅 Today
+      </button>
+
+      <button
+        id="filter-toggle"
+        class="px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+        title="Show/hide file filters"
+      >
+        <svg class="w-4 h-4 transition-transform" id="filter-toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+        </svg>
+      </button>
+
+      <span id="file-count-mobile" class="text-xs text-gray-500 ml-auto"></span>
+    </div>
+
+    <!-- Filter Controls (collapsible on mobile, always visible on desktop) -->
+    <div id="filter-controls" class="hidden sm:flex flex-wrap items-center gap-2 sm:gap-3">
+      <!-- Desktop: Today button in same row -->
+      <button
+        id="today-button-desktop"
+        class="hidden sm:inline-block px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm font-medium whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-blue-500"
+        title="Open today's journal"
+      >
+        📅 Today
+      </button>
+
+      <label class="hidden sm:inline text-sm font-medium text-gray-700">Source:</label>
       <select
         id="source-filter"
-        class="px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+        class="px-2 sm:px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
       >
         <option value="all">All</option>
         <option value="org">Org</option>
         <option value="logseq">Logseq</option>
       </select>
 
-      <label class="text-sm font-medium text-gray-700">Type:</label>
+      <label class="hidden sm:inline text-sm font-medium text-gray-700">Type:</label>
       <select
         id="type-filter"
-        class="px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+        class="px-2 sm:px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
       >
         <option value="all">All</option>
         <option value="journal">Journals</option>
@@ -30,19 +63,19 @@
       <input
         id="search-filter"
         type="text"
-        placeholder="Filter filenames..."
-        class="w-48 px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+        placeholder="Filter..."
+        class="w-24 sm:w-48 px-2 sm:px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
       />
 
-      <label for="file-selector" class="text-sm font-medium text-gray-700">File:</label>
+      <label for="file-selector" class="hidden sm:inline text-sm font-medium text-gray-700">File:</label>
       <select
         id="file-selector"
-        class="min-w-64 flex-1 px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+        class="min-w-0 flex-1 px-2 sm:px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500 truncate"
       >
-        <option value="">Select a file...</option>
+        <option value="">Select file...</option>
       </select>
 
-      <span id="file-count" class="text-sm text-gray-500 whitespace-nowrap"></span>
+      <span id="file-count" class="hidden sm:inline text-xs sm:text-sm text-gray-500 whitespace-nowrap"></span>
     </div>
 
     <!-- Current File Display -->
@@ -621,7 +654,14 @@
     addGroup('Logseq Pages', logseqPages);
     addGroup('Logseq Other', logseqOther);
 
-    fileCount.textContent = `${sorted.length} file${sorted.length !== 1 ? 's' : ''}`;
+    const countText = `${sorted.length} file${sorted.length !== 1 ? 's' : ''}`;
+    fileCount.textContent = countText;
+
+    // Update mobile file count too
+    const fileCountMobile = document.getElementById('file-count-mobile');
+    if (fileCountMobile) {
+      fileCountMobile.textContent = countText;
+    }
   }
 
   // Load file content
@@ -701,6 +741,9 @@
       const size = (data.size / 1024).toFixed(1);
       const fileType = filepath.endsWith('.org') ? 'Org' : 'Markdown';
       updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
+
+      // Auto-collapse filters on mobile after loading a file
+      closeFilterControls();
     } catch (e: any) {
       updateStatus(`Error loading file: ${e.message}`, true);
       updateFileDisplay(null);
@@ -1193,7 +1236,133 @@
     }, 100);
   }
 
+  // Open today's journal file (create if doesn't exist)
+  async function openTodayJournal() {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+
+    // Get day name (e.g., "Thu")
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayName = dayNames[today.getDay()];
+
+    // Try to find today's journal in org format first, then logseq
+    const orgJournal = allFiles.find((f: any) =>
+      f.type === 'journal' && f.dir === 'org' && f.name.includes(dateStr)
+    );
+    const logseqJournal = allFiles.find((f: any) =>
+      f.type === 'journal' && f.dir === 'logseq' && f.name.includes(dateStr.replace(/-/g, '_'))
+    );
+
+    const todayFile = orgJournal || logseqJournal;
+
+    if (todayFile) {
+      // File exists, just open it
+      fileSelector.value = todayFile.full_path;
+      loadFile(todayFile.full_path);
+    } else {
+      // Create new journal file with standard template
+      await createTodayJournal(dateStr, dayName);
+    }
+  }
+
+  // Create today's journal file with standard template
+  async function createTodayJournal(dateStr: string, dayName: string) {
+    updateStatus('Creating today\'s journal...');
+
+    // Generate UUID (simple version for ID field)
+    const uuid = crypto.randomUUID().toUpperCase();
+
+    // Standard journal template
+    const template = `#+title: ${dateStr}
+
+* <${dateStr} ${dayName}>
+:PROPERTIES:
+:ID:       ${uuid}
+:END:
+`;
+
+    const filepath = `org:journals/${dateStr}.org`;
+
+    try {
+      // Create the file
+      const res = await fetch(`/api/file/${encodeURIComponent(filepath)}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ content: template })
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to create journal: ${res.status}`);
+      }
+
+      updateStatus(`Created today's journal`);
+
+      // Refresh file list to include the new file
+      await loadFileList();
+
+      // Open the newly created file
+      fileSelector.value = filepath;
+      await loadFile(filepath);
+    } catch (e: any) {
+      updateStatus(`Error creating journal: ${e.message}`, true);
+      console.error('Failed to create journal:', e);
+    }
+  }
+
+  // Toggle filter controls on mobile
+  function toggleFilterControls() {
+    const filterControls = document.getElementById('filter-controls');
+    const toggleIcon = document.getElementById('filter-toggle-icon');
+
+    if (filterControls && toggleIcon) {
+      const isHidden = filterControls.classList.contains('hidden');
+
+      if (isHidden) {
+        filterControls.classList.remove('hidden');
+        filterControls.classList.add('flex');
+        toggleIcon.style.transform = 'rotate(90deg)';
+      } else {
+        filterControls.classList.add('hidden');
+        filterControls.classList.remove('flex');
+        toggleIcon.style.transform = 'rotate(0deg)';
+      }
+    }
+  }
+
+  // Close filter controls on mobile (if open)
+  function closeFilterControls() {
+    const filterControls = document.getElementById('filter-controls');
+    const toggleIcon = document.getElementById('filter-toggle-icon');
+
+    if (filterControls && toggleIcon) {
+      const isVisible = !filterControls.classList.contains('hidden');
+
+      if (isVisible) {
+        filterControls.classList.add('hidden');
+        filterControls.classList.remove('flex');
+        toggleIcon.style.transform = 'rotate(0deg)';
+      }
+    }
+  }
+
   // Event handlers
+  const todayButton = document.getElementById('today-button');
+  const todayButtonDesktop = document.getElementById('today-button-desktop');
+  const filterToggle = document.getElementById('filter-toggle');
+
+  if (todayButton) {
+    todayButton.addEventListener('click', openTodayJournal);
+  }
+  if (todayButtonDesktop) {
+    todayButtonDesktop.addEventListener('click', openTodayJournal);
+  }
+  if (filterToggle) {
+    filterToggle.addEventListener('click', toggleFilterControls);
+  }
+
   fileSelector.addEventListener('change', () => {
     const filepath = fileSelector.value;
     if (filepath) {

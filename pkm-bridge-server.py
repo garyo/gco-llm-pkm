@@ -586,7 +586,7 @@ def query():
                     # Capture start time for tool execution logging
                     start_time = time.time()
 
-                    with timer(f"Tool execution: {block.name}"):
+                    with timer(f"<<< Tool execution: {block.name}"):
                         # Pass session_id and user_timezone in context for tools that need it
                         context = {
                             "session_id": session_id,

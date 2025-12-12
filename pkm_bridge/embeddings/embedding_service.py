@@ -355,7 +355,7 @@ def run_incremental_embedding(logger, voyage_client: VoyageClient, config: Confi
     finally:
         db.close()
 
-    logger.info(f"✅ Embedding complete: {embedded_count} embedded, {skipped_count} skipped, {error_count} errors")
+    logger.info(f"✅ Incremental embedding complete: {embedded_count} embedded, {skipped_count} skipped, {error_count} errors")
 
     return {
         "embedded_count": embedded_count,

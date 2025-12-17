@@ -1,10 +1,12 @@
 // Simple service worker for PWA support
 const BUILD_TIMESTAMP = '__BUILD_TIMESTAMP__'; // Replaced during build
 const CACHE_NAME = `pkm-assistant-${BUILD_TIMESTAMP}`;
+const OFFLINE_PAGE = '/offline.html';
 const STATIC_ASSETS = [
   '/',
   '/favicon.svg',
-  '/manifest.json'
+  '/manifest.json',
+  OFFLINE_PAGE
 ];
 
 // Install event - cache static assets
@@ -41,6 +43,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Check if this is a navigation request (page load)
+  const isNavigationRequest = event.request.mode === 'navigate';
+
   event.respondWith(
     Promise.race([
       fetch(event.request),
@@ -58,9 +63,25 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => {
+      .catch(async () => {
         // Network failed or timed out, try cache
-        return caches.match(event.request);
+        const cachedResponse = await caches.match(event.request);
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        // For navigation requests, show offline page instead of blank screen
+        if (isNavigationRequest) {
+          const offlineResponse = await caches.match(OFFLINE_PAGE);
+          if (offlineResponse) {
+            return offlineResponse;
+          }
+        }
+        // Return a basic error response as last resort
+        return new Response('Offline - please check your connection', {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: { 'Content-Type': 'text/plain' }
+        });
       })
   );
 });

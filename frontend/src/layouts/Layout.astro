@@ -36,6 +36,74 @@ const { title = 'GCO PKM Assistant' } = Astro.props;
         });
       }
     </script>
+
+    <!-- PWA Recovery: Handle wake from sleep/background -->
+    <script>
+      (function() {
+        let lastActiveTime = Date.now();
+        let pageFullyLoaded = false;
+
+        // Track when page is fully loaded
+        window.addEventListener('load', () => {
+          pageFullyLoaded = true;
+          lastActiveTime = Date.now();
+        });
+
+        // Update activity timestamp periodically
+        setInterval(() => {
+          if (document.visibilityState === 'visible') {
+            lastActiveTime = Date.now();
+          }
+        }, 10000);
+
+        // Handle wake from sleep/background
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            const sleepDuration = Date.now() - lastActiveTime;
+            console.log(`PWA woke after ${Math.floor(sleepDuration / 1000)}s`);
+
+            // If we've been asleep for more than 5 minutes, check page health
+            if (sleepDuration > 300000) {
+              // Check if the page seems functional
+              const mainContent = document.querySelector('main, #app, .container, form');
+              if (!mainContent || !document.body.innerHTML.trim()) {
+                console.warn('Page appears stuck after wake, reloading...');
+                location.reload();
+                return;
+              }
+            }
+
+            lastActiveTime = Date.now();
+          }
+        });
+
+        // Handle network changes that might leave page in bad state
+        window.addEventListener('online', () => {
+          const timeSinceActive = Date.now() - lastActiveTime;
+          // If we just came back online after being inactive, consider reload
+          if (timeSinceActive > 60000) {
+            console.log('Network restored after inactivity, checking page state...');
+            // Give the page a moment to recover, then check
+            setTimeout(() => {
+              const mainContent = document.querySelector('main, #app, .container, form');
+              if (!mainContent) {
+                console.warn('Page appears broken after network restore, reloading...');
+                location.reload();
+              }
+            }, 2000);
+          }
+        });
+
+        // Global error handler - log but don't break the page
+        window.addEventListener('error', (e) => {
+          console.error('Global error:', e.message, e.filename, e.lineno);
+        });
+
+        window.addEventListener('unhandledrejection', (e) => {
+          console.error('Unhandled promise rejection:', e.reason);
+        });
+      })();
+    </script>
   </head>
   <body class="bg-gray-100">
     <slot />

@@ -1210,18 +1210,23 @@ def save_file(filepath):
     Args:
         filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
 
+    Query params:
+        create_only: If "true", only create the file if it doesn't exist (atomic)
+
     Request body:
         {"content": "file content here"}
 
     Returns:
-        JSON with status, path, modified timestamp
+        JSON with status, path, modified timestamp.
+        Status is 'saved' for new/updated files, 'exists' if create_only and file exists.
     """
     try:
         data = request.json
         if not data or 'content' not in data:
             return jsonify({"error": "Missing 'content' in request body"}), 400
 
-        result = file_editor.write_file(filepath, data['content'])
+        create_only = request.args.get('create_only', '').lower() == 'true'
+        result = file_editor.write_file(filepath, data['content'], create_only=create_only)
         return jsonify(result)
     except ValueError as e:
         logger.warning(f"Invalid file path for save: {filepath} - {str(e)}")

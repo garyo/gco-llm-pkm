@@ -1396,8 +1396,9 @@
     const filepath = `org:journals/${dateStr}.org`;
 
     try {
-      // Create the file
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}`, {
+      // Create the file atomically - if it already exists (e.g., synced from another device),
+      // the backend will return status: 'exists' and we'll just open the existing file
+      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}?create_only=true`, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({ content: template })
@@ -1407,12 +1408,18 @@
         throw new Error(`Failed to create journal: ${res.status}`);
       }
 
-      updateStatus(`Created today's journal`);
+      const result = await res.json();
 
-      // Refresh file list to include the new file
-      await loadFileList();
+      if (result.status === 'exists') {
+        // File already exists (possibly synced from another device) - just open it
+        updateStatus(`Opening today's journal`);
+      } else {
+        updateStatus(`Created today's journal`);
+        // Refresh file list to include the new file
+        await loadFileList();
+      }
 
-      // Open the newly created file
+      // Open the file
       fileSelector.value = filepath;
       await loadFile(filepath);
     } catch (e: any) {

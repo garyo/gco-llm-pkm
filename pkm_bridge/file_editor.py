@@ -165,15 +165,17 @@ class FileEditor:
             'size': full_path.stat().st_size
         }
 
-    def write_file(self, filepath: str, content: str) -> Dict[str, any]:
+    def write_file(self, filepath: str, content: str, create_only: bool = False) -> Dict[str, any]:
         """Write file content.
 
         Args:
             filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
             content: File content to write
+            create_only: If True, only create the file if it doesn't exist (atomic check)
 
         Returns:
-            Dict with status and modified timestamp
+            Dict with status and modified timestamp.
+            Status is 'saved' for new/updated files, 'exists' if create_only and file exists.
 
         Raises:
             ValueError: If file path is invalid
@@ -187,23 +189,42 @@ class FileEditor:
                 base_dir = self.logseq_dir
             else:
                 raise ValueError(f"Unknown directory type: {dir_type}")
-            
+
             full_path = (base_dir / rel_path).resolve()
         else:
             # Legacy: try to validate without prefix
             full_path = self.validate_path(filepath)
-        
+
         # Ensure parent directory exists
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Write file
-        full_path.write_text(content, encoding='utf-8')
-        
-        self.logger.info(f"Saved file: {filepath} ({len(content)} bytes)")
-        
-        return {
-            'status': 'saved',
-            'path': filepath,
-            'modified': full_path.stat().st_mtime,
-            'size': len(content)
-        }
+        if create_only:
+            # Use exclusive create mode - atomically fails if file exists
+            try:
+                with open(full_path, 'x', encoding='utf-8') as f:
+                    f.write(content)
+                self.logger.info(f"Created file: {filepath} ({len(content)} bytes)")
+                return {
+                    'status': 'saved',
+                    'path': filepath,
+                    'modified': full_path.stat().st_mtime,
+                    'size': len(content)
+                }
+            except FileExistsError:
+                self.logger.info(f"File already exists (create_only): {filepath}")
+                return {
+                    'status': 'exists',
+                    'path': filepath,
+                    'modified': full_path.stat().st_mtime,
+                    'size': full_path.stat().st_size
+                }
+        else:
+            full_path.write_text(content, encoding='utf-8')
+            self.logger.info(f"Saved file: {filepath} ({len(content)} bytes)")
+            return {
+                'status': 'saved',
+                'path': filepath,
+                'modified': full_path.stat().st_mtime,
+                'size': len(content)
+            }

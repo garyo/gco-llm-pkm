@@ -1384,13 +1384,17 @@ def toggle_checkbox():
             hint_idx = max(0, line_hint - 1)  # Convert to 0-indexed
 
             def is_checkbox_line(line: str, want_checked: bool) -> bool:
-                """Check if a line is a checkbox in the desired state."""
+                """Check if a line is a toggleable item in the desired state."""
                 stripped = line.strip()
                 if want_checked:
-                    # Looking to check: find unchecked boxes
-                    if stripped.startswith('- [ ]') or stripped.startswith('+ [ ]'):
+                    # Looking to check: find unchecked boxes or plain list items
+                    if stripped.startswith(('- [ ]', '+ [ ]')):
                         return True
                     if 'TODO' in stripped and stripped.lstrip('*').strip().startswith('TODO'):
+                        return True
+                    # Plain list items (- text) that aren't already checked
+                    if (stripped.startswith('- ') and
+                            not stripped.startswith(('- [x]', '- [X]', '- [ ]'))):
                         return True
                 else:
                     # Looking to uncheck: find checked boxes
@@ -1449,17 +1453,23 @@ def toggle_checkbox():
                                f"Lines {start+1}-{end} near hint:\n" + "\n".join(nearby))
                 return jsonify({"error": "Checkbox item not found in file"}), 404
 
-            # Toggle the checkbox
+            # Toggle the checkbox/list item
             line = lines[target_line]
+            stripped = line.strip()
             if checked:
-                # Check the box
-                line = line.replace('- [ ]', '- [x]', 1)
-                line = line.replace('TODO', 'DONE', 1)
+                if '- [ ]' in line:
+                    line = line.replace('- [ ]', '- [X]', 1)
+                elif 'TODO' in stripped:
+                    line = line.replace('TODO', 'DONE', 1)
+                elif stripped.startswith('- ') and not stripped.startswith(('- [', '- *')):
+                    # Plain list item: insert [X] after the dash
+                    line = line.replace('- ', '- [X] ', 1)
             else:
-                # Uncheck the box
-                line = line.replace('- [x]', '- [ ]', 1)
-                line = line.replace('- [X]', '- [ ]', 1)
-                line = line.replace('DONE', 'TODO', 1)
+                if '- [x]' in line or '- [X]' in line:
+                    line = line.replace('- [x]', '- [ ]', 1)
+                    line = line.replace('- [X]', '- [ ]', 1)
+                elif 'DONE' in stripped:
+                    line = line.replace('DONE', 'TODO', 1)
 
             lines[target_line] = line
             new_content = '\n'.join(lines)

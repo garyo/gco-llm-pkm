@@ -541,7 +541,8 @@ def query():
                     context_block = {
                         "type": "text",
                         "text": context_block_text,
-                        "cache_control": {"type": "ephemeral"}  # Cache retrieved context
+                        # Note: no cache_control here - RAG context changes per query
+                        # and the API limits cache_control to 4 blocks total
                     }
                     system_prompt_blocks.insert(-1, context_block)
                     had_rag_context = True

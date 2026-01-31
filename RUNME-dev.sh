@@ -44,7 +44,7 @@ run_plain() {
 }
 
 # --- Main logic ---
-if command -v zellij >/dev/null 2>&1; then
+if /bin/false && command -v zellij >/dev/null 2>&1; then
   run_in_zellij
 else
   run_plain

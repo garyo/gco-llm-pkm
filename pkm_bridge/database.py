@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from urllib.parse import quote_plus
-from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, JSON, Text, Index, ForeignKey
+from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, JSON, Text, Index, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from sqlalchemy.pool import QueuePool
 from pgvector.sqlalchemy import Vector
@@ -219,3 +219,61 @@ class DocumentChunk(Base):
         Index('idx_embedding_cosine', embedding, postgresql_using='ivfflat',
               postgresql_with={'lists': 100}, postgresql_ops={'embedding': 'vector_cosine_ops'}),
     )
+
+
+class QueryFeedback(Base):
+    """Capture per-query signals for the self-improvement retrospective."""
+    __tablename__ = 'query_feedback'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(255), nullable=False, index=True)
+    query_id = Column(String(100), nullable=False, unique=True, index=True)
+    user_message = Column(Text, nullable=False)
+
+    # RAG signals
+    had_rag_context = Column(Boolean, nullable=False, default=False)
+    rag_context_chars = Column(Integer, nullable=False, default=0)
+
+    # Tool usage signals
+    search_tools_used = Column(JSON, nullable=False, default=list)  # list of tool names
+    tool_error_count = Column(Integer, nullable=False, default=0)
+    total_tool_calls = Column(Integer, nullable=False, default=0)
+    api_call_count = Column(Integer, nullable=False, default=1)
+
+    # Derived signals
+    retrieval_miss = Column(Boolean, nullable=False, default=False)  # RAG present but Claude still searched
+    user_followup_correction = Column(Boolean, nullable=False, default=False)  # detected dissatisfaction
+
+    # Explicit feedback (for future use)
+    explicit_feedback = Column(String(20), nullable=True)  # 'positive', 'negative', etc.
+    feedback_note = Column(Text, nullable=True)
+
+    # Processing state
+    processed = Column(Boolean, nullable=False, default=False)
+    processed_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<QueryFeedback(query_id='{self.query_id}', miss={self.retrieval_miss}, correction={self.user_followup_correction})>"
+
+
+class LearnedRule(Base):
+    """Store learned patterns from retrospective analysis."""
+    __tablename__ = 'learned_rules'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rule_type = Column(String(30), nullable=False, index=True)  # 'retrieval', 'vocabulary', 'preference', 'embedding_gap', 'general'
+    rule_text = Column(Text, nullable=False)  # human-readable rule
+    rule_data = Column(JSON, nullable=True)  # structured data (e.g., term mappings)
+    confidence = Column(Float, nullable=False, default=0.5)
+    hit_count = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
+    source_query_ids = Column(JSON, nullable=True)  # list of query_ids that generated this
+    expires_at = Column(DateTime, nullable=True)
+    last_reinforced_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<LearnedRule(type='{self.rule_type}', confidence={self.confidence:.2f}, active={self.is_active})>"

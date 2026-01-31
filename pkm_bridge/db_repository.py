@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog
+from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog, QueryFeedback, LearnedRule
 
 
 class OAuthRepository:
@@ -356,3 +356,270 @@ class ToolExecutionLogRepository:
         ).delete()
         db.commit()
         return count
+
+
+class QueryFeedbackRepository:
+    """Repository for query feedback operations."""
+
+    @staticmethod
+    def create(
+        db: Session,
+        session_id: str,
+        query_id: str,
+        user_message: str,
+        had_rag_context: bool = False,
+        rag_context_chars: int = 0,
+        search_tools_used: Optional[List[str]] = None,
+        tool_error_count: int = 0,
+        total_tool_calls: int = 0,
+        api_call_count: int = 1,
+        retrieval_miss: bool = False,
+        user_followup_correction: bool = False,
+        explicit_feedback: Optional[str] = None,
+        feedback_note: Optional[str] = None,
+    ) -> QueryFeedback:
+        """Create a new query feedback record."""
+        feedback = QueryFeedback(
+            session_id=session_id,
+            query_id=query_id,
+            user_message=user_message,
+            had_rag_context=had_rag_context,
+            rag_context_chars=rag_context_chars,
+            search_tools_used=search_tools_used or [],
+            tool_error_count=tool_error_count,
+            total_tool_calls=total_tool_calls,
+            api_call_count=api_call_count,
+            retrieval_miss=retrieval_miss,
+            user_followup_correction=user_followup_correction,
+            explicit_feedback=explicit_feedback,
+            feedback_note=feedback_note,
+        )
+        db.add(feedback)
+        db.commit()
+        db.refresh(feedback)
+        return feedback
+
+    @staticmethod
+    def get_unprocessed(db: Session, limit: int = 200) -> List[QueryFeedback]:
+        """Get unprocessed feedback records for retrospective analysis."""
+        return db.query(QueryFeedback).filter(
+            QueryFeedback.processed == False
+        ).order_by(QueryFeedback.created_at.asc()).limit(limit).all()
+
+    @staticmethod
+    def mark_processed(db: Session, feedback_ids: List[int]) -> None:
+        """Mark feedback records as processed."""
+        if not feedback_ids:
+            return
+        db.query(QueryFeedback).filter(
+            QueryFeedback.id.in_(feedback_ids)
+        ).update({
+            QueryFeedback.processed: True,
+            QueryFeedback.processed_at: datetime.utcnow()
+        }, synchronize_session='fetch')
+        db.commit()
+
+    @staticmethod
+    def get_recent_for_session(db: Session, session_id: str, limit: int = 1) -> List[QueryFeedback]:
+        """Get most recent feedback records for a session."""
+        return db.query(QueryFeedback).filter(
+            QueryFeedback.session_id == session_id
+        ).order_by(QueryFeedback.created_at.desc()).limit(limit).all()
+
+    @staticmethod
+    def mark_correction(db: Session, query_id: str) -> None:
+        """Mark a query feedback record as having a user follow-up correction."""
+        feedback = db.query(QueryFeedback).filter(
+            QueryFeedback.query_id == query_id
+        ).first()
+        if feedback:
+            feedback.user_followup_correction = True
+            db.commit()
+
+    @staticmethod
+    def get_stats(db: Session, days: int = 7) -> Dict[str, Any]:
+        """Get feedback statistics for the last N days."""
+        from sqlalchemy import func
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        total = db.query(func.count(QueryFeedback.id)).filter(
+            QueryFeedback.created_at >= cutoff
+        ).scalar() or 0
+        misses = db.query(func.count(QueryFeedback.id)).filter(
+            QueryFeedback.created_at >= cutoff,
+            QueryFeedback.retrieval_miss == True
+        ).scalar() or 0
+        corrections = db.query(func.count(QueryFeedback.id)).filter(
+            QueryFeedback.created_at >= cutoff,
+            QueryFeedback.user_followup_correction == True
+        ).scalar() or 0
+        return {
+            "total_queries": total,
+            "retrieval_misses": misses,
+            "user_corrections": corrections,
+            "miss_rate": misses / total if total > 0 else 0,
+            "correction_rate": corrections / total if total > 0 else 0,
+        }
+
+
+class LearnedRuleRepository:
+    """Repository for learned rule operations."""
+
+    @staticmethod
+    def create(
+        db: Session,
+        rule_type: str,
+        rule_text: str,
+        rule_data: Optional[Dict[str, Any]] = None,
+        confidence: float = 0.5,
+        source_query_ids: Optional[List[str]] = None,
+    ) -> LearnedRule:
+        """Create a new learned rule."""
+        rule = LearnedRule(
+            rule_type=rule_type,
+            rule_text=rule_text,
+            rule_data=rule_data,
+            confidence=confidence,
+            source_query_ids=source_query_ids or [],
+        )
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        return rule
+
+    @staticmethod
+    def get_active(db: Session) -> List[LearnedRule]:
+        """Get all active learned rules, ordered by confidence descending."""
+        return db.query(LearnedRule).filter(
+            LearnedRule.is_active == True
+        ).order_by(LearnedRule.confidence.desc()).all()
+
+    @staticmethod
+    def get_all(db: Session) -> List[LearnedRule]:
+        """Get all learned rules (active and inactive)."""
+        return db.query(LearnedRule).order_by(
+            LearnedRule.is_active.desc(),
+            LearnedRule.confidence.desc()
+        ).all()
+
+    @staticmethod
+    def get_by_id(db: Session, rule_id: int) -> Optional[LearnedRule]:
+        """Get a rule by ID."""
+        return db.query(LearnedRule).filter(LearnedRule.id == rule_id).first()
+
+    @staticmethod
+    def update(
+        db: Session,
+        rule_id: int,
+        **kwargs
+    ) -> Optional[LearnedRule]:
+        """Update a learned rule's fields."""
+        rule = db.query(LearnedRule).filter(LearnedRule.id == rule_id).first()
+        if not rule:
+            return None
+        for key, value in kwargs.items():
+            if hasattr(rule, key):
+                setattr(rule, key, value)
+        rule.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(rule)
+        return rule
+
+    @staticmethod
+    def delete(db: Session, rule_id: int) -> bool:
+        """Delete a learned rule."""
+        rule = db.query(LearnedRule).filter(LearnedRule.id == rule_id).first()
+        if rule:
+            db.delete(rule)
+            db.commit()
+            return True
+        return False
+
+    @staticmethod
+    def merge_or_create(
+        db: Session,
+        rule_type: str,
+        rule_text: str,
+        rule_data: Optional[Dict[str, Any]] = None,
+        confidence: float = 0.5,
+        source_query_ids: Optional[List[str]] = None,
+    ) -> LearnedRule:
+        """Find a similar existing rule and reinforce it, or create a new one.
+
+        Matching is by rule_type and exact rule_text. In practice the retrospective
+        module should try to reuse existing rule text for reinforcement.
+        """
+        existing = db.query(LearnedRule).filter(
+            LearnedRule.rule_type == rule_type,
+            LearnedRule.rule_text == rule_text,
+        ).first()
+
+        if existing:
+            existing.hit_count += 1
+            existing.confidence = min(1.0, existing.confidence + 0.1)
+            existing.last_reinforced_at = datetime.utcnow()
+            existing.is_active = True  # reactivate if it was decayed
+            if source_query_ids:
+                existing_ids = existing.source_query_ids or []
+                existing.source_query_ids = existing_ids + source_query_ids
+            if rule_data:
+                existing.rule_data = rule_data
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+        return LearnedRuleRepository.create(
+            db, rule_type, rule_text, rule_data, confidence, source_query_ids
+        )
+
+    @staticmethod
+    def decay_confidence(db: Session, days_threshold: int = 30, decay_amount: float = 0.1) -> int:
+        """Decay confidence of rules not reinforced within the threshold.
+
+        Returns the number of rules decayed.
+        """
+        cutoff = datetime.utcnow() - timedelta(days=days_threshold)
+        stale_rules = db.query(LearnedRule).filter(
+            LearnedRule.is_active == True,
+            LearnedRule.last_reinforced_at < cutoff,
+        ).all()
+
+        count = 0
+        for rule in stale_rules:
+            rule.confidence = max(0.0, rule.confidence - decay_amount)
+            if rule.confidence < 0.3:
+                rule.is_active = False
+            count += 1
+
+        if count > 0:
+            db.commit()
+        return count
+
+    @staticmethod
+    def enforce_max_active(db: Session, max_active: int = 30) -> int:
+        """Deactivate lowest-confidence rules if over the max active limit.
+
+        Returns the number of rules deactivated.
+        """
+        active_rules = db.query(LearnedRule).filter(
+            LearnedRule.is_active == True
+        ).order_by(LearnedRule.confidence.desc()).all()
+
+        if len(active_rules) <= max_active:
+            return 0
+
+        deactivated = 0
+        for rule in active_rules[max_active:]:
+            rule.is_active = False
+            deactivated += 1
+
+        if deactivated > 0:
+            db.commit()
+        return deactivated
+
+    @staticmethod
+    def get_vocabulary_rules(db: Session) -> List[LearnedRule]:
+        """Get active vocabulary-type rules for query expansion."""
+        return db.query(LearnedRule).filter(
+            LearnedRule.is_active == True,
+            LearnedRule.rule_type == 'vocabulary',
+        ).all()

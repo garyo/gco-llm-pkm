@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional, Set
+from typing import List, Optional, Set
 from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -151,7 +151,12 @@ class Config:
             ORG_DIR=self.org_dir,
             LOGSEQ_DIR=self.logseq_dir)
 
-    def get_system_prompt_blocks(self, user_context: Optional[str] = None, user_timezone: Optional[str] = None) -> list:
+    def get_system_prompt_blocks(
+        self,
+        user_context: Optional[str] = None,
+        user_timezone: Optional[str] = None,
+        learned_rules: Optional[List] = None,
+    ) -> list:
         """Get system prompt as structured blocks optimized for prompt caching.
 
         Returns a list of blocks where static content comes first (cached),
@@ -160,12 +165,14 @@ class Config:
         Structure:
         - Block 1: Base instructions (cached - most stable)
         - Block 2: User context (cached - changes occasionally)
-        - Block 3: Today's date (NOT cached - changes daily)
+        - Block 3: Learned rules (cached - changes at most daily)
+        - Block N: Today's date (NOT cached - changes daily)
 
         Args:
             user_context: Optional user context string. If None, will try to load from file.
             user_timezone: Optional timezone string from client (e.g., 'America/New_York').
                           If provided, uses client's timezone. Otherwise falls back to server config.
+            learned_rules: Optional list of LearnedRule objects to inject into the prompt.
 
         Returns:
             List of dicts with 'type', 'text', and optionally 'cache_control' keys.
@@ -205,7 +212,17 @@ class Config:
                 "cache_control": {"type": "ephemeral"}
             })
 
-        # Block 3: Today's date (NOT cached - changes daily)
+        # Block 3: Learned rules (cached - changes at most daily)
+        if learned_rules:
+            rules_text = self._format_learned_rules(learned_rules)
+            if rules_text:
+                blocks.append({
+                    "type": "text",
+                    "text": rules_text,
+                    "cache_control": {"type": "ephemeral"}
+                })
+
+        # Block N: Today's date (NOT cached - changes daily)
         # Get current time in user's timezone
         # Priority: user_timezone (from client) > self.timezone (from config) > system default
         timezone_to_use = None
@@ -230,6 +247,51 @@ class Config:
         })
 
         return blocks
+
+    @staticmethod
+    def _format_learned_rules(rules) -> str:
+        """Format learned rules into a markdown block for the system prompt.
+
+        Budget: max ~1500 tokens (~6KB).
+        """
+        sections = {
+            'retrieval': [],
+            'vocabulary': [],
+            'preference': [],
+            'embedding_gap': [],
+            'general': [],
+        }
+
+        for rule in rules:
+            rule_type = getattr(rule, 'rule_type', 'general')
+            rule_text = getattr(rule, 'rule_text', '')
+            if rule_type in sections:
+                sections[rule_type].append(f"- {rule_text}")
+            else:
+                sections['general'].append(f"- {rule_text}")
+
+        parts = ["\n\n# LEARNED PATTERNS\nBased on analysis of past sessions, these patterns improve retrieval:\n"]
+
+        section_headers = {
+            'retrieval': '## Retrieval Hints',
+            'vocabulary': '## Vocabulary',
+            'preference': '## Preferences',
+            'embedding_gap': '## Embedding Gaps',
+            'general': '## General Insights',
+        }
+
+        for key, header in section_headers.items():
+            if sections[key]:
+                parts.append(f"\n{header}")
+                parts.extend(sections[key])
+
+        text = "\n".join(parts)
+
+        # Budget cap: ~6KB / ~1500 tokens
+        if len(text) > 6000:
+            text = text[:6000] + "\n... (truncated)"
+
+        return text
 
     def __repr__(self) -> str:
         """String representation for debugging."""

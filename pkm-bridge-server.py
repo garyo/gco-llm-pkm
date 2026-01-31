@@ -57,7 +57,7 @@ from pkm_bridge.auth import AuthManager
 
 # Import database
 from pkm_bridge.database import init_db, get_db
-from pkm_bridge.db_repository import SessionRepository, ToolExecutionLogRepository
+from pkm_bridge.db_repository import SessionRepository, ToolExecutionLogRepository, LearnedRuleRepository, QueryFeedbackRepository
 
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
@@ -92,6 +92,11 @@ from pkm_bridge.voice_preprocessor import VoicePreprocessor
 from pkm_bridge.context_retriever import ContextRetriever
 from pkm_bridge.embeddings.voyage_client import VoyageClient
 from pkm_bridge.embeddings.embedding_service import run_incremental_embedding
+
+# Import self-improvement components
+from pkm_bridge.feedback_capture import capture_feedback, check_previous_correction
+from pkm_bridge.retrospective import SessionRetrospective
+from pkm_bridge.query_enhancer import QueryEnhancer
 
 # Import scheduler
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -143,12 +148,48 @@ if voyage_api_key:
 else:
     logger.warning("VOYAGE_API_KEY not set - RAG auto-injection disabled")
 
+# Initialize self-improvement retrospective (daily at 3 AM)
+retrospective = SessionRetrospective(client, logger)
+if embedding_scheduler is None:
+    embedding_scheduler = BackgroundScheduler()
+    embedding_scheduler.start()
+embedding_scheduler.add_job(
+    func=retrospective.run,
+    trigger="cron",
+    hour=3,
+    id='session_retrospective',
+    name='Daily session retrospective',
+    misfire_grace_time=7200  # Allow 2 hour grace
+)
+logger.info("Self-improvement retrospective scheduled (daily at 3 AM)")
+
+# Initialize query enhancer for vocabulary-based query expansion
+query_enhancer = QueryEnhancer(logger)
+
 # Flask app
 app = Flask(__name__)
 
 # Enable browser hot-reload in debug mode (if available)
 if config.debug and HOT_RELOAD_AVAILABLE:
     HotReload(app, includes=['templates', 'static'])
+
+    # Patch: flask_hot_reload's after_request crashes on streaming responses (SSE).
+    # Replace its handler with one that skips non-HTML/streaming responses.
+    _hot_reload_handlers = [f for f in app.after_request_funcs.get(None, [])
+                            if 'hot_reload' in getattr(f, '__module__', '')]
+    if _hot_reload_handlers:
+        _original_hr = _hot_reload_handlers[0]
+        app.after_request_funcs[None].remove(_original_hr)
+
+        @app.after_request
+        def safe_hot_reload(response):
+            if response.is_streamed or response.direct_passthrough:
+                return response
+            content_type = response.content_type or ''
+            if 'text/html' not in content_type:
+                return response
+            return _original_hr(response)
+
     logger.info("Hot reload enabled")
 
 # Initialize database
@@ -438,6 +479,9 @@ def query():
         if user_message != original_message:
             logger.info(f"🎤 Voice preprocessing applied")
 
+    # Check if this message is a correction of the previous query in this session
+    check_previous_correction(session_id, user_message, logger)
+
     # Log user query at the start
     logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
@@ -447,14 +491,23 @@ def query():
         # Load user context from database for system prompt
         user_context = UserSettingsRepository.get_user_context(db, user_id='default')
 
+        # Load active learned rules for prompt injection
+        learned_rules = LearnedRuleRepository.get_active(db)
+
         # Get system prompt blocks for optimal caching
         # Block 1: Static instructions (cached)
         # Block 2: User context (cached - separate so edits don't invalidate base)
-        # Block 3: Date (NOT cached - appended dynamically, changes daily)
+        # Block 3: Learned rules (cached - changes at most daily)
+        # Block N: Date (NOT cached - appended dynamically, changes daily)
         system_prompt_blocks = config.get_system_prompt_blocks(
             user_context=user_context,
-            user_timezone=user_timezone
+            user_timezone=user_timezone,
+            learned_rules=learned_rules if learned_rules else None,
         )
+
+        # Track RAG context for feedback capture
+        had_rag_context = False
+        rag_context_chars = 0
 
         # NEW: Auto-retrieve relevant note context for RAG
         if context_retriever:
@@ -472,9 +525,12 @@ def query():
                     system_prompt_blocks.insert(-1, recent_block)
                     logger.info(f"📅 Added recent journals context ({len(recent_journals_text)} chars)")
 
-                # 2. Retrieve semantically relevant chunks
+                # 2. Expand query using vocabulary rules before semantic search
+                expanded_query = query_enhancer.expand_query(user_message)
+
+                # 3. Retrieve semantically relevant chunks
                 context_block_text = context_retriever.retrieve_and_format(
-                    query=user_message,
+                    query=expanded_query,
                     limit=12,
                     min_similarity=0.60
                 )
@@ -488,7 +544,9 @@ def query():
                         "cache_control": {"type": "ephemeral"}  # Cache retrieved context
                     }
                     system_prompt_blocks.insert(-1, context_block)
-                    logger.info(f"🔍 Auto-retrieved semantic context ({len(context_block_text)} chars)")
+                    had_rag_context = True
+                    rag_context_chars = len(context_block_text)
+                    logger.info(f"🔍 Auto-retrieved semantic context ({rag_context_chars} chars)")
             except Exception as e:
                 logger.warning(f"Context retrieval failed: {e}")
 
@@ -574,6 +632,8 @@ def query():
 
         api_call_count = 1
         tool_call_count = 0
+        tool_names_used = []  # Track tool names for feedback capture
+        tool_error_count = 0  # Track tool errors for feedback capture
 
         # Tool loop
         while response.stop_reason == "tool_use":
@@ -581,6 +641,7 @@ def query():
             for block in response.content:
                 if getattr(block, "type", None) == "tool_use":
                     tool_call_count += 1
+                    tool_names_used.append(block.name)
                     logger.info(f">>> Tool call: {block.name} with params: {block.input}")
 
                     # Capture start time for tool execution logging
@@ -605,6 +666,7 @@ def query():
 
                     # Log if tool result contains an error
                     if result.startswith("❌"):
+                        tool_error_count += 1
                         logger.error(f"Tool {block.name} returned error: {result[:200]}")
 
                     # Extract result summary (first 500 chars)
@@ -724,6 +786,20 @@ def query():
         except Exception as log_error:
             # Don't fail the query if logging fails
             logger.warning(f"Failed to log query summary: {log_error}")
+
+        # Capture feedback signals for self-improvement retrospective
+        capture_feedback(
+            session_id=session_id,
+            query_id=query_id,
+            user_message=user_message,
+            had_rag_context=had_rag_context,
+            rag_context_chars=rag_context_chars,
+            tool_names_used=tool_names_used,
+            tool_error_count=tool_error_count,
+            total_tool_calls=tool_call_count,
+            api_call_count=api_call_count,
+            logger=logger,
+        )
 
         # Update session cost tracking
         if hasattr(usage, 'input_tokens') and hasattr(usage, 'output_tokens'):
@@ -1600,6 +1676,161 @@ def trigger_embedding():
             "error": "Failed to start embedding",
             "message": str(e)
         }), 500
+
+
+# -------------------------
+# Learned Rules API
+# -------------------------
+
+@app.route('/api/learned-rules', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_learned_rules():
+    """List all learned rules (active and inactive) with metadata."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        rules = LearnedRuleRepository.get_all(db)
+        return jsonify([{
+            "id": r.id,
+            "rule_type": r.rule_type,
+            "rule_text": r.rule_text,
+            "rule_data": r.rule_data,
+            "confidence": r.confidence,
+            "hit_count": r.hit_count,
+            "is_active": r.is_active,
+            "source_query_ids": r.source_query_ids,
+            "last_reinforced_at": r.last_reinforced_at.isoformat() + 'Z' if r.last_reinforced_at else None,
+            "created_at": r.created_at.isoformat() + 'Z',
+            "updated_at": r.updated_at.isoformat() + 'Z',
+        } for r in rules])
+    finally:
+        db.close()
+
+
+@app.route('/api/learned-rules/<int:rule_id>', methods=['PUT'])
+@limiter.limit("30 per minute")
+def update_learned_rule(rule_id):
+    """Edit a learned rule (rule_text, is_active, confidence)."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    data = request.json
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    allowed_fields = {'rule_text', 'is_active', 'confidence', 'rule_data'}
+    updates = {k: v for k, v in data.items() if k in allowed_fields}
+
+    if not updates:
+        return jsonify({"error": "No valid fields to update"}), 400
+
+    db = get_db()
+    try:
+        rule = LearnedRuleRepository.update(db, rule_id, **updates)
+        if not rule:
+            return jsonify({"error": "Rule not found"}), 404
+
+        return jsonify({
+            "id": rule.id,
+            "rule_type": rule.rule_type,
+            "rule_text": rule.rule_text,
+            "is_active": rule.is_active,
+            "confidence": rule.confidence,
+            "updated_at": rule.updated_at.isoformat() + 'Z',
+        })
+    finally:
+        db.close()
+
+
+@app.route('/api/learned-rules/<int:rule_id>', methods=['DELETE'])
+@limiter.limit("10 per minute")
+def delete_learned_rule(rule_id):
+    """Delete a learned rule."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        deleted = LearnedRuleRepository.delete(db, rule_id)
+        if not deleted:
+            return jsonify({"error": "Rule not found"}), 404
+        return jsonify({"status": "deleted"})
+    finally:
+        db.close()
+
+
+@app.route('/admin/retrospective', methods=['POST'])
+@limiter.limit("5 per hour")
+def trigger_retrospective():
+    """Manually trigger a retrospective analysis run."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        import threading
+
+        def run_retro():
+            try:
+                result = retrospective.run()
+                logger.info(f"Manual retrospective complete: {result}")
+            except Exception as e:
+                logger.error(f"Manual retrospective failed: {e}")
+
+        thread = threading.Thread(target=run_retro, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "status": "started",
+            "message": "Retrospective analysis started in background"
+        })
+    except Exception as e:
+        logger.error(f"Failed to trigger retrospective: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/admin/retrospective-log', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_retrospective_log():
+    """View last retrospective results and feedback stats."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        stats = QueryFeedbackRepository.get_stats(db)
+        return jsonify({
+            "last_run": retrospective.last_run_result,
+            "feedback_stats": stats,
+        })
+    finally:
+        db.close()
 
 
 @app.route('/api/events')

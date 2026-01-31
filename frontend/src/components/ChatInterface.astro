@@ -382,6 +382,20 @@ import examples from '../../../config/examples.json';
     cursor: default;
   }
 
+  .message.assistant .task-list-item-checkbox.interactive-checkbox {
+    cursor: pointer;
+  }
+
+  .message.assistant .task-list-item-checkbox.checkbox-toggling {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .message.assistant .task-list-item-checkbox.checkbox-error {
+    outline: 2px solid rgb(239 68 68);
+    outline-offset: 1px;
+  }
+
   .message.assistant .task-list-item input[type="checkbox"]:checked + span {
     text-decoration: line-through;
     color: rgb(107 114 128);

@@ -146,10 +146,11 @@ class Config:
                 user_context
             )
 
-        # Replace placeholders
-        return template.format(
-            ORG_DIR=self.org_dir,
-            LOGSEQ_DIR=self.logseq_dir)
+        # Replace placeholders (use .replace() instead of .format() to avoid
+        # breaking on literal curly braces like {ticktick:ID} in the template)
+        template = template.replace("{ORG_DIR}", str(self.org_dir))
+        template = template.replace("{LOGSEQ_DIR}", str(self.logseq_dir))
+        return template
 
     def get_system_prompt_blocks(
         self,

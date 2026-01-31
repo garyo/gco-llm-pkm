@@ -1314,6 +1314,145 @@ def save_file(filepath):
 
 
 # -------------------------
+# Checkbox Toggle Endpoint
+# -------------------------
+
+@app.route('/api/checkbox/toggle', methods=['POST'])
+@auth_manager.require_auth
+@limiter.limit("30 per minute")
+def toggle_checkbox():
+    """Toggle a checkbox item in TickTick or a file.
+
+    Request body for TickTick:
+        {"type": "ticktick", "task_id": "abc123", "checked": true}
+
+    Request body for file:
+        {"type": "file", "path": "org:journals/2025-01-30.org",
+         "item_text": "Buy groceries", "line_hint": 42, "checked": true}
+
+    Returns:
+        {"status": "ok"} or {"error": "message"}
+    """
+    data = request.json
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    toggle_type = data.get('type')
+    checked = data.get('checked', True)
+
+    if toggle_type == 'ticktick':
+        task_id = data.get('task_id')
+        if not task_id:
+            return jsonify({"error": "Missing task_id"}), 400
+
+        if not checked:
+            return jsonify({"error": "Unchecking TickTick tasks is not supported yet"}), 400
+
+        try:
+            ticktick_tool = tool_registry.get_tool('ticktick_query')
+            client = ticktick_tool.get_client()
+            if not client:
+                return jsonify({"error": "TickTick not connected"}), 503
+
+            client.complete_task(task_id)
+            logger.info(f"Checkbox toggle: completed TickTick task {task_id}")
+            return jsonify({"status": "ok"})
+        except KeyError:
+            return jsonify({"error": "TickTick tool not available"}), 503
+        except Exception as e:
+            logger.error(f"Checkbox toggle error (ticktick): {e}")
+            return jsonify({"error": str(e)}), 500
+
+    elif toggle_type == 'file':
+        file_path = data.get('path')
+        item_text = data.get('item_text', '')
+        line_hint = data.get('line_hint', 0)
+
+        if not file_path:
+            return jsonify({"error": "Missing path"}), 400
+
+        try:
+            file_data = file_editor.read_file(file_path)
+            content = file_data['content']
+            lines = content.split('\n')
+
+            # Search for matching checkbox line, starting from line_hint
+            # Line hints are 1-indexed
+            target_line = None
+            hint_idx = max(0, line_hint - 1)  # Convert to 0-indexed
+
+            def is_checkbox_match(line: str, text: str, want_checked: bool) -> bool:
+                """Check if a line is a checkbox that matches the item text."""
+                stripped = line.strip()
+                # Markdown checkboxes
+                if want_checked:
+                    # Looking to check: find unchecked boxes
+                    if stripped.startswith('- [ ]') and text in stripped:
+                        return True
+                else:
+                    # Looking to uncheck: find checked boxes
+                    if (stripped.startswith('- [x]') or stripped.startswith('- [X]')) and text in stripped:
+                        return True
+                # Org-mode TODO/DONE headings
+                if want_checked and 'TODO' in stripped and text in stripped:
+                    return True
+                if not want_checked and 'DONE' in stripped and text in stripped:
+                    return True
+                return False
+
+            # 1. Check exact line_hint first
+            if 0 <= hint_idx < len(lines) and is_checkbox_match(lines[hint_idx], item_text, checked):
+                target_line = hint_idx
+            else:
+                # 2. Expand search +/- 5 lines from hint
+                for offset in range(1, 6):
+                    for idx in [hint_idx + offset, hint_idx - offset]:
+                        if 0 <= idx < len(lines) and is_checkbox_match(lines[idx], item_text, checked):
+                            target_line = idx
+                            break
+                    if target_line is not None:
+                        break
+
+                # 3. Fall back to full file scan
+                if target_line is None:
+                    for idx, line in enumerate(lines):
+                        if is_checkbox_match(line, item_text, checked):
+                            target_line = idx
+                            break
+
+            if target_line is None:
+                return jsonify({"error": "Checkbox item not found in file"}), 404
+
+            # Toggle the checkbox
+            line = lines[target_line]
+            if checked:
+                # Check the box
+                line = line.replace('- [ ]', '- [x]', 1)
+                line = line.replace('TODO', 'DONE', 1)
+            else:
+                # Uncheck the box
+                line = line.replace('- [x]', '- [ ]', 1)
+                line = line.replace('- [X]', '- [ ]', 1)
+                line = line.replace('DONE', 'TODO', 1)
+
+            lines[target_line] = line
+            new_content = '\n'.join(lines)
+
+            file_editor.write_file(file_path, new_content)
+            logger.info(f"Checkbox toggle: {'checked' if checked else 'unchecked'} line {target_line + 1} in {file_path}")
+            return jsonify({"status": "ok"})
+
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.error(f"Checkbox toggle error (file): {e}")
+            return jsonify({"error": str(e)}), 500
+
+    else:
+        return jsonify({"error": f"Unknown toggle type: {toggle_type}"}), 400
+
+
+# -------------------------
 # TickTick OAuth Routes
 # -------------------------
 

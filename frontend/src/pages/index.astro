@@ -162,6 +162,61 @@ import EditorInterface from '../components/EditorInterface.astro';
     return div.innerHTML;
   }
 
+  // Post-process HTML to extract checkbox metadata markers, enable interactive checkboxes
+  function processCheckboxMetadata(html: string): string {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    const taskItems = div.querySelectorAll('li.task-list-item');
+
+    taskItems.forEach(li => {
+      const checkbox = li.querySelector('input.task-list-item-checkbox') as HTMLInputElement | null;
+      if (!checkbox) return;
+
+      // Walk text nodes to find metadata markers
+      const walker = document.createTreeWalker(li, NodeFilter.SHOW_TEXT);
+      let node: Text | null;
+      let markerFound = false;
+
+      while (node = walker.nextNode() as Text | null) {
+        const text = node.textContent || '';
+
+        // Match {ticktick:ID} pattern
+        const ticktickMatch = text.match(/\{ticktick:([^}]+)\}/);
+        if (ticktickMatch) {
+          checkbox.dataset.checkboxType = 'ticktick';
+          checkbox.dataset.checkboxId = ticktickMatch[1];
+          // Remove marker from visible text
+          node.textContent = text.replace(ticktickMatch[0], '').trimEnd();
+          markerFound = true;
+          break;
+        }
+
+        // Match {file:TYPE:PATH:LINE} pattern
+        const fileMatch = text.match(/\{file:([^:}]+):([^:}]+):(\d+)\}/);
+        if (fileMatch) {
+          checkbox.dataset.checkboxType = 'file';
+          checkbox.dataset.checkboxId = `${fileMatch[1]}:${fileMatch[2]}`;
+          checkbox.dataset.lineHint = fileMatch[3];
+          // Store cleaned item text for matching (text before the marker)
+          const cleanText = text.replace(fileMatch[0], '').trim();
+          checkbox.dataset.itemText = cleanText || li.textContent?.replace(/\{[^}]+\}/, '').trim() || '';
+          // Remove marker from visible text
+          node.textContent = text.replace(fileMatch[0], '').trimEnd();
+          markerFound = true;
+          break;
+        }
+      }
+
+      if (markerFound) {
+        checkbox.removeAttribute('disabled');
+        checkbox.classList.add('interactive-checkbox');
+      }
+    });
+
+    return div.innerHTML;
+  }
+
   // Post-process HTML to add auth tokens to asset image URLs
   function addTokensToImages(html: string): string {
     if (!authToken) {
@@ -755,6 +810,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     if (role === 'assistant') {
       let rendered = md.render(text);
       rendered = processDoneItems(rendered);
+      rendered = processCheckboxMetadata(rendered);
       rendered = addTokensToImages(rendered);
       div.innerHTML = rendered;
     } else {
@@ -764,6 +820,85 @@ import EditorInterface from '../components/EditorInterface.astro';
     chat.insertBefore(div, loading);
     chat.scrollTop = chat.scrollHeight;
   }
+
+  // Handle interactive checkbox clicks via event delegation
+  chat.addEventListener('change', async (e) => {
+    const target = e.target as HTMLInputElement;
+    if (!target.classList.contains('interactive-checkbox')) return;
+
+    const checkboxType = target.dataset.checkboxType;
+    const checkboxId = target.dataset.checkboxId;
+    const isChecked = target.checked;
+
+    // Prevent double-clicks
+    target.classList.add('checkbox-toggling');
+
+    // Build request body
+    let body: any;
+    if (checkboxType === 'ticktick') {
+      body = { type: 'ticktick', task_id: checkboxId, checked: isChecked };
+    } else if (checkboxType === 'file') {
+      body = {
+        type: 'file',
+        path: checkboxId,
+        item_text: target.dataset.itemText || '',
+        line_hint: parseInt(target.dataset.lineHint || '0', 10),
+        checked: isChecked
+      };
+    } else {
+      return;
+    }
+
+    try {
+      const res = await fetchWithTimeout('/api/checkbox/toggle', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(body)
+      }, 10000);
+
+      if (res.status === 401) {
+        handle401();
+        target.checked = !isChecked;
+        return;
+      }
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Toggle failed');
+      }
+
+      // Success: apply strikethrough for checked items
+      const li = target.closest('li');
+      if (li) {
+        if (isChecked) {
+          // Wrap text content in strikethrough span if not already
+          const textNodes = Array.from(li.childNodes).filter(n => n.nodeType === Node.TEXT_NODE || (n.nodeType === Node.ELEMENT_NODE && !(n as Element).matches('input')));
+          textNodes.forEach(n => {
+            if (n.nodeType === Node.ELEMENT_NODE) {
+              (n as HTMLElement).style.textDecoration = 'line-through';
+              (n as HTMLElement).style.color = 'rgb(107 114 128)';
+            }
+          });
+        } else {
+          // Remove strikethrough
+          const styled = li.querySelectorAll('[style*="line-through"]');
+          styled.forEach(el => {
+            (el as HTMLElement).style.textDecoration = '';
+            (el as HTMLElement).style.color = '';
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error('Checkbox toggle failed:', err);
+      // Revert checkbox state
+      target.checked = !isChecked;
+      // Flash error
+      target.classList.add('checkbox-error');
+      setTimeout(() => target.classList.remove('checkbox-error'), 1500);
+    } finally {
+      target.classList.remove('checkbox-toggling');
+    }
+  });
 
   // Show/hide model settings modal
   function showModelSettings() {

@@ -1444,7 +1444,25 @@ def toggle_checkbox():
             target_line = search_lines(match_text=True)
 
             if target_line is None:
-                # Log context around line_hint for debugging
+                # Check if the item is already in the desired state
+                def is_already_done(line: str, want_checked: bool) -> bool:
+                    stripped = line.strip()
+                    if want_checked:
+                        return stripped.startswith(('- [x]', '- [X]', '+ [x]', '+ [X]')) or \
+                               ('DONE' in stripped and stripped.lstrip('*').strip().startswith('DONE'))
+                    else:
+                        return stripped.startswith(('- [ ]', '+ [ ]')) or \
+                               stripped.startswith('- ') and not stripped.startswith(('- [x]', '- [X]'))
+
+                # Search for already-toggled match using same strategy
+                for idx in ([hint_idx] +
+                            [i for off in range(1, 11) for i in (hint_idx+off, hint_idx-off)]):
+                    if 0 <= idx < len(lines) and is_already_done(lines[idx], checked) and \
+                       text_matches(lines[idx], item_text):
+                        logger.info(f"Checkbox already in desired state at line {idx+1} in {file_path}")
+                        return jsonify({"status": "ok"})
+
+                # Truly not found
                 start = max(0, hint_idx - 3)
                 end = min(len(lines), hint_idx + 4)
                 nearby = [f"  {i+1}: {lines[i]!r}" for i in range(start, end)]

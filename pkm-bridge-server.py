@@ -1371,6 +1371,8 @@ def toggle_checkbox():
         if not file_path:
             return jsonify({"error": "Missing path"}), 400
 
+        logger.info(f"Checkbox toggle (file): path={file_path!r}, item_text={item_text!r}, line_hint={line_hint}, checked={checked}")
+
         try:
             file_data = file_editor.read_file(file_path)
             content = file_data['content']
@@ -1381,46 +1383,70 @@ def toggle_checkbox():
             target_line = None
             hint_idx = max(0, line_hint - 1)  # Convert to 0-indexed
 
-            def is_checkbox_match(line: str, text: str, want_checked: bool) -> bool:
-                """Check if a line is a checkbox that matches the item text."""
+            def is_checkbox_line(line: str, want_checked: bool) -> bool:
+                """Check if a line is a checkbox in the desired state."""
                 stripped = line.strip()
-                # Markdown checkboxes
                 if want_checked:
                     # Looking to check: find unchecked boxes
-                    if stripped.startswith('- [ ]') and text in stripped:
+                    if stripped.startswith('- [ ]') or stripped.startswith('+ [ ]'):
+                        return True
+                    if 'TODO' in stripped and stripped.lstrip('*').strip().startswith('TODO'):
                         return True
                 else:
                     # Looking to uncheck: find checked boxes
-                    if (stripped.startswith('- [x]') or stripped.startswith('- [X]')) and text in stripped:
+                    if stripped.startswith(('- [x]', '- [X]', '+ [x]', '+ [X]')):
                         return True
-                # Org-mode TODO/DONE headings
-                if want_checked and 'TODO' in stripped and text in stripped:
+                    if 'DONE' in stripped and stripped.lstrip('*').strip().startswith('DONE'):
+                        return True
+                return False
+
+            def text_matches(line: str, text: str) -> bool:
+                """Check if item text appears in the line (case-insensitive, partial)."""
+                if not text:
+                    return True  # Empty text matches any checkbox
+                line_lower = line.lower()
+                text_lower = text.lower()
+                # Exact substring match
+                if text_lower in line_lower:
                     return True
-                if not want_checked and 'DONE' in stripped and text in stripped:
+                # Try matching first few words (Claude may paraphrase)
+                words = text_lower.split()
+                if len(words) >= 2 and words[0] in line_lower and words[1] in line_lower:
                     return True
                 return False
 
-            # 1. Check exact line_hint first
-            if 0 <= hint_idx < len(lines) and is_checkbox_match(lines[hint_idx], item_text, checked):
-                target_line = hint_idx
-            else:
-                # 2. Expand search +/- 5 lines from hint
-                for offset in range(1, 6):
-                    for idx in [hint_idx + offset, hint_idx - offset]:
-                        if 0 <= idx < len(lines) and is_checkbox_match(lines[idx], item_text, checked):
-                            target_line = idx
-                            break
-                    if target_line is not None:
-                        break
+            def search_lines(match_text: bool) -> int | None:
+                """Search for checkbox, optionally requiring text match."""
+                # 1. Check exact line_hint first
+                if 0 <= hint_idx < len(lines):
+                    if is_checkbox_line(lines[hint_idx], checked):
+                        if not match_text or text_matches(lines[hint_idx], item_text):
+                            return hint_idx
 
-                # 3. Fall back to full file scan
-                if target_line is None:
-                    for idx, line in enumerate(lines):
-                        if is_checkbox_match(line, item_text, checked):
-                            target_line = idx
-                            break
+                # 2. Expand search +/- 10 lines from hint
+                for offset in range(1, 11):
+                    for idx in [hint_idx + offset, hint_idx - offset]:
+                        if 0 <= idx < len(lines) and is_checkbox_line(lines[idx], checked):
+                            if not match_text or text_matches(lines[idx], item_text):
+                                return idx
+
+                # 3. Full file scan
+                for idx, line in enumerate(lines):
+                    if is_checkbox_line(line, checked):
+                        if not match_text or text_matches(line, item_text):
+                            return idx
+                return None
+
+            target_line = search_lines(match_text=True)
 
             if target_line is None:
+                # Log context around line_hint for debugging
+                start = max(0, hint_idx - 3)
+                end = min(len(lines), hint_idx + 4)
+                nearby = [f"  {i+1}: {lines[i]!r}" for i in range(start, end)]
+                logger.warning(f"Checkbox not found in {file_path} (hint line {line_hint}, "
+                               f"text={item_text!r}, checked={checked}). "
+                               f"Lines {start+1}-{end} near hint:\n" + "\n".join(nearby))
                 return jsonify({"error": "Checkbox item not found in file"}), 404
 
             # Toggle the checkbox

@@ -105,7 +105,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 </Layout>
 
 <script>
-  import { VoiceInput } from '../utils/VoiceInput';
+  import { VoiceInput, type VoiceStatus } from '../utils/VoiceInput';
 
   // Initialize markdown-it with task-lists plugin
   const md = (window as any).markdownit({
@@ -269,11 +269,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Voice input
   let voiceInput: VoiceInput | null = null;
-  let autoSendTimeout: number | null = null;
   let isVoiceMessage = false;  // Track if current message is from voice
-  let lastVoiceLength = 0;  // Track length before user edits
-  let inactivityTimeout: number | null = null;  // Timer for auto-send after speech stops
-  let lastFinalText = '';  // Track last final text to avoid duplicates
 
   // Fetch with timeout to prevent hanging on poor connectivity
   function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
@@ -331,43 +327,15 @@ import EditorInterface from '../components/EditorInterface.astro';
     }
 
     voiceInput = new VoiceInput({
-      language: 'en-US',
-      continuous: true,
-      interimResults: true,
+      language: 'en',
+      getAuthHeaders: () => getAuthHeaders(),
 
-      onTranscript: (text: string, isFinal: boolean) => {
-        // ONLY update input box for final results
-        if (isFinal) {
-          // Skip if this is exact duplicate (some browsers send duplicates)
-          if (text === lastFinalText) {
-            return;
-          }
-
-          // Append new text (after auto-restart the API starts a fresh session)
-          const existing = input.value.trim();
-          input.value = existing ? existing + ' ' + text : text;
-          autoResizeTextarea();
-
-          // Mark this as a voice message and track length
-          isVoiceMessage = true;
-          lastVoiceLength = input.value.length;
-          lastFinalText = text;  // Remember to skip duplicates
-        }
-        // Ignore interim results entirely - don't show them in input
-
-        // Auto-send disabled - user must manually send
-        // Clear any existing inactivity timer
-        if (inactivityTimeout) {
-          clearTimeout(inactivityTimeout);
-          inactivityTimeout = null;
-        }
-
-        // Update status text (show interim results there, not in input)
-        if (isFinal) {
-          voiceStatusText.textContent = 'Listening...';
-        } else {
-          voiceStatusText.textContent = `Listening: "${text}"`;
-        }
+      onTranscript: (text: string) => {
+        // Append transcribed text to input
+        const existing = input.value.trim();
+        input.value = existing ? existing + ' ' + text : text;
+        autoResizeTextarea();
+        isVoiceMessage = true;
       },
 
       onStart: () => {
@@ -375,45 +343,36 @@ import EditorInterface from '../components/EditorInterface.astro';
         voiceBtn.title = 'Tap to stop recording';
         voiceStatus.classList.remove('hidden');
         voiceStatusText.textContent = 'Listening...';
-
-        // Clear tracking when starting fresh
-        lastFinalText = '';
         input.value = '';  // Clear input when starting voice
       },
 
       onEnd: () => {
-        // Recording ended (either user stopped or auto-stopped from silence)
-
-        // Clear the recording indicator
         voiceBtn.classList.remove('recording');
         voiceBtn.title = 'Tap to start voice input';
 
-        // Clear inactivity timer since we're no longer recording
-        if (inactivityTimeout) {
-          clearTimeout(inactivityTimeout);
-          inactivityTimeout = null;
-        }
-
-        // Auto-send disabled - just show completion message
         if (input.value.trim()) {
           voiceStatusText.textContent = 'Voice input complete. Press Send when ready.';
-          // Hide status bar after a moment
           setTimeout(() => voiceStatus.classList.add('hidden'), 3000);
         } else {
-          // No text captured, just hide status
           setTimeout(() => voiceStatus.classList.add('hidden'), 2000);
+        }
+      },
+
+      onStatusChange: (status: VoiceStatus) => {
+        if (status === 'listening') {
+          voiceStatusText.textContent = 'Listening...';
+        } else if (status === 'transcribing') {
+          voiceStatusText.textContent = 'Transcribing...';
         }
       },
 
       onError: (error: string) => {
         voiceBtn.classList.remove('recording');
         voiceStatusText.textContent = error;
-        // Show error in red
         voiceStatus.classList.remove('bg-blue-50', 'border-blue-200', 'text-blue-700');
         voiceStatus.classList.add('bg-red-50', 'border-red-200', 'text-red-700');
         setTimeout(() => {
           voiceStatus.classList.add('hidden');
-          // Reset colors
           voiceStatus.classList.add('bg-blue-50', 'border-blue-200', 'text-blue-700');
           voiceStatus.classList.remove('bg-red-50', 'border-red-200', 'text-red-700');
         }, 3000);
@@ -428,23 +387,10 @@ import EditorInterface from '../components/EditorInterface.astro';
       return;
     }
 
-    // Click handler
-    voiceBtn.addEventListener('click', () => {
+    // Click handler (async since start() is now async)
+    voiceBtn.addEventListener('click', async () => {
       if (!voiceInput) return;
-
-      // If stopping, remove recording class and clear timers
-      if (voiceBtn.classList.contains('recording')) {
-        voiceBtn.classList.remove('recording');
-        voiceBtn.title = 'Tap to start voice input';
-
-        // Clear inactivity timer when manually stopping
-        if (inactivityTimeout) {
-          clearTimeout(inactivityTimeout);
-          inactivityTimeout = null;
-        }
-      }
-
-      voiceInput.toggle();
+      await voiceInput.toggle();
     });
   }
 
@@ -628,24 +574,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   async function send() {
     // Stop voice recording if still active
     if (voiceInput && voiceInput.isActive()) {
-      voiceInput.stop();
-    }
-
-    // Clear the recording indicator
-    const voiceBtn = document.getElementById('voice-btn');
-    if (voiceBtn && voiceBtn.classList.contains('recording')) {
-      voiceBtn.classList.remove('recording');
-      voiceBtn.title = 'Tap to start voice input';
-    }
-
-    // Clear all timers
-    if (autoSendTimeout) {
-      clearTimeout(autoSendTimeout);
-      autoSendTimeout = null;
-    }
-    if (inactivityTimeout) {
-      clearTimeout(inactivityTimeout);
-      inactivityTimeout = null;
+      await voiceInput.stop();
     }
 
     // Hide voice status bar
@@ -653,9 +582,6 @@ import EditorInterface from '../components/EditorInterface.astro';
     if (voiceStatus) {
       voiceStatus.classList.add('hidden');
     }
-
-    // Clear voice tracking
-    lastFinalText = '';
 
     const message = input.value.trim();
     if (!message) return;
@@ -1052,44 +978,6 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   input.addEventListener('input', () => {
     autoResizeTextarea();
-
-    // Detect if user manually edited (not just voice adding text)
-    const currentLength = input.value.length;
-    const userEdited = currentLength !== lastVoiceLength;
-
-    if (userEdited) {
-      // User manually edited - stop everything voice-related
-
-      // Stop voice recording if active
-      if (voiceInput && voiceInput.isActive()) {
-        const voiceBtn = document.getElementById('voice-btn');
-        if (voiceBtn && voiceBtn.classList.contains('recording')) {
-          voiceBtn.classList.remove('recording');
-          voiceBtn.title = 'Tap to start voice input';
-        }
-        voiceInput.stop();
-      }
-
-      // Clear all timers
-      if (autoSendTimeout) {
-        clearTimeout(autoSendTimeout);
-        autoSendTimeout = null;
-      }
-      if (inactivityTimeout) {
-        clearTimeout(inactivityTimeout);
-        inactivityTimeout = null;
-      }
-
-      // Clear voice state
-      isVoiceMessage = false;
-      lastFinalText = '';
-
-      // Hide the voice status bar
-      const voiceStatus = document.getElementById('voice-status');
-      if (voiceStatus && !voiceStatus.classList.contains('hidden')) {
-        voiceStatus.classList.add('hidden');
-      }
-    }
   });
 
   // Keyboard shortcuts

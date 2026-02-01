@@ -1,216 +1,208 @@
 /**
- * VoiceInput - Web Speech API wrapper for voice transcription
- * Optimized for mobile use with single-shot recording
+ * VoiceInput - VAD + server-side Whisper transcription
+ *
+ * Uses @ricky0123/vad-web for client-side voice activity detection
+ * and POSTs audio segments to /transcribe for Whisper STT.
+ * The mic stays open via getUserMedia for the entire session --
+ * no start/stop cycles, no beeps, no duplicate text.
  */
 
-// Type definitions for Web Speech API
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-}
+import { MicVAD } from '@ricky0123/vad-web';
 
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-  message: string;
-}
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  maxAlternatives: number;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
-  onend: ((this: SpeechRecognition, ev: Event) => any) | null;
-  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
-  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
-}
-
-declare var SpeechRecognition: {
-  prototype: SpeechRecognition;
-  new(): SpeechRecognition;
-};
-
-declare var webkitSpeechRecognition: {
-  prototype: SpeechRecognition;
-  new(): SpeechRecognition;
-};
+export type VoiceStatus = 'listening' | 'transcribing';
 
 export interface VoiceInputConfig {
   language?: string;
-  continuous?: boolean;
-  interimResults?: boolean;
-  onTranscript?: (text: string, isFinal: boolean) => void;
+  onTranscript?: (text: string) => void;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (error: string) => void;
+  onStatusChange?: (status: VoiceStatus) => void;
+  getAuthHeaders?: () => HeadersInit;
+}
+
+/**
+ * Encode a Float32Array of 16 kHz mono PCM samples as a WAV file blob.
+ */
+function encodeWAV(samples: Float32Array): Blob {
+  const sampleRate = 16000;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataLength = samples.length * (bitsPerSample / 8);
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  // RIFF header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, 'WAVE');
+
+  // fmt sub-chunk
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);        // sub-chunk size
+  view.setUint16(20, 1, true);         // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+
+  // data sub-chunk
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  // Convert float samples to 16-bit PCM
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
 }
 
 export class VoiceInput {
-  private recognition: SpeechRecognition | null = null;
-  private isRecording = false;
-  private intentionalStop = false;
-  private autoRestarting = false;
+  private vad: MicVAD | null = null;
+  private active = false;
   private config: Required<VoiceInputConfig>;
 
   constructor(config: VoiceInputConfig = {}) {
     this.config = {
-      language: config.language || 'en-US',
-      continuous: config.continuous ?? false,
-      interimResults: config.interimResults ?? true,
+      language: config.language || 'en',
       onTranscript: config.onTranscript || (() => {}),
       onStart: config.onStart || (() => {}),
       onEnd: config.onEnd || (() => {}),
       onError: config.onError || (() => {}),
+      onStatusChange: config.onStatusChange || (() => {}),
+      getAuthHeaders: config.getAuthHeaders || (() => ({})),
     };
-
-    this.initialize();
-  }
-
-  private initialize(): void {
-    if (!this.isSupported()) {
-      return;
-    }
-
-    const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    this.recognition = new SpeechRecognitionAPI();
-
-    if (this.recognition) {
-      this.recognition.continuous = this.config.continuous;
-      this.recognition.interimResults = this.config.interimResults;
-      this.recognition.lang = this.config.language;
-      this.recognition.maxAlternatives = 1;
-
-      this.recognition.onstart = () => {
-        this.isRecording = true;
-        if (this.autoRestarting) {
-          this.autoRestarting = false;
-          return; // Skip callback on auto-restart (avoids beep/UI reset)
-        }
-        this.config.onStart();
-      };
-
-      this.recognition.onend = () => {
-        // If continuous mode and the user didn't explicitly stop,
-        // auto-restart to keep listening through pauses in speech.
-        if (this.config.continuous && !this.intentionalStop && this.isRecording) {
-          try {
-            this.autoRestarting = true;
-            this.recognition?.start();
-            return; // Don't fire onEnd — we're still listening
-          } catch {
-            // Fall through to normal end if restart fails
-          }
-        }
-        this.isRecording = false;
-        this.intentionalStop = false;
-        this.config.onEnd();
-      };
-
-      this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        // In continuous mode, no-speech is expected during pauses — ignore it
-        if (event.error === 'no-speech' && this.config.continuous && this.isRecording) {
-          return;
-        }
-
-        let errorMessage = 'Unknown error occurred';
-
-        switch (event.error) {
-          case 'no-speech':
-            errorMessage = 'No speech detected. Please try again.';
-            break;
-          case 'audio-capture':
-            errorMessage = 'No microphone found. Check your device settings.';
-            break;
-          case 'not-allowed':
-            errorMessage = 'Microphone permission denied. Enable in browser settings.';
-            break;
-          case 'network':
-            errorMessage = 'Network error. Check your connection.';
-            break;
-          case 'aborted':
-            errorMessage = 'Recording was stopped.';
-            break;
-          default:
-            errorMessage = `Speech recognition error: ${event.error}`;
-        }
-
-        this.config.onError(errorMessage);
-      };
-
-      this.recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-
-        // Send final results first (higher priority)
-        if (finalTranscript) {
-          this.config.onTranscript(finalTranscript.trim(), true);
-        }
-
-        // Send interim results separately (only if we don't have final)
-        if (interimTranscript && !finalTranscript) {
-          this.config.onTranscript(interimTranscript.trim(), false);
-        }
-      };
-    }
   }
 
   public isSupported(): boolean {
-    return 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   }
 
-  public start(): void {
-    if (!this.recognition || this.isRecording) {
-      return;
-    }
+  public async start(): Promise<void> {
+    if (this.active) return;
 
     try {
-      this.recognition.start();
-    } catch (error) {
-      this.config.onError('Failed to start recording. Please try again.');
+      this.vad = await MicVAD.new({
+        // Serve all VAD/ONNX assets from /vad/ (copied by vite-plugin-static-copy)
+        baseAssetPath: '/vad/',
+        onnxWASMBasePath: '/vad/',
+
+        positiveSpeechThreshold: 0.3,
+        negativeSpeechThreshold: 0.25,
+        minSpeechMs: 300,
+        preSpeechPadMs: 300,
+        redemptionMs: 800,
+
+        onSpeechStart: () => {
+          // Speech detected -- no visible change needed
+        },
+
+        onSpeechEnd: async (audio: Float32Array) => {
+          // Skip very short segments (noise/clicks) -- 0.3s at 16kHz
+          if (audio.length < 4800) return;
+
+          this.config.onStatusChange('transcribing');
+
+          try {
+            const wav = encodeWAV(audio);
+            const form = new FormData();
+            form.append('audio', wav, 'audio.wav');
+            form.append('language', this.config.language);
+
+            // Extract only the Authorization header (FormData sets its own Content-Type)
+            const allHeaders = this.config.getAuthHeaders();
+            const headers: HeadersInit = {};
+            if (allHeaders && typeof allHeaders === 'object') {
+              const auth = (allHeaders as Record<string, string>)['Authorization'];
+              if (auth) {
+                (headers as Record<string, string>)['Authorization'] = auth;
+              }
+            }
+
+            const resp = await fetch('/transcribe', {
+              method: 'POST',
+              headers,
+              body: form,
+            });
+
+            if (!resp.ok) {
+              const err = await resp.json().catch(() => ({ error: resp.statusText }));
+              throw new Error(err.error || `HTTP ${resp.status}`);
+            }
+
+            const data = await resp.json();
+            const text = (data.text || '').trim();
+            if (text) {
+              this.config.onTranscript(text);
+            }
+          } catch (e: any) {
+            console.error('Transcription failed:', e);
+            this.config.onError(`Transcription error: ${e.message}`);
+          } finally {
+            if (this.active) {
+              this.config.onStatusChange('listening');
+            }
+          }
+        },
+
+        onVADMisfire: () => {
+          // Speech was too short -- ignore
+        },
+      });
+
+      this.vad.start();
+      this.active = true;
+      this.config.onStart();
+      this.config.onStatusChange('listening');
+    } catch (e: any) {
+      this.active = false;
+      let msg = 'Failed to start voice input.';
+      if (e.name === 'NotAllowedError') {
+        msg = 'Microphone permission denied. Enable in browser settings.';
+      } else if (e.name === 'NotFoundError') {
+        msg = 'No microphone found. Check your device settings.';
+      }
+      this.config.onError(msg);
     }
   }
 
-  public stop(): void {
-    if (!this.recognition || !this.isRecording) {
-      return;
+  public async stop(): Promise<void> {
+    if (!this.active) return;
+    this.active = false;
+
+    if (this.vad) {
+      this.vad.destroy();
+      this.vad = null;
     }
 
-    this.intentionalStop = true;
-    this.recognition.stop();
+    this.config.onEnd();
   }
 
-  public toggle(): void {
-    if (this.isRecording) {
-      this.stop();
+  public async toggle(): Promise<void> {
+    if (this.active) {
+      await this.stop();
     } else {
-      this.start();
+      await this.start();
     }
   }
 
   public isActive(): boolean {
-    return this.isRecording;
+    return this.active;
   }
 
   public destroy(): void {
-    if (this.recognition) {
-      this.stop();
-      this.recognition.onstart = null;
-      this.recognition.onend = null;
-      this.recognition.onerror = null;
-      this.recognition.onresult = null;
-      this.recognition = null;
-    }
+    this.stop();
   }
 }

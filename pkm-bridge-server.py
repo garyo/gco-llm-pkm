@@ -88,6 +88,9 @@ from pkm_bridge.events import event_manager
 # Import voice preprocessor
 from pkm_bridge.voice_preprocessor import VoicePreprocessor
 
+# Import STT client for Whisper transcription
+from pkm_bridge.stt_client import STTClient
+
 # Import RAG components
 from pkm_bridge.context_retriever import ContextRetriever
 from pkm_bridge.embeddings.voyage_client import VoyageClient
@@ -116,6 +119,13 @@ client = Anthropic(api_key=config.anthropic_api_key)
 
 # Initialize voice preprocessor
 voice_preprocessor = VoicePreprocessor(client)
+
+# Initialize STT client (optional - only if configured)
+stt_client = None
+try:
+    stt_client = STTClient()
+except ValueError as e:
+    logger.info(f"STT not configured: {e}")
 
 # Initialize RAG components (if Voyage API key available)
 voyage_api_key = os.getenv('VOYAGE_API_KEY')
@@ -444,6 +454,47 @@ def verify_token():
         logger.info(f"Token verification from {request.remote_addr}: invalid/expired")
 
     return jsonify({"valid": is_valid})
+
+
+@app.route('/transcribe', methods=['POST'])
+@limiter.limit("30 per minute")
+def transcribe():
+    """Transcribe audio using server-side Whisper API (Groq/OpenAI).
+
+    Accepts multipart form data with an audio file.
+
+    Form fields:
+        audio: WAV audio file
+        language: ISO 639-1 language code (default: "en")
+
+    Returns:
+        {"text": "transcribed text"}
+    """
+    # Check auth if enabled
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid or expired token"}), 401
+
+    if not stt_client:
+        return jsonify({"error": "STT not configured (set STT_PROVIDER and API key)"}), 503
+
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({"error": "Missing 'audio' file in request"}), 400
+
+    language = request.form.get('language', 'en')
+
+    try:
+        text = stt_client.transcribe(audio_file, language=language)
+        logger.info(f"Transcribed {audio_file.content_length or '?'} bytes -> {len(text)} chars")
+        return jsonify({"text": text})
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
 
 
 @app.route('/query', methods=['POST'])

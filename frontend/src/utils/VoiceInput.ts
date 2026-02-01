@@ -73,8 +73,6 @@ export class VoiceInput {
   private vad: MicVAD | null = null;
   private active = false;
   private config: Required<VoiceInputConfig>;
-  private lastAudioLength = 0;
-  private lastAudioTime = 0;
 
   constructor(config: VoiceInputConfig = {}) {
     this.config = {
@@ -114,14 +112,6 @@ export class VoiceInput {
         onSpeechEnd: async (audio: Float32Array) => {
           // Skip very short segments (noise/clicks) -- 0.3s at 16kHz
           if (audio.length < 4800) return;
-
-          // Guard against duplicate firings (seen on mobile)
-          const now = Date.now();
-          if (audio.length === this.lastAudioLength && now - this.lastAudioTime < 2000) {
-            return;
-          }
-          this.lastAudioLength = audio.length;
-          this.lastAudioTime = now;
 
           this.config.onStatusChange('transcribing');
 

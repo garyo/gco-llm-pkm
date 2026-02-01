@@ -429,6 +429,7 @@
   let lastEventTime: number = 0;  // Track last SSE event for stale detection
   let reconnectAttempts: number = 0;  // For exponential backoff
   const MAX_RECONNECT_DELAY = 30000;  // Cap reconnect delay at 30 seconds
+  let lastResumeRefresh: number = 0;  // Debounce visibility+focus double-fire
 
   // State
   let editorView: EditorView | null = null;
@@ -1669,7 +1670,9 @@
         }
       }
 
-      if (needsRefresh) {
+      // Debounce: visibilitychange and focus often fire back-to-back
+      if (needsRefresh && Date.now() - lastResumeRefresh > 2000) {
+        lastResumeRefresh = Date.now();
         refreshAfterResume();
       }
     }
@@ -1677,7 +1680,6 @@
 
   // Also handle window focus for PWAs (more reliable than visibilitychange in some cases)
   window.addEventListener('focus', () => {
-    console.log('Window focused');
     const staleDuration = lastEventTime > 0 ? Date.now() - lastEventTime : -1;
 
     let needsRefresh = false;
@@ -1706,7 +1708,8 @@
       needsRefresh = true;
     }
 
-    if (needsRefresh) {
+    if (needsRefresh && Date.now() - lastResumeRefresh > 2000) {
+      lastResumeRefresh = Date.now();
       refreshAfterResume();
     }
   });

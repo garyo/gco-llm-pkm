@@ -52,6 +52,7 @@ export class VoiceInput {
   private recognition: SpeechRecognition | null = null;
   private isRecording = false;
   private intentionalStop = false;
+  private autoRestarting = false;
   private config: Required<VoiceInputConfig>;
 
   constructor(config: VoiceInputConfig = {}) {
@@ -84,6 +85,10 @@ export class VoiceInput {
 
       this.recognition.onstart = () => {
         this.isRecording = true;
+        if (this.autoRestarting) {
+          this.autoRestarting = false;
+          return; // Skip callback on auto-restart (avoids beep/UI reset)
+        }
         this.config.onStart();
       };
 
@@ -92,6 +97,7 @@ export class VoiceInput {
         // auto-restart to keep listening through pauses in speech.
         if (this.config.continuous && !this.intentionalStop && this.isRecording) {
           try {
+            this.autoRestarting = true;
             this.recognition?.start();
             return; // Don't fire onEnd — we're still listening
           } catch {
@@ -104,6 +110,11 @@ export class VoiceInput {
       };
 
       this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        // In continuous mode, no-speech is expected during pauses — ignore it
+        if (event.error === 'no-speech' && this.config.continuous && this.isRecording) {
+          return;
+        }
+
         let errorMessage = 'Unknown error occurred';
 
         switch (event.error) {

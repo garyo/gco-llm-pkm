@@ -343,8 +343,9 @@ import EditorInterface from '../components/EditorInterface.astro';
             return;
           }
 
-          // Simply SET the input to whatever the API sends (it accumulates for us)
-          input.value = text;
+          // Append new text (after auto-restart the API starts a fresh session)
+          const existing = input.value.trim();
+          input.value = existing ? existing + ' ' + text : text;
           autoResizeTextarea();
 
           // Mark this as a voice message and track length

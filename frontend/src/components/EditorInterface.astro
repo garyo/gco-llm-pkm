@@ -645,7 +645,8 @@
       updateStatus(`Loaded ${allFiles.length} files`);
       filterAndPopulateFiles();
     } catch (e: any) {
-      updateStatus(`Error loading files: ${e.message}`, true);
+      if (e.name === 'AbortError') return;
+      updateStatus(`Error loading files — try refreshing: ${e.message}`, true);
       console.error('Failed to load file list:', e);
     }
   }
@@ -800,7 +801,8 @@
       // Auto-collapse filters on mobile after loading a file
       closeFilterControls();
     } catch (e: any) {
-      updateStatus(`Error loading file: ${e.message}`, true);
+      if (e.name === 'AbortError') return;
+      updateStatus(`Error loading file — try refreshing: ${e.message}`, true);
       updateFileDisplay(null);
       console.error('Failed to load file:', e);
     }
@@ -889,6 +891,47 @@
 
     // Reload the file
     await loadFile(currentFile);
+  }
+
+  // Silently refresh file list and current file after returning from background.
+  // Skips reload if the editor has unsaved changes (shows conflict instead).
+  async function refreshAfterResume() {
+    try {
+      await loadFileList();
+    } catch (e) {
+      console.error('Failed to refresh file list after resume:', e);
+    }
+
+    if (!currentFile) return;
+
+    if (isDirty) {
+      // Don't silently overwrite -- check mtime to see if there's a real conflict
+      try {
+        const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
+          headers: getAuthHeaders()
+        }, 5000);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.modified && currentFileMtime && data.modified > currentFileMtime) {
+            conflictDetected = true;
+            updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
+            if (cachedAutoSaveEnabled) {
+              showConflictModal(data.modified);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to check file mtime after resume:', e);
+      }
+      return;
+    }
+
+    // Editor is clean -- silently reload
+    try {
+      await loadFile(currentFile);
+    } catch (e) {
+      console.error('Failed to refresh file after resume:', e);
+    }
   }
 
   // Update status message
@@ -1567,11 +1610,14 @@
       const staleDuration = lastEventTime > 0 ? Date.now() - lastEventTime : -1;
       console.log(`Tab visible - SSE state: ${eventSource?.readyState}, stale duration: ${staleDuration}ms`);
 
+      let needsRefresh = false;
+
       if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
         console.log('Tab visible, reconnecting SSE (connection closed)');
         (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
         reconnectAttempts = 0;
         connectSSE();
+        needsRefresh = true;
       } else if (eventSource.readyState === EventSource.OPEN) {
         // Always reconnect on visibility change if it's been more than 45 seconds
         // (server sends keepalive every 30s, so >45s means something is wrong)
@@ -1582,9 +1628,15 @@
           (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
           reconnectAttempts = 0;
           connectSSE();
+          needsRefresh = true;
         } else {
           console.log(`Tab visible, SSE looks healthy (${Math.floor(staleDuration/1000)}s since last event)`);
         }
+      }
+
+      // Catch up on any changes we missed while backgrounded
+      if (needsRefresh) {
+        refreshAfterResume();
       }
     }
   });
@@ -1594,6 +1646,8 @@
     console.log('Window focused');
     const staleDuration = lastEventTime > 0 ? Date.now() - lastEventTime : -1;
 
+    let needsRefresh = false;
+
     if (eventSource && eventSource.readyState === EventSource.OPEN && staleDuration > 45000) {
       console.log(`Window focused, SSE appears stale (${Math.floor(staleDuration/1000)}s), reconnecting`);
       eventSource.close();
@@ -1601,11 +1655,17 @@
       (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
       reconnectAttempts = 0;
       connectSSE();
+      needsRefresh = true;
     } else if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
       console.log('Window focused, reconnecting closed SSE');
       (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
       reconnectAttempts = 0;
       connectSSE();
+      needsRefresh = true;
+    }
+
+    if (needsRefresh) {
+      refreshAfterResume();
     }
   });
 

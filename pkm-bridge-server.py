@@ -229,7 +229,6 @@ except ValueError as e:
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["200 per hour"],  # Global default
     storage_uri="memory://",
 )
 

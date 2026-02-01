@@ -343,7 +343,6 @@ import EditorInterface from '../components/EditorInterface.astro';
         voiceBtn.title = 'Tap to stop recording';
         voiceStatus.classList.remove('hidden');
         voiceStatusText.textContent = 'Listening...';
-        input.value = '';  // Clear input when starting voice
       },
 
       onEnd: () => {
@@ -387,10 +386,55 @@ import EditorInterface from '../components/EditorInterface.astro';
       return;
     }
 
-    // Click handler (async since start() is now async)
-    voiceBtn.addEventListener('click', async () => {
+    // Long-press mic button to clear text input
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+    let didLongPress = false;
+
+    function startLongPress() {
+      didLongPress = false;
+      longPressTimer = setTimeout(async () => {
+        didLongPress = true;
+        // Stop mic if active
+        if (voiceInput?.isActive()) {
+          await voiceInput.stop();
+        }
+        input.value = '';
+        autoResizeTextarea();
+        isVoiceMessage = false;
+        // Brief "Cleared" feedback
+        voiceStatusText.textContent = 'Cleared';
+        voiceStatus.classList.remove('hidden');
+        setTimeout(() => voiceStatus.classList.add('hidden'), 800);
+      }, 700);
+    }
+
+    function cancelLongPress() {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }
+
+    voiceBtn.addEventListener('pointerdown', startLongPress);
+    voiceBtn.addEventListener('pointerup', cancelLongPress);
+    voiceBtn.addEventListener('pointerleave', cancelLongPress);
+    voiceBtn.addEventListener('pointercancel', cancelLongPress);
+
+    // Click handler -- skip if long-press already fired
+    voiceBtn.addEventListener('click', async (e) => {
       if (!voiceInput) return;
+      if (didLongPress) {
+        didLongPress = false;
+        return;
+      }
       await voiceInput.toggle();
+    });
+
+    // Stop mic when user manually edits text (programmatic .value changes don't fire 'input')
+    input.addEventListener('input', () => {
+      if (voiceInput?.isActive()) {
+        voiceInput.stop();
+      }
     });
   }
 

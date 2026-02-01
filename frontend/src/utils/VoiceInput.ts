@@ -102,7 +102,7 @@ export class VoiceInput {
         positiveSpeechThreshold: 0.3,
         negativeSpeechThreshold: 0.25,
         minSpeechMs: 300,
-        preSpeechPadMs: 300,
+        preSpeechPadMs: 500,
         redemptionMs: 800,
 
         onSpeechStart: () => {

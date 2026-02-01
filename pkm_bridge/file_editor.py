@@ -5,6 +5,10 @@ from typing import List, Dict
 import logging
 
 
+class ConflictError(Exception):
+    """Raised when a save is rejected due to a stale mtime (optimistic concurrency)."""
+
+
 class FileEditor:
     """Handle file reading, writing, and listing for the editor."""
 
@@ -165,13 +169,21 @@ class FileEditor:
             'size': full_path.stat().st_size
         }
 
-    def write_file(self, filepath: str, content: str, create_only: bool = False) -> Dict[str, any]:
+    def write_file(
+        self,
+        filepath: str,
+        content: str,
+        create_only: bool = False,
+        expected_mtime: float | None = None,
+    ) -> Dict[str, any]:
         """Write file content.
 
         Args:
             filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
             content: File content to write
             create_only: If True, only create the file if it doesn't exist (atomic check)
+            expected_mtime: If set, reject the write if the file's current mtime is newer
+                            (optimistic concurrency control to prevent silent overwrites).
 
         Returns:
             Dict with status and modified timestamp.
@@ -179,6 +191,8 @@ class FileEditor:
 
         Raises:
             ValueError: If file path is invalid
+            FileExistsError: (via create_only)
+            ConflictError: If expected_mtime is stale (caller should return 409)
         """
         # Parse prefix
         if ':' in filepath:
@@ -197,6 +211,15 @@ class FileEditor:
 
         # Ensure parent directory exists
         full_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Optimistic concurrency check: reject if file changed since client loaded it
+        if expected_mtime is not None and full_path.exists():
+            actual_mtime = full_path.stat().st_mtime
+            if actual_mtime > expected_mtime:
+                raise ConflictError(
+                    f"File modified on disk (expected mtime {expected_mtime}, "
+                    f"actual {actual_mtime})"
+                )
 
         # Write file
         if create_only:

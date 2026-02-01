@@ -284,7 +284,7 @@ if context_retriever:
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
 # Initialize file editor
-from pkm_bridge.file_editor import FileEditor
+from pkm_bridge.file_editor import FileEditor, ConflictError
 file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
 
 # Initialize history manager for conversation truncation
@@ -1353,11 +1353,19 @@ def save_file(filepath):
             return jsonify({"error": "Missing 'content' in request body"}), 400
 
         create_only = request.args.get('create_only', '').lower() == 'true'
-        result = file_editor.write_file(filepath, data['content'], create_only=create_only)
+        expected_mtime = data.get('expected_mtime')
+        if expected_mtime is not None:
+            expected_mtime = float(expected_mtime)
+        result = file_editor.write_file(
+            filepath, data['content'], create_only=create_only, expected_mtime=expected_mtime
+        )
         return jsonify(result)
     except ValueError as e:
         logger.warning(f"Invalid file path for save: {filepath} - {str(e)}")
         return jsonify({"error": str(e)}), 400
+    except ConflictError as e:
+        logger.info(f"Conflict saving {filepath}: {e}")
+        return jsonify({"error": "conflict", "message": str(e)}), 409
     except Exception as e:
         logger.error(f"Error saving file {filepath}: {str(e)}")
         return jsonify({"error": str(e)}), 500

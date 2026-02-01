@@ -809,7 +809,7 @@
   }
 
   // Save file
-  async function saveFile() {
+  async function saveFile(force = false) {
     if (!editorView || !currentFile) return;
 
     // Prevent race condition with SSE events
@@ -820,12 +820,24 @@
       updateStatus('Saving...');
 
       const content = editorView.state.doc.toString();
+      const body: Record<string, any> = { content };
+      if (!force) {
+        body.expected_mtime = currentFileMtime;
+      }
 
       const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ content })
+        body: JSON.stringify(body)
       }, 30000); // 30s timeout for saves
+
+      if (res.status === 409) {
+        // Server rejected save -- file changed on disk since we loaded it
+        conflictDetected = true;
+        updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
+        showConflictModal(null);
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`Failed to save file: ${res.status}`);
@@ -1016,8 +1028,16 @@
       const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
         method: 'PUT',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ content })
+        body: JSON.stringify({ content, expected_mtime: currentFileMtime })
       }, 30000); // 30s timeout for auto-saves
+
+      if (res.status === 409) {
+        // Server rejected save -- file changed on disk since we loaded it
+        conflictDetected = true;
+        updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
+        showConflictModal(null);
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(`Failed to save: ${res.status}`);
@@ -1086,7 +1106,7 @@
     }, 5000) as unknown as number;
   }
 
-  function showConflictModal(remoteMtime: number) {
+  function showConflictModal(remoteMtime: number | null) {
     const modal = document.getElementById('conflict-modal')!;
     const localTime = document.getElementById('conflict-local-time')!;
     const remoteTime = document.getElementById('conflict-remote-time')!;
@@ -1098,8 +1118,12 @@
       localTime.textContent = 'Unknown';
     }
 
-    const remoteDate = new Date(remoteMtime * 1000);
-    remoteTime.textContent = remoteDate.toLocaleTimeString();
+    if (remoteMtime) {
+      const remoteDate = new Date(remoteMtime * 1000);
+      remoteTime.textContent = remoteDate.toLocaleTimeString();
+    } else {
+      remoteTime.textContent = 'Newer than local';
+    }
 
     modal.classList.remove('hidden');
   }
@@ -1114,9 +1138,9 @@
     conflictDetected = false;
 
     if (action === 'save-mine') {
-      // Force save, overwriting remote
+      // Force save, overwriting remote (skip mtime check)
       updateStatus('Saving your version...');
-      await saveFile();
+      await saveFile(true);
 
     } else if (action === 'reload-remote') {
       // Discard local, reload remote

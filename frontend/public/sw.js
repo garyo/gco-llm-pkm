@@ -9,11 +9,13 @@ const STATIC_ASSETS = [
   OFFLINE_PAGE
 ];
 
-// Install event - cache static assets
+// Install event - cache static assets (best-effort, don't block install on failures)
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(STATIC_ASSETS))
+      .then(cache => Promise.all(
+        STATIC_ASSETS.map(url => cache.add(url).catch(() => {}))
+      ))
       .then(() => self.skipWaiting())
   );
 });

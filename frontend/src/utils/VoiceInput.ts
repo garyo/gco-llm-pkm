@@ -51,6 +51,7 @@ export interface VoiceInputConfig {
 export class VoiceInput {
   private recognition: SpeechRecognition | null = null;
   private isRecording = false;
+  private intentionalStop = false;
   private config: Required<VoiceInputConfig>;
 
   constructor(config: VoiceInputConfig = {}) {
@@ -87,7 +88,18 @@ export class VoiceInput {
       };
 
       this.recognition.onend = () => {
+        // If continuous mode and the user didn't explicitly stop,
+        // auto-restart to keep listening through pauses in speech.
+        if (this.config.continuous && !this.intentionalStop && this.isRecording) {
+          try {
+            this.recognition?.start();
+            return; // Don't fire onEnd — we're still listening
+          } catch {
+            // Fall through to normal end if restart fails
+          }
+        }
         this.isRecording = false;
+        this.intentionalStop = false;
         this.config.onEnd();
       };
 
@@ -164,6 +176,7 @@ export class VoiceInput {
       return;
     }
 
+    this.intentionalStop = true;
     this.recognition.stop();
   }
 

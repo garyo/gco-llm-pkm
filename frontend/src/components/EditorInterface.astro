@@ -1634,31 +1634,41 @@
       const staleDuration = lastEventTime > 0 ? Date.now() - lastEventTime : -1;
       console.log(`Tab visible - SSE state: ${eventSource?.readyState}, stale duration: ${staleDuration}ms`);
 
+      // After waking from background, refresh files if SSE was disrupted.
+      // The SSE state is often CONNECTING (0) because EventSource auto-retries
+      // after the connection was killed during sleep -- we missed events either way.
       let needsRefresh = false;
 
       if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
         console.log('Tab visible, reconnecting SSE (connection closed)');
-        (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+        (window as any)[SSE_GLOBAL_KEY] = null;
+        reconnectAttempts = 0;
+        connectSSE();
+        needsRefresh = true;
+      } else if (eventSource.readyState === EventSource.CONNECTING) {
+        // Connection was lost during sleep, EventSource is auto-retrying.
+        // Kill it, start fresh, and refresh files since we missed events.
+        console.log('Tab visible, SSE was disrupted (CONNECTING), restarting');
+        eventSource.close();
+        eventSource = null;
+        (window as any)[SSE_GLOBAL_KEY] = null;
         reconnectAttempts = 0;
         connectSSE();
         needsRefresh = true;
       } else if (eventSource.readyState === EventSource.OPEN) {
-        // Always reconnect on visibility change if it's been more than 45 seconds
-        // (server sends keepalive every 30s, so >45s means something is wrong)
         if (staleDuration > 45000) {
-          console.log(`Tab visible, SSE appears stale (${Math.floor(staleDuration/1000)}s since last event), reconnecting`);
+          console.log(`Tab visible, SSE stale (${Math.floor(staleDuration/1000)}s), reconnecting`);
           eventSource.close();
           eventSource = null;
-          (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+          (window as any)[SSE_GLOBAL_KEY] = null;
           reconnectAttempts = 0;
           connectSSE();
           needsRefresh = true;
         } else {
-          console.log(`Tab visible, SSE looks healthy (${Math.floor(staleDuration/1000)}s since last event)`);
+          console.log(`Tab visible, SSE healthy (${Math.floor(staleDuration/1000)}s since last event)`);
         }
       }
 
-      // Catch up on any changes we missed while backgrounded
       if (needsRefresh) {
         refreshAfterResume();
       }
@@ -1672,17 +1682,25 @@
 
     let needsRefresh = false;
 
-    if (eventSource && eventSource.readyState === EventSource.OPEN && staleDuration > 45000) {
-      console.log(`Window focused, SSE appears stale (${Math.floor(staleDuration/1000)}s), reconnecting`);
-      eventSource.close();
-      eventSource = null;
-      (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+    if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+      console.log('Window focused, reconnecting closed SSE');
+      (window as any)[SSE_GLOBAL_KEY] = null;
       reconnectAttempts = 0;
       connectSSE();
       needsRefresh = true;
-    } else if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
-      console.log('Window focused, reconnecting closed SSE');
-      (window as any)[SSE_GLOBAL_KEY] = null; // Clear lock
+    } else if (eventSource.readyState === EventSource.CONNECTING) {
+      console.log('Window focused, SSE disrupted (CONNECTING), restarting');
+      eventSource.close();
+      eventSource = null;
+      (window as any)[SSE_GLOBAL_KEY] = null;
+      reconnectAttempts = 0;
+      connectSSE();
+      needsRefresh = true;
+    } else if (eventSource.readyState === EventSource.OPEN && staleDuration > 45000) {
+      console.log(`Window focused, SSE stale (${Math.floor(staleDuration/1000)}s), reconnecting`);
+      eventSource.close();
+      eventSource = null;
+      (window as any)[SSE_GLOBAL_KEY] = null;
       reconnectAttempts = 0;
       connectSSE();
       needsRefresh = true;

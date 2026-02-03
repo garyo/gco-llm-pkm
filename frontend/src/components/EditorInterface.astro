@@ -906,6 +906,39 @@
     await loadFile(currentFile);
   }
 
+  // Update current file content in-place without destroying/recreating the editor.
+  // Returns true if content was updated, false if content was unchanged or no editor.
+  async function refreshFileInPlace(): Promise<boolean> {
+    if (!currentFile) return false;
+
+    const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
+      headers: getAuthHeaders()
+    }, 5000);
+    if (!res.ok) return false;
+
+    const data = await res.json();
+
+    // Skip if mtime hasn't advanced
+    if (currentFileMtime && data.modified && data.modified <= currentFileMtime) {
+      return false;
+    }
+
+    if (editorView) {
+      const currentContent = editorView.state.doc.toString();
+      if (data.content !== currentContent) {
+        editorView.dispatch({
+          changes: { from: 0, to: editorView.state.doc.length, insert: data.content }
+        });
+      }
+      currentFileMtime = data.modified || null;
+      isDirty = false;
+      saveButton.disabled = true;
+      return true;
+    }
+
+    return false;
+  }
+
   // Silently refresh file list and current file after returning from background.
   // Skips reload if the editor has unsaved changes (shows conflict instead).
   async function refreshAfterResume() {
@@ -939,9 +972,12 @@
       return;
     }
 
-    // Editor is clean -- silently reload
+    // Editor is clean -- only reload if file actually changed on disk
     try {
-      await loadFile(currentFile);
+      const updated = await refreshFileInPlace();
+      if (updated) {
+        updateStatus(`Refreshed ${currentFile!.split('/').pop()}`);
+      }
     } catch (e) {
       console.error('Failed to refresh file after resume:', e);
     }
@@ -1382,8 +1418,10 @@
       return;
     }
 
-    // Auto-reload the file
-    loadFile(currentFile);
+    // Auto-reload the file content in place (no editor flash)
+    refreshFileInPlace().catch(e => {
+      console.error('Failed to refresh file after change:', e);
+    });
   }
 
   // Handle open file event from SSE

@@ -57,7 +57,10 @@ from pkm_bridge.auth import AuthManager
 
 # Import database
 from pkm_bridge.database import init_db, get_db
-from pkm_bridge.db_repository import SessionRepository, ToolExecutionLogRepository, LearnedRuleRepository, QueryFeedbackRepository
+from pkm_bridge.db_repository import (
+    SessionRepository, ToolExecutionLogRepository, LearnedRuleRepository,
+    QueryFeedbackRepository, QueryFeedbackExplicitRepository, SessionNoteRepository,
+)
 
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
@@ -69,6 +72,7 @@ from pkm_bridge.tools.google_calendar import GoogleCalendarTool
 from pkm_bridge.tools.open_file import OpenFileTool
 from pkm_bridge.tools.find_context import FindContextTool
 from pkm_bridge.tools.semantic_search import SemanticSearchTool
+from pkm_bridge.tools.skills import SaveSkillTool, ListSkillsTool, UseSkillTool, NoteToSelfTool
 
 # Import database components
 from pkm_bridge.database import init_db, get_db
@@ -280,6 +284,13 @@ if google_oauth:
 if context_retriever:
     tool_registry.register(SemanticSearchTool(logger, context_retriever))
     logger.info("Semantic search tool registered (RAG)")
+
+# Register skill tools
+tool_registry.register(SaveSkillTool(logger, config.org_dir, config.dangerous_patterns))
+tool_registry.register(ListSkillsTool(logger, config.org_dir))
+tool_registry.register(UseSkillTool(logger, config.org_dir))
+tool_registry.register(NoteToSelfTool(logger))
+logger.info("Skill and note_to_self tools registered")
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
@@ -554,6 +565,19 @@ def query():
             user_timezone=user_timezone,
             learned_rules=learned_rules if learned_rules else None,
         )
+
+        # Load session notes (working memory) and inject into system prompt
+        session_notes = SessionNoteRepository.get_for_session(db, session_id)
+        if session_notes:
+            notes_lines = [f"- [{n.category}] {n.note}" for n in session_notes]
+            notes_block = {
+                "type": "text",
+                "text": "\n\n# SESSION NOTES (your working memory)\n" + "\n".join(notes_lines),
+                # Not cached — changes per-request
+            }
+            # Insert before the last block (date block)
+            system_prompt_blocks.insert(-1, notes_block)
+            logger.debug(f"Injected {len(session_notes)} session notes into prompt")
 
         # Track RAG context for feedback capture
         had_rag_context = False
@@ -909,7 +933,8 @@ def query():
         return jsonify({
             "response": assistant_text,
             "session_id": session_id,
-            "session_cost": total_session_cost
+            "session_cost": total_session_cost,
+            "query_id": query_id,
         })
 
     except Exception as e:
@@ -2024,6 +2049,143 @@ def delete_learned_rule(rule_id):
         if not deleted:
             return jsonify({"error": "Rule not found"}), 404
         return jsonify({"status": "deleted"})
+    finally:
+        db.close()
+
+
+@app.route('/api/feedback', methods=['POST'])
+@limiter.limit("30 per minute")
+def submit_feedback():
+    """Submit explicit feedback for a query response.
+
+    Request body:
+        {
+            "query_id": "uuid-string",
+            "session_id": "session-string",
+            "feedback": "positive" | "negative",
+            "note": "optional user note"
+        }
+    """
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    data = request.json
+    if not data:
+        return jsonify({"error": "Missing request body"}), 400
+
+    query_id = data.get('query_id')
+    feedback = data.get('feedback')
+    note = data.get('note')
+
+    if not query_id:
+        return jsonify({"error": "Missing query_id"}), 400
+    if feedback not in ('positive', 'negative'):
+        return jsonify({"error": "feedback must be 'positive' or 'negative'"}), 400
+
+    db = get_db()
+    try:
+        success = QueryFeedbackExplicitRepository.update_explicit_feedback(
+            db, query_id, feedback, note
+        )
+        if not success:
+            return jsonify({"error": "Query not found"}), 404
+
+        # If negative feedback, also mark tool executions as unhelpful
+        if feedback == 'negative':
+            from pkm_bridge.db_repository import ToolExecutionLogExtendedRepository
+            ToolExecutionLogExtendedRepository.mark_unhelpful(db, query_id)
+        elif feedback == 'positive':
+            from pkm_bridge.db_repository import ToolExecutionLogExtendedRepository
+            ToolExecutionLogExtendedRepository.mark_helpful(db, query_id)
+
+        logger.info(f"Explicit feedback recorded: {feedback} for query {query_id}")
+        return jsonify({"status": "ok"})
+    finally:
+        db.close()
+
+
+@app.route('/api/prompt-amendments', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_prompt_amendments():
+    """List pending prompt amendment proposals from retrospective."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        from pkm_bridge.database import LearnedRule as LR
+        amendments = db.query(LR).filter(
+            LR.rule_type == 'prompt_amendment',
+            LR.is_active == True,
+        ).order_by(LR.created_at.desc()).all()
+
+        return jsonify([{
+            "id": a.id,
+            "rule_text": a.rule_text,
+            "rule_data": a.rule_data,
+            "confidence": a.confidence,
+            "created_at": a.created_at.isoformat() + 'Z',
+        } for a in amendments])
+    finally:
+        db.close()
+
+
+@app.route('/api/prompt-amendments/<int:rule_id>/approve', methods=['POST'])
+@limiter.limit("10 per minute")
+def approve_prompt_amendment(rule_id):
+    """Approve a prompt amendment (changes it to approved_amendment type)."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        rule = LearnedRuleRepository.update(
+            db, rule_id, rule_type='approved_amendment'
+        )
+        if not rule:
+            return jsonify({"error": "Amendment not found"}), 404
+
+        logger.info(f"Prompt amendment {rule_id} approved")
+        return jsonify({"status": "approved", "id": rule_id})
+    finally:
+        db.close()
+
+
+@app.route('/api/prompt-amendments/<int:rule_id>/reject', methods=['POST'])
+@limiter.limit("10 per minute")
+def reject_prompt_amendment(rule_id):
+    """Reject a prompt amendment (deactivates it)."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    db = get_db()
+    try:
+        rule = LearnedRuleRepository.update(db, rule_id, is_active=False)
+        if not rule:
+            return jsonify({"error": "Amendment not found"}), 404
+
+        logger.info(f"Prompt amendment {rule_id} rejected")
+        return jsonify({"status": "rejected", "id": rule_id})
     finally:
         db.close()
 

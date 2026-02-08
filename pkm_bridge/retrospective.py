@@ -9,8 +9,11 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from .database import get_db, ConversationSession, LearnedRule
-from .db_repository import QueryFeedbackRepository, LearnedRuleRepository
+from .database import get_db, ConversationSession, LearnedRule, QueryFeedback
+from .db_repository import (
+    QueryFeedbackRepository, QueryFeedbackExplicitRepository,
+    LearnedRuleRepository, ToolExecutionLogExtendedRepository,
+)
 
 RETROSPECTIVE_MODEL = "claude-opus-4-5-20251101"
 
@@ -27,6 +30,9 @@ to identify patterns that can improve future retrieval and response quality.
 
 ## Recent Session Conversations (last 24h)
 {conversations}
+
+## Tool Execution Summaries (last 24h)
+{tool_summaries}
 
 ## Recent Journal Topics (last 7 days of notes)
 {journal_context}
@@ -59,6 +65,18 @@ Analyze the feedback signals AND the actual conversations above. Look for:
 6. **Satisfaction assessment**: Based on the actual conversations, gauge overall user satisfaction.
    - Note specific interactions that went poorly or particularly well.
 
+7. **Tool strategy rules**: Which tools/sequences work well for which query types?
+   - Note patterns like "find_context works better than semantic_search for date-range queries."
+   - Identify tool sequences that are consistently effective or ineffective.
+
+8. **Skill candidates**: Look for recurring multi-tool patterns across sessions.
+   If Claude used the same tool sequence in 3+ queries, propose it as a saveable skill.
+
+9. **Prompt amendments**: If you identify a change that should be made to the base system instructions
+   (not just a rule), propose it with rule_type "prompt_amendment" and rule_data containing
+   {{"action": "add|modify|remove", "section": "...", "proposed_text": "..."}}.
+   These require human approval before taking effect.
+
 ## Rules for generating rules
 
 - Only generate rules you have evidence for from the data above.
@@ -66,16 +84,26 @@ Analyze the feedback signals AND the actual conversations above. Look for:
 - If an existing rule is contradicted by new evidence, generate a replacement with new text.
 - Keep rule_text concise (1-2 sentences).
 - For vocabulary rules, include structured data in rule_data with "user_term" and "note_terms" keys.
+- For tool_strategy rules, include rule_data with "query_pattern" and "recommended_tools" keys.
 - Confidence should reflect how strong the evidence is (0.3-0.7 for new rules).
 
 Respond with ONLY a JSON object (no markdown fencing):
 {{
   "rules": [
     {{
-      "rule_type": "retrieval|vocabulary|preference|embedding_gap|general",
+      "rule_type": "retrieval|vocabulary|preference|embedding_gap|general|tool_strategy|prompt_amendment",
       "rule_text": "human-readable description of the rule",
       "rule_data": {{}},
       "confidence": 0.5
+    }}
+  ],
+  "proposed_skills": [
+    {{
+      "skill_name": "kebab-case-name",
+      "skill_type": "shell|recipe",
+      "description": "what this skill does",
+      "trigger": "when to use it",
+      "content": "script or procedure content"
     }}
   ],
   "satisfaction_notes": "Brief assessment of overall user satisfaction",
@@ -85,9 +113,10 @@ Respond with ONLY a JSON object (no markdown fencing):
 
 
 def _strip_conversation_blocks(history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Strip tool_use, tool_result, and thinking blocks from conversation history.
+    """Process conversation history, keeping text and condensed tool summaries.
 
-    Keeps only user messages and assistant final text responses to reduce token count.
+    Instead of stripping tool blocks entirely, includes condensed summaries
+    so the retrospective can see what tools were used and their results.
     """
     stripped = []
     for msg in history:
@@ -98,11 +127,17 @@ def _strip_conversation_blocks(history: List[Dict[str, Any]]) -> List[Dict[str, 
             if isinstance(content, str):
                 stripped.append({"role": "user", "text": content})
             elif isinstance(content, list):
-                # User messages with tool_result blocks - skip these
                 for item in content:
-                    if isinstance(item, dict) and item.get('type') == 'tool_result':
-                        continue
-                    if isinstance(item, str):
+                    if isinstance(item, dict):
+                        if item.get('type') == 'tool_result':
+                            # Include condensed tool result
+                            result_content = item.get('content', '')
+                            if isinstance(result_content, str):
+                                result_preview = result_content[:200]
+                            else:
+                                result_preview = str(result_content)[:200]
+                            stripped.append({"role": "system", "text": f"[RESULT: {result_preview}]"})
+                    elif isinstance(item, str):
                         stripped.append({"role": "user", "text": item})
         elif role == 'assistant':
             if isinstance(content, str):
@@ -113,6 +148,13 @@ def _strip_conversation_blocks(history: List[Dict[str, Any]]) -> List[Dict[str, 
                     if isinstance(item, dict):
                         if item.get('type') == 'text':
                             text_parts.append(item.get('text', ''))
+                        elif item.get('type') == 'tool_use':
+                            # Include condensed tool call
+                            tool_name = item.get('name', '?')
+                            tool_input = item.get('input', {})
+                            # Summarize params
+                            params_summary = str(tool_input)[:150]
+                            text_parts.append(f"[TOOL: {tool_name}({params_summary})]")
                     elif isinstance(item, str):
                         text_parts.append(item)
                 if text_parts:
@@ -184,11 +226,17 @@ class SessionRetrospective:
             "rules_reinforced": 0,
             "rules_decayed": 0,
             "rules_deactivated": 0,
+            "skills_proposed": 0,
+            "abandoned_marked": 0,
             "error": None,
         }
 
         db = get_db()
         try:
+            # 0. Session abandonment detection (Phase 3)
+            # Mark sessions where last message is from user and stale (>30 min)
+            result["abandoned_marked"] = self._detect_abandoned_sessions(db)
+
             # 1. Gather unprocessed feedback
             feedbacks = QueryFeedbackRepository.get_unprocessed(db)
             if not feedbacks:
@@ -209,11 +257,15 @@ class SessionRetrospective:
             # 4. Load existing active rules
             existing_rules = LearnedRuleRepository.get_active(db)
 
-            # 5. Build and send the prompt to Opus
+            # 5. Load tool execution summaries (Phase 4)
+            tool_summaries = self._load_tool_execution_summaries(db)
+
+            # 6. Build and send the prompt to Opus
             prompt = RETROSPECTIVE_PROMPT.format(
                 existing_rules=_format_existing_rules(existing_rules),
                 feedback_summary=_format_feedback_summary(feedbacks),
                 conversations=conversations_text,
+                tool_summaries=tool_summaries,
                 journal_context=journal_context,
             )
 
@@ -228,14 +280,14 @@ class SessionRetrospective:
                 if getattr(block, "type", "") == "text":
                     response_text += block.text
 
-            # 6. Parse JSON response
+            # 7. Parse JSON response
             parsed = self._parse_response(response_text)
             if not parsed:
                 result["error"] = "Failed to parse Opus response"
                 self.last_run_result = result
                 return result
 
-            # 7. Merge rules
+            # 8. Merge rules
             source_query_ids = [fb.query_id for fb in feedbacks]
             rules_data = parsed.get("rules", [])
             for rule_data in rules_data:
@@ -262,14 +314,18 @@ class SessionRetrospective:
                     source_query_ids=source_query_ids,
                 )
 
-            # 8. Mark feedback as processed
+            # 9. Process proposed skills (Phase 6)
+            proposed_skills = parsed.get("proposed_skills", [])
+            result["skills_proposed"] = self._save_proposed_skills(proposed_skills)
+
+            # 10. Mark feedback as processed
             feedback_ids = [fb.id for fb in feedbacks]
             QueryFeedbackRepository.mark_processed(db, feedback_ids)
 
-            # 9. Apply confidence decay
+            # 11. Apply confidence decay
             result["rules_decayed"] = LearnedRuleRepository.decay_confidence(db)
 
-            # 10. Enforce max active rules
+            # 12. Enforce max active rules
             result["rules_deactivated"] = LearnedRuleRepository.enforce_max_active(db)
 
             result["satisfaction_notes"] = parsed.get("satisfaction_notes", "")
@@ -279,7 +335,7 @@ class SessionRetrospective:
             self.logger.info(
                 f"Retrospective complete: {result['feedback_processed']} feedback, "
                 f"{result['rules_created']} new rules, {result['rules_reinforced']} reinforced, "
-                f"{result['rules_decayed']} decayed"
+                f"{result['rules_decayed']} decayed, {result['skills_proposed']} skills proposed"
             )
 
         except Exception as e:
@@ -354,6 +410,129 @@ class SessionRetrospective:
             return "No recent journal entries found."
 
         return "\n".join(recent_files[:20])
+
+    def _detect_abandoned_sessions(self, db) -> int:
+        """Mark sessions where the last message is from the user and stale (>30 min).
+
+        Returns the number of sessions marked as abandoned.
+        """
+        cutoff = datetime.utcnow() - timedelta(minutes=30)
+        # Get sessions updated in the last 24h but idle for 30+ min
+        recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+        sessions = db.query(ConversationSession).filter(
+            ConversationSession.updated_at >= recent_cutoff,
+            ConversationSession.updated_at < cutoff,
+        ).all()
+
+        count = 0
+        for session in sessions:
+            if not session.history:
+                continue
+
+            # Check if the last message is from the user
+            last_msg = session.history[-1]
+            if last_msg.get('role') != 'user':
+                continue
+
+            # Find the last query feedback for this session
+            recent = QueryFeedbackRepository.get_recent_for_session(
+                db, session.session_id, limit=1
+            )
+            if recent:
+                prev = recent[0]
+                if not prev.explicit_feedback:
+                    QueryFeedbackExplicitRepository.mark_satisfaction(
+                        db, prev.query_id, 'abandoned'
+                    )
+                    count += 1
+
+        if count:
+            self.logger.info(f"Retrospective: marked {count} sessions as abandoned")
+        return count
+
+    def _load_tool_execution_summaries(self, db) -> str:
+        """Load and format recent tool execution logs for analysis."""
+        logs = ToolExecutionLogExtendedRepository.get_recent_summaries(db, hours=24)
+
+        if not logs:
+            return "No tool executions in the last 24 hours."
+
+        # Group by query_id
+        grouped: Dict[str, list] = {}
+        for log in logs:
+            if log.query_id not in grouped:
+                grouped[log.query_id] = []
+            grouped[log.query_id].append(log)
+
+        lines = []
+        for _, query_logs in list(grouped.items())[:50]:  # Limit to 50 queries
+            user_msg = query_logs[0].user_message[:100] if query_logs else '?'
+            tool_chain = ' -> '.join(
+                f"{log.tool_name}({'ok' if log.exit_code in (None, 0) else f'err:{log.exit_code}'})"
+                for log in query_logs
+            )
+            helpful_status = ''
+            for log in query_logs:
+                if log.was_helpful is True:
+                    helpful_status = ' [HELPFUL]'
+                    break
+                elif log.was_helpful is False:
+                    helpful_status = ' [UNHELPFUL]'
+                    break
+
+            lines.append(f"- \"{user_msg}\" => {tool_chain}{helpful_status}")
+
+        return "\n".join(lines)
+
+    def _save_proposed_skills(self, proposed_skills: list) -> int:
+        """Save proposed skills from retrospective to .pkm-skills/ if they don't exist.
+
+        Returns number of skills created.
+        """
+        if not proposed_skills:
+            return 0
+
+        org_dir = os.getenv("ORG_DIR", "")
+        if not org_dir:
+            return 0
+
+        from pathlib import Path
+        from .tools.skills import SaveSkillTool
+
+        save_tool = SaveSkillTool(
+            logger=self.logger,
+            org_dir=Path(org_dir).expanduser(),
+            dangerous_patterns=[],  # Skip validation for retro-proposed skills
+        )
+
+        count = 0
+        for skill in proposed_skills:
+            skill_name = skill.get('skill_name', '')
+            if not skill_name:
+                continue
+
+            # Check if skill already exists
+            skills_dir = Path(org_dir).expanduser() / '.pkm-skills'
+            if (skills_dir / f'{skill_name}.sh').exists() or \
+               (skills_dir / f'{skill_name}.md').exists():
+                self.logger.debug(f"Skill '{skill_name}' already exists, skipping")
+                continue
+
+            try:
+                result = save_tool.execute({
+                    'skill_name': skill_name,
+                    'skill_type': skill.get('skill_type', 'recipe'),
+                    'description': skill.get('description', ''),
+                    'content': skill.get('content', ''),
+                    'trigger': skill.get('trigger', ''),
+                    'tags': ['auto-proposed'],
+                })
+                self.logger.info(f"Retrospective proposed skill: {result}")
+                count += 1
+            except Exception as e:
+                self.logger.warning(f"Failed to save proposed skill '{skill_name}': {e}")
+
+        return count
 
     def _parse_response(self, response_text: str) -> Optional[Dict[str, Any]]:
         """Parse JSON response from Opus, handling potential markdown fencing."""

@@ -151,6 +151,18 @@ import Layout from '../layouts/Layout.astro';
             </div>
         </section>
 
+        <section class="prompt-amendments-section">
+            <h2>Proposed Prompt Changes</h2>
+            <p class="section-description">
+                The retrospective analysis may propose changes to the base system instructions.
+                Review and approve or reject them here. Approved changes take effect immediately.
+            </p>
+
+            <div id="amendments-container" class="amendments-container">
+                <div class="loading-row">Loading proposals...</div>
+            </div>
+        </section>
+
         <section class="account-section">
             <h2>Account</h2>
             <button id="logout-btn" class="btn btn-danger">
@@ -227,6 +239,7 @@ import Layout from '../layouts/Layout.astro';
     .editor-autosave-section,
     .integrations-section,
     .learned-rules-section,
+    .prompt-amendments-section,
     .account-section,
     .version-section {
         margin-bottom: 3rem;
@@ -581,6 +594,9 @@ import Layout from '../layouts/Layout.astro';
     .rules-table :global(.rule-type-badge.vocabulary) { background: #cce5ff; color: #004085; }
     .rules-table :global(.rule-type-badge.preference) { background: #fff3cd; color: #856404; }
     .rules-table :global(.rule-type-badge.embedding_gap) { background: #f8d7da; color: #721c24; }
+    .rules-table :global(.rule-type-badge.tool_strategy) { background: #d1ecf1; color: #0c5460; }
+    .rules-table :global(.rule-type-badge.prompt_amendment) { background: #e8daef; color: #6c3483; }
+    .rules-table :global(.rule-type-badge.approved_amendment) { background: #d5f5e3; color: #1e8449; }
     .rules-table :global(.rule-type-badge.general) { background: #e2e3e5; color: #383d41; }
 
     .rules-table :global(.confidence-bar) {
@@ -623,6 +639,76 @@ import Layout from '../layouts/Layout.astro';
         background: #f8d7da;
         border-color: #dc3545;
         color: #dc3545;
+    }
+
+    /* Prompt amendments */
+    .amendments-container {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        background: white;
+        padding: 1rem;
+    }
+
+    .amendments-container :global(.amendment-card) {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        background: #fafafa;
+    }
+
+    .amendments-container :global(.amendment-card:last-child) {
+        margin-bottom: 0;
+    }
+
+    .amendments-container :global(.amendment-text) {
+        font-size: 0.95rem;
+        margin-bottom: 0.75rem;
+        line-height: 1.5;
+    }
+
+    .amendments-container :global(.amendment-proposed) {
+        background: #f0f8ff;
+        border: 1px solid #b3d9ff;
+        border-radius: 4px;
+        padding: 0.5rem 0.75rem;
+        font-family: monospace;
+        font-size: 0.85rem;
+        margin-bottom: 0.75rem;
+        white-space: pre-wrap;
+    }
+
+    .amendments-container :global(.amendment-actions) {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .amendments-container :global(.btn-approve) {
+        background: #28a745;
+        color: white;
+        padding: 0.375rem 0.75rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+    }
+
+    .amendments-container :global(.btn-approve:hover) {
+        background: #218838;
+    }
+
+    .amendments-container :global(.btn-reject) {
+        background: #dc3545;
+        color: white;
+        padding: 0.375rem 0.75rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+    }
+
+    .amendments-container :global(.btn-reject:hover) {
+        background: #c82333;
     }
 </style>
 
@@ -1132,6 +1218,97 @@ import Layout from '../layouts/Layout.astro';
         return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;');
     }
 
+    // Prompt Amendments Management
+    async function loadPromptAmendments() {
+        const token = localStorage.getItem('pkm-authToken');
+        const container = document.getElementById('amendments-container');
+
+        try {
+            const response = await fetch('/api/prompt-amendments', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!response.ok) {
+                container.innerHTML = '<div class="loading-row">Failed to load proposals</div>';
+                return;
+            }
+
+            const amendments = await response.json();
+
+            if (amendments.length === 0) {
+                container.innerHTML = '<div class="loading-row">No pending prompt change proposals.</div>';
+                return;
+            }
+
+            container.innerHTML = amendments.map(a => {
+                const data = a.rule_data || {};
+                const action = data.action || 'add';
+                const section = data.section || '';
+                const proposedText = data.proposed_text || '';
+
+                return `
+                    <div class="amendment-card" data-id="${a.id}">
+                        <div class="amendment-text">
+                            <strong>${escapeHtml(action.toUpperCase())}</strong>
+                            ${section ? `in <em>${escapeHtml(section)}</em>` : ''}:
+                            ${escapeHtml(a.rule_text)}
+                        </div>
+                        ${proposedText ? `<div class="amendment-proposed">${escapeHtml(proposedText)}</div>` : ''}
+                        <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem;">
+                            Confidence: ${Math.round(a.confidence * 100)}% | ${new Date(a.created_at).toLocaleDateString()}
+                        </div>
+                        <div class="amendment-actions">
+                            <button class="btn-approve" onclick="approveAmendment(${a.id})">Approve</button>
+                            <button class="btn-reject" onclick="rejectAmendment(${a.id})">Reject</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (error) {
+            console.error('Error loading amendments:', error);
+            container.innerHTML = '<div class="loading-row">Error loading proposals</div>';
+        }
+    }
+
+    async function approveAmendment(id: number) {
+        const token = localStorage.getItem('pkm-authToken');
+        try {
+            const response = await fetch(`/api/prompt-amendments/${id}/approve`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                loadPromptAmendments();
+                loadLearnedRules(); // Refresh rules table too
+            } else {
+                alert('Failed to approve amendment');
+            }
+        } catch (error) {
+            console.error('Error approving amendment:', error);
+        }
+    }
+
+    async function rejectAmendment(id: number) {
+        const token = localStorage.getItem('pkm-authToken');
+        try {
+            const response = await fetch(`/api/prompt-amendments/${id}/reject`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                loadPromptAmendments();
+            } else {
+                alert('Failed to reject amendment');
+            }
+        } catch (error) {
+            console.error('Error rejecting amendment:', error);
+        }
+    }
+
+    // Make amendment functions global for onclick handlers
+    (window as any).approveAmendment = approveAmendment;
+    (window as any).rejectAmendment = rejectAmendment;
+
     // Load data on page load
     loadUserContext();
     checkTickTickStatus();
@@ -1139,4 +1316,5 @@ import Layout from '../layouts/Layout.astro';
     loadBuildVersion();
     loadLearnedRules();
     loadRetrospectiveStats();
+    loadPromptAmendments();
 </script>

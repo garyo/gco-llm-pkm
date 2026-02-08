@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog, QueryFeedback, LearnedRule
+from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog, QueryFeedback, LearnedRule, SessionNote
 
 
 class OAuthRepository:
@@ -623,3 +623,137 @@ class LearnedRuleRepository:
             LearnedRule.is_active == True,
             LearnedRule.rule_type == 'vocabulary',
         ).all()
+
+
+class QueryFeedbackExplicitRepository:
+    """Extended operations for explicit feedback (Phase 2)."""
+
+    @staticmethod
+    def update_explicit_feedback(
+        db: Session,
+        query_id: str,
+        feedback: str,
+        note: Optional[str] = None,
+    ) -> bool:
+        """Update explicit feedback on a query.
+
+        Args:
+            db: Database session
+            query_id: The query ID to update
+            feedback: 'positive' or 'negative'
+            note: Optional user note explaining the feedback
+
+        Returns:
+            True if feedback was recorded, False if query_id not found
+        """
+        record = db.query(QueryFeedback).filter(
+            QueryFeedback.query_id == query_id
+        ).first()
+
+        if not record:
+            return False
+
+        record.explicit_feedback = feedback
+        if note:
+            record.feedback_note = note
+        db.commit()
+        return True
+
+    @staticmethod
+    def mark_satisfaction(
+        db: Session,
+        query_id: str,
+        feedback_type: str = 'positive_implicit',
+    ) -> bool:
+        """Mark a query as having implicit positive satisfaction.
+
+        Args:
+            db: Database session
+            query_id: The query ID to mark
+            feedback_type: Type of implicit feedback (e.g., 'positive_implicit', 'abandoned')
+
+        Returns:
+            True if marked, False if not found or already has explicit feedback
+        """
+        record = db.query(QueryFeedback).filter(
+            QueryFeedback.query_id == query_id
+        ).first()
+
+        if not record:
+            return False
+
+        # Don't overwrite explicit feedback
+        if record.explicit_feedback and record.explicit_feedback in ('positive', 'negative'):
+            return False
+
+        record.explicit_feedback = feedback_type
+        db.commit()
+        return True
+
+
+class ToolExecutionLogExtendedRepository:
+    """Extended operations for tool execution logs (Phase 4)."""
+
+    @staticmethod
+    def mark_helpful(db: Session, query_id: str) -> int:
+        """Mark all tool executions for a query as helpful.
+
+        Returns number of records updated.
+        """
+        count = db.query(ToolExecutionLog).filter(
+            ToolExecutionLog.query_id == query_id,
+            ToolExecutionLog.tool_name != '__query_summary__',
+        ).update({ToolExecutionLog.was_helpful: True}, synchronize_session='fetch')
+        db.commit()
+        return count
+
+    @staticmethod
+    def mark_unhelpful(db: Session, query_id: str) -> int:
+        """Mark all tool executions for a query as unhelpful.
+
+        Returns number of records updated.
+        """
+        count = db.query(ToolExecutionLog).filter(
+            ToolExecutionLog.query_id == query_id,
+            ToolExecutionLog.tool_name != '__query_summary__',
+        ).update({ToolExecutionLog.was_helpful: False}, synchronize_session='fetch')
+        db.commit()
+        return count
+
+    @staticmethod
+    def get_recent_summaries(db: Session, hours: int = 24, limit: int = 500) -> List[ToolExecutionLog]:
+        """Get recent tool execution logs for retrospective analysis."""
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        return db.query(ToolExecutionLog).filter(
+            ToolExecutionLog.created_at >= cutoff,
+            ToolExecutionLog.tool_name != '__query_summary__',
+        ).order_by(ToolExecutionLog.created_at.asc()).limit(limit).all()
+
+
+class SessionNoteRepository:
+    """Repository for per-session working memory notes."""
+
+    @staticmethod
+    def create(
+        db: Session,
+        session_id: str,
+        note: str,
+        category: str = 'other',
+    ) -> SessionNote:
+        """Create a new session note."""
+        session_note = SessionNote(
+            session_id=session_id,
+            note=note,
+            category=category,
+        )
+        db.add(session_note)
+        db.commit()
+        db.refresh(session_note)
+        return session_note
+
+    @staticmethod
+    def get_for_session(db: Session, session_id: str) -> List[SessionNote]:
+        """Get all notes for a session, ordered by creation time."""
+        return db.query(SessionNote).filter(
+            SessionNote.session_id == session_id,
+        ).order_by(SessionNote.created_at.asc()).all()

@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Optional
 from urllib.parse import quote_plus
-from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, JSON, Text, Index, ForeignKey
+from sqlalchemy import create_engine, inspect, text, Column, String, Integer, Float, Boolean, DateTime, JSON, Text, Index, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from sqlalchemy.pool import QueuePool
 from pgvector.sqlalchemy import Vector
@@ -77,6 +77,7 @@ class ToolExecutionLog(Base):
     result_summary = Column(Text, nullable=True)  # Truncated result
     exit_code = Column(Integer, nullable=True)  # For shell commands
     execution_time_ms = Column(Integer, nullable=False)  # Duration in milliseconds
+    was_helpful = Column(Boolean, nullable=True)  # Derived from satisfaction/correction signals
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self):
@@ -122,6 +123,21 @@ def get_database_url() -> str:
     return database_url
 
 
+def _upgrade_schema(engine) -> None:
+    """Add missing columns to existing tables (lightweight migration)."""
+    insp = inspect(engine)
+
+    # ToolExecutionLog: add was_helpful column if missing
+    if 'tool_execution_logs' in insp.get_table_names():
+        columns = {c['name'] for c in insp.get_columns('tool_execution_logs')}
+        if 'was_helpful' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE tool_execution_logs ADD COLUMN was_helpful BOOLEAN"
+                ))
+                print("[DB] Added 'was_helpful' column to tool_execution_logs", flush=True)
+
+
 def init_db() -> None:
     """Initialize database connection and create tables."""
     global _engine, _SessionLocal
@@ -144,8 +160,11 @@ def init_db() -> None:
 
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
 
-    # Create all tables
+    # Create all tables (new tables auto-created; existing tables need ALTER for new columns)
     Base.metadata.create_all(bind=_engine)
+
+    # Add any missing columns to existing tables
+    _upgrade_schema(_engine)
 
 
 def get_db() -> Session:
@@ -256,6 +275,20 @@ class QueryFeedback(Base):
 
     def __repr__(self):
         return f"<QueryFeedback(query_id='{self.query_id}', miss={self.retrieval_miss}, correction={self.user_followup_correction})>"
+
+
+class SessionNote(Base):
+    """Per-session working memory notes (note_to_self tool)."""
+    __tablename__ = 'session_notes'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(255), nullable=False, index=True)
+    note = Column(Text, nullable=False)
+    category = Column(String(30), nullable=False, default='other')  # user_preference, discovery, strategy, correction, other
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<SessionNote(session='{self.session_id}', category='{self.category}')>"
 
 
 class LearnedRule(Base):

@@ -260,17 +260,24 @@ class Config:
 
         Budget: max ~1500 tokens (~6KB).
         """
+        # Exclude prompt_amendment rules (review-only, not auto-injected)
+        EXCLUDED_TYPES = {'prompt_amendment'}
+
         sections = {
             'retrieval': [],
             'vocabulary': [],
             'preference': [],
             'embedding_gap': [],
+            'tool_strategy': [],
+            'approved_amendment': [],
             'general': [],
         }
 
         for rule in rules:
             rule_type = getattr(rule, 'rule_type', 'general')
             rule_text = getattr(rule, 'rule_text', '')
+            if rule_type in EXCLUDED_TYPES:
+                continue
             if rule_type in sections:
                 sections[rule_type].append(f"- {rule_text}")
             else:
@@ -283,6 +290,8 @@ class Config:
             'vocabulary': '## Vocabulary',
             'preference': '## Preferences',
             'embedding_gap': '## Embedding Gaps',
+            'tool_strategy': '## Tool Strategy',
+            'approved_amendment': '## Approved Amendments',
             'general': '## General Insights',
         }
 

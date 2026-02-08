@@ -678,7 +678,7 @@ import EditorInterface from '../components/EditorInterface.astro';
       loading.classList.add('hidden');
       loading.classList.remove('flex');
 
-      appendMessage('assistant', data.response);
+      appendMessage('assistant', data.response, data.query_id);
 
       // Auto-update Activity panel if it's open
       const toolLogsPanel = document.getElementById('tool-logs-panel');
@@ -774,7 +774,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   }
 
   // Append message to chat
-  function appendMessage(role: string, text: string) {
+  function appendMessage(role: string, text: string, queryId?: string) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
 
@@ -784,6 +784,18 @@ import EditorInterface from '../components/EditorInterface.astro';
       rendered = processCheckboxMetadata(rendered);
       rendered = addTokensToImages(rendered);
       div.innerHTML = rendered;
+
+      // Add feedback bar for assistant messages with a query_id
+      if (queryId) {
+        const feedbackBar = document.createElement('div');
+        feedbackBar.className = 'feedback-bar';
+        feedbackBar.dataset.queryId = queryId;
+        feedbackBar.innerHTML = `
+          <button class="feedback-btn thumbs-up" title="Good response">&#128077;</button>
+          <button class="feedback-btn thumbs-down" title="Bad response">&#128078;</button>
+        `;
+        div.appendChild(feedbackBar);
+      }
     } else {
       div.textContent = text;
     }
@@ -868,6 +880,51 @@ import EditorInterface from '../components/EditorInterface.astro';
       setTimeout(() => target.classList.remove('checkbox-error'), 1500);
     } finally {
       target.classList.remove('checkbox-toggling');
+    }
+  });
+
+  // Handle feedback button clicks via event delegation
+  chat.addEventListener('click', async (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains('feedback-btn')) return;
+
+    const feedbackBar = target.closest('.feedback-bar') as HTMLElement;
+    if (!feedbackBar) return;
+
+    const queryId = feedbackBar.dataset.queryId;
+    if (!queryId) return;
+
+    const isPositive = target.classList.contains('thumbs-up');
+    const feedback = isPositive ? 'positive' : 'negative';
+
+    // For negative feedback, prompt for optional note
+    let note: string | null = null;
+    if (!isPositive) {
+      note = prompt('What was wrong with this response? (optional)');
+    }
+
+    // Disable buttons and highlight selected
+    const buttons = feedbackBar.querySelectorAll('.feedback-btn');
+    buttons.forEach(btn => {
+      (btn as HTMLButtonElement).disabled = true;
+      btn.classList.add('feedback-submitted');
+    });
+    target.classList.add('feedback-selected');
+
+    try {
+      await fetchWithTimeout('/api/feedback', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ query_id: queryId, feedback, note })
+      }, 10000);
+    } catch (err) {
+      console.error('Failed to submit feedback:', err);
+      // Re-enable on error
+      buttons.forEach(btn => {
+        (btn as HTMLButtonElement).disabled = false;
+        btn.classList.remove('feedback-submitted');
+      });
+      target.classList.remove('feedback-selected');
     }
   });
 

@@ -33,18 +33,32 @@ KDL
 
 # --- Function to start in plain terminals ---
 run_plain() {
-  echo "Zellij not found. Starting servers in plain terminals..."
-  gnome-terminal -- bash -c "${BACKEND_CMD}; exec bash" 2>/dev/null \
-    || open -a Terminal.app "${PWD}/backend" 2>/dev/null \
-    || ( ${BACKEND_CMD} & )
-  sleep 1
-  gnome-terminal -- bash -c "${FRONTEND_CMD}; exec bash" 2>/dev/null \
-    || open -a Terminal.app "${PWD}/frontend" 2>/dev/null \
-    || ( ${FRONTEND_CMD} & )
+  echo "Starting servers in plain terminals..."
+  if command -v gnome-terminal >/dev/null 2>&1; then
+    gnome-terminal -- bash -c "${BACKEND_CMD}; exec bash"
+    sleep 1
+    gnome-terminal -- bash -c "${FRONTEND_CMD}; exec bash"
+  elif [[ "$(uname)" == "Darwin" ]]; then
+    osascript -e "
+      tell application \"Terminal\"
+        activate
+        do script \"cd '${PWD}' && ${BACKEND_CMD}\"
+        do script \"cd '${PWD}' && ${FRONTEND_CMD}\"
+      end tell
+    "
+  else
+    echo "No supported terminal found. Starting in background..."
+    ${BACKEND_CMD} &
+    sleep 1
+    bash -c "${FRONTEND_CMD}" &
+    echo "Backend PID: $!"
+    echo "Press Ctrl-C to stop."
+    wait
+  fi
 }
 
 # --- Main logic ---
-if /bin/false && command -v zellij >/dev/null 2>&1; then
+if false && command -v zellij >/dev/null 2>&1; then
   run_in_zellij
 else
   run_plain

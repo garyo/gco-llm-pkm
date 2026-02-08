@@ -1071,10 +1071,11 @@ import EditorInterface from '../components/EditorInterface.astro';
     }
   }
 
-  // Auto-resize textarea as user types
+  // Auto-resize textarea as user types, up to its max-height
   function autoResizeTextarea() {
     input.style.height = 'auto';
-    input.style.height = input.scrollHeight + 'px';
+    const maxHeight = parseInt(getComputedStyle(input).maxHeight, 10) || 240;
+    input.style.height = Math.min(input.scrollHeight, maxHeight) + 'px';
   }
 
   input.addEventListener('input', () => {

@@ -42,8 +42,8 @@ SHORT_NEGATION_RE = re.compile(
 
 # Patterns indicating user satisfaction
 SATISFACTION_PATTERNS = [
-    r'\bthanks?\b',
-    r'\bthank you\b',
+    r'(?<!\bno\s)\bthanks?\b',
+    r'(?<!\bno\s)\bthank you\b',
     r'\bperfect\b',
     r'\bexactly\b',
     r"\bthat'?s it\b",

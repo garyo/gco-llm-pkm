@@ -72,6 +72,7 @@ function writeString(view: DataView, offset: number, str: string) {
 export class VoiceInput {
   private vad: MicVAD | null = null;
   private active = false;
+  private starting = false;  // mutex: prevents concurrent start() calls
   private config: Required<VoiceInputConfig>;
 
   constructor(config: VoiceInputConfig = {}) {
@@ -91,7 +92,8 @@ export class VoiceInput {
   }
 
   public async start(): Promise<void> {
-    if (this.active) return;
+    if (this.active || this.starting) return;
+    this.starting = true;
 
     try {
       this.vad = await MicVAD.new({
@@ -112,6 +114,9 @@ export class VoiceInput {
         onSpeechEnd: async (audio: Float32Array) => {
           // Skip very short segments (noise/clicks) -- 0.3s at 16kHz
           if (audio.length < 4800) return;
+
+          // Guard: stop() may have been called while VAD was processing
+          if (!this.active) return;
 
           this.config.onStatusChange('transcribing');
 
@@ -142,6 +147,9 @@ export class VoiceInput {
               throw new Error(err.error || `HTTP ${resp.status}`);
             }
 
+            // Guard: stop() may have been called during the fetch
+            if (!this.active) return;
+
             const data = await resp.json();
             const text = (data.text || '').trim();
             if (text) {
@@ -149,7 +157,9 @@ export class VoiceInput {
             }
           } catch (e: any) {
             console.error('Transcription failed:', e);
-            this.config.onError(`Transcription error: ${e.message}`);
+            if (this.active) {
+              this.config.onError(`Transcription error: ${e.message}`);
+            }
           } finally {
             if (this.active) {
               this.config.onStatusChange('listening');
@@ -164,10 +174,12 @@ export class VoiceInput {
 
       this.vad.start();
       this.active = true;
+      this.starting = false;
       this.config.onStart();
       this.config.onStatusChange('listening');
     } catch (e: any) {
       this.active = false;
+      this.starting = false;
       let msg = 'Failed to start voice input.';
       if (e.name === 'NotAllowedError') {
         msg = 'Microphone permission denied. Enable in browser settings.';
@@ -179,6 +191,7 @@ export class VoiceInput {
   }
 
   public async stop(): Promise<void> {
+    this.starting = false;  // cancel any in-progress start()
     if (!this.active) return;
     this.active = false;
 

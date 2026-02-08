@@ -223,7 +223,7 @@ class Config:
                     "cache_control": {"type": "ephemeral"}
                 })
 
-        # Block N: Today's date (NOT cached - changes daily)
+        # Block N: Current date/time (NOT cached - refreshed every request)
         # Get current time in user's timezone
         # Priority: user_timezone (from client) > self.timezone (from config) > system default
         timezone_to_use = None
@@ -244,7 +244,12 @@ class Config:
         timestring = now.strftime('%A, %B %d, %Y, %H:%M:%S %Z')
         blocks.append({
             "type": "text",
-            "text": f"\n\nCurrent date/time is {now.isoformat()} or {timestring}."
+            "text": (
+                f"\n\nThe CURRENT date/time right now is {now.isoformat()} or {timestring}. "
+                "This timestamp is refreshed on every message and is always accurate. "
+                "Always use this value for time-related questions — it supersedes any "
+                "time previously mentioned in the conversation."
+            )
         })
 
         return blocks

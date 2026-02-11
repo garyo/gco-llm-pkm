@@ -24,10 +24,22 @@ MD_FM_DELIM = '---'
 
 
 def _get_skills_dir(org_dir: Path) -> Path:
-    """Get or create the skills directory."""
-    skills_dir = org_dir / '.pkm-skills'
-    skills_dir.mkdir(exist_ok=True)
-    return skills_dir
+    """Get or create the skills directory under .pkm/skills/.
+
+    Falls back to .pkm-skills/ if .pkm/ doesn't exist yet (pre-migration).
+    """
+    pkm_skills_dir = org_dir / '.pkm' / 'skills'
+    if pkm_skills_dir.exists():
+        return pkm_skills_dir
+    # Create .pkm/skills/ if .pkm/ dir exists
+    pkm_dir = org_dir / '.pkm'
+    if pkm_dir.exists():
+        pkm_skills_dir.mkdir(exist_ok=True)
+        return pkm_skills_dir
+    # Fallback: create .pkm/skills/ (new install)
+    pkm_dir.mkdir(exist_ok=True)
+    pkm_skills_dir.mkdir(exist_ok=True)
+    return pkm_skills_dir
 
 
 def _parse_shell_frontmatter(content: str) -> tuple[dict, str]:
@@ -133,7 +145,7 @@ class SaveSkillTool(BaseTool):
         return (
             "Save a discovered multi-step procedure or script as a reusable skill. "
             "Shell skills (.sh) can be executed directly. Recipe skills (.md) describe "
-            "procedures to follow. Skills are stored in .pkm-skills/ and persist across sessions."
+            "procedures to follow. Skills are stored in .pkm/skills/ and persist across sessions."
         )
 
     @property
@@ -228,7 +240,7 @@ class SaveSkillTool(BaseTool):
 
         action = 'Updated' if existing_metadata else 'Created'
         self.logger.info(f"Skill {action.lower()}: {skill_name} ({skill_type})")
-        return f"{action} skill '{skill_name}' ({skill_type}) at .pkm-skills/{skill_name}{ext}"
+        return f"{action} skill '{skill_name}' ({skill_type}) at .pkm/skills/{skill_name}{ext}"
 
 
 class ListSkillsTool(BaseTool):

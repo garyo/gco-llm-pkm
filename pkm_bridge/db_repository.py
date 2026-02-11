@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog, QueryFeedback, LearnedRule, SessionNote
+from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog, QueryFeedback, LearnedRule, SessionNote, AgentRunLog
 
 
 class OAuthRepository:
@@ -757,3 +757,53 @@ class SessionNoteRepository:
         return db.query(SessionNote).filter(
             SessionNote.session_id == session_id,
         ).order_by(SessionNote.created_at.asc()).all()
+
+
+class AgentRunLogRepository:
+    """Repository for self-improvement agent run logs."""
+
+    @staticmethod
+    def create(
+        db: Session,
+        started_at: datetime,
+        completed_at: Optional[datetime] = None,
+        trigger: str = "scheduled",
+        turns_used: int = 0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        actions_summary: Optional[List[Dict[str, Any]]] = None,
+        summary: Optional[str] = None,
+        error: Optional[str] = None,
+        run_file: Optional[str] = None,
+    ) -> AgentRunLog:
+        """Create a new agent run log entry."""
+        log = AgentRunLog(
+            started_at=started_at,
+            completed_at=completed_at,
+            trigger=trigger,
+            turns_used=turns_used,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            actions_summary=actions_summary,
+            summary=summary,
+            error=error,
+            run_file=run_file,
+        )
+        db.add(log)
+        db.commit()
+        db.refresh(log)
+        return log
+
+    @staticmethod
+    def get_recent(db: Session, limit: int = 10) -> List[AgentRunLog]:
+        """Get recent agent run logs, newest first."""
+        return db.query(AgentRunLog).order_by(
+            AgentRunLog.started_at.desc()
+        ).limit(limit).all()
+
+    @staticmethod
+    def get_latest(db: Session) -> Optional[AgentRunLog]:
+        """Get the most recent agent run log."""
+        return db.query(AgentRunLog).order_by(
+            AgentRunLog.started_at.desc()
+        ).first()

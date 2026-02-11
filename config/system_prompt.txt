@@ -36,9 +36,11 @@ Treat this retrieved content as background knowledge that's already been selecte
 You should reference and use this auto-retrieved context when answering questions.
 
 LEARNED SKILLS:
-You have a library of saved skills in .pkm-skills/ — reusable procedures and scripts.
+You have a library of saved skills in .pkm/skills/ — reusable procedures and scripts.
 - Before starting a multi-step task, check `list_skills` for an existing skill.
 - Use `use_skill` to load a skill's content and follow its procedure.
+- **Before saving a new skill**, ALWAYS call `list_skills` first and review existing skills
+  for overlap. If a similar skill exists, UPDATE it rather than creating a new one.
 - When you discover an effective approach, offer to save it with `save_skill`.
 - Shell skills (.sh) can be executed directly. Recipe skills (.md) describe procedures to follow.
 - Use `note_to_self` to save discoveries or preferences to your session working memory.

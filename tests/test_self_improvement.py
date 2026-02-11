@@ -37,8 +37,8 @@ def logger():
 
 @pytest.fixture
 def skills_dir(tmp_path: Path) -> Path:
-    d = tmp_path / ".pkm-skills"
-    d.mkdir()
+    d = tmp_path / ".pkm" / "skills"
+    d.mkdir(parents=True)
     return d
 
 
@@ -161,7 +161,7 @@ class TestSaveSkillTool:
             "content": "echo hello",
         })
         assert "Created" in result
-        fp = org_dir / ".pkm-skills" / "hello-world.sh"
+        fp = org_dir / ".pkm/skills" / "hello-world.sh"
         assert fp.exists()
         content = fp.read_text()
         assert "echo hello" in content
@@ -181,7 +181,7 @@ class TestSaveSkillTool:
             "tags": ["review", "weekly"],
         })
         assert "Created" in result
-        fp = org_dir / ".pkm-skills" / "weekly-review.md"
+        fp = org_dir / ".pkm/skills" / "weekly-review.md"
         assert fp.exists()
         content = fp.read_text()
         assert "Check calendar" in content
@@ -200,7 +200,7 @@ class TestSaveSkillTool:
             "description": "v1",
             "content": "old content",
         })
-        fp = org_dir / ".pkm-skills" / "updatable.md"
+        fp = org_dir / ".pkm/skills" / "updatable.md"
         meta1, _ = _parse_md_frontmatter(fp.read_text())
         created_time = meta1["created"]
 
@@ -246,8 +246,8 @@ class TestListSkillsTool:
     def _create_skill(self, org_dir: Path, name: str, stype: str = "recipe",
                       tags: list | None = None, desc: str = "test"):
         """Helper: write a skill file directly."""
-        skills_dir = org_dir / ".pkm-skills"
-        skills_dir.mkdir(exist_ok=True)
+        skills_dir = org_dir / ".pkm" / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
         meta = {"name": name, "description": desc, "tags": tags or [],
                 "use_count": 0, "last_used": "never"}
         if stype == "shell":
@@ -307,7 +307,7 @@ class TestUseSkillTool:
         assert "Step 1" in result
 
         # use_count should now be 1
-        fp = org_dir / ".pkm-skills" / "loadable.md"
+        fp = org_dir / ".pkm/skills" / "loadable.md"
         meta, _ = _parse_md_frontmatter(fp.read_text())
         assert meta["use_count"] == 1
 

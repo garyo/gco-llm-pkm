@@ -310,3 +310,23 @@ class LearnedRule(Base):
 
     def __repr__(self):
         return f"<LearnedRule(type='{self.rule_type}', confidence={self.confidence:.2f}, active={self.is_active})>"
+
+
+class AgentRunLog(Base):
+    """Lightweight log of self-improvement agent runs (for admin API)."""
+    __tablename__ = 'agent_run_log'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    trigger = Column(String(20), nullable=False)  # 'scheduled', 'manual'
+    turns_used = Column(Integer, nullable=False, default=0)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    actions_summary = Column(JSON, nullable=True)  # [{description}]
+    summary = Column(Text, nullable=True)  # agent's own summary
+    error = Column(Text, nullable=True)
+    run_file = Column(String(100), nullable=True)  # path to .pkm/runs/YYYY-MM-DD-HHMM.md
+
+    def __repr__(self):
+        return f"<AgentRunLog(id={self.id}, trigger='{self.trigger}', turns={self.turns_used})>"

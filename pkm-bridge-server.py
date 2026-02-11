@@ -104,6 +104,8 @@ from pkm_bridge.embeddings.embedding_service import run_incremental_embedding
 from pkm_bridge.feedback_capture import capture_feedback, check_previous_correction
 from pkm_bridge.retrospective import SessionRetrospective
 from pkm_bridge.query_enhancer import QueryEnhancer
+from pkm_bridge.self_improvement.agent import SelfImprovementAgent
+from pkm_bridge.self_improvement.filesystem import ensure_pkm_structure
 
 # Import scheduler
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -162,20 +164,29 @@ if voyage_api_key:
 else:
     logger.warning("VOYAGE_API_KEY not set - RAG auto-injection disabled")
 
-# Initialize self-improvement retrospective (daily at 3 AM)
-retrospective = SessionRetrospective(client, logger)
+# Initialize self-improvement agent (daily at 3 AM, replaces old retrospective)
+retrospective = SessionRetrospective(client, logger)  # kept for backward compat
+si_agent = SelfImprovementAgent(client, logger, config)
 if embedding_scheduler is None:
     embedding_scheduler = BackgroundScheduler()
     embedding_scheduler.start()
+
+# Ensure .pkm/ directory structure exists on startup
+try:
+    ensure_pkm_structure(config.org_dir)
+    logger.info("Ensured .pkm/ directory structure")
+except Exception as e:
+    logger.warning(f"Failed to ensure .pkm/ structure: {e}")
+
 embedding_scheduler.add_job(
-    func=retrospective.run,
+    func=si_agent.run,
     trigger="cron",
     hour=3,
-    id='session_retrospective',
-    name='Daily session retrospective',
+    id='self_improvement',
+    name='Daily self-improvement agent',
     misfire_grace_time=7200  # Allow 2 hour grace
 )
-logger.info("Self-improvement retrospective scheduled (daily at 3 AM)")
+logger.info("Self-improvement agent scheduled (daily at 3 AM)")
 
 # Initialize query enhancer for vocabulary-based query expansion
 query_enhancer = QueryEnhancer(logger)
@@ -2193,7 +2204,14 @@ def reject_prompt_amendment(rule_id):
 @app.route('/admin/retrospective', methods=['POST'])
 @limiter.limit("5 per hour")
 def trigger_retrospective():
-    """Manually trigger a retrospective analysis run."""
+    """Manually trigger a retrospective analysis run (legacy endpoint, redirects to SI agent)."""
+    return trigger_self_improve()
+
+
+@app.route('/admin/self-improve', methods=['POST'])
+@limiter.limit("5 per hour")
+def trigger_self_improve():
+    """Manually trigger the self-improvement agent."""
     if config.auth_enabled:
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
@@ -2205,29 +2223,36 @@ def trigger_retrospective():
     try:
         import threading
 
-        def run_retro():
+        def run_agent():
             try:
-                result = retrospective.run()
-                logger.info(f"Manual retrospective complete: {result}")
+                result = si_agent.run(trigger="manual")
+                logger.info(f"Manual SI agent complete: {result.get('summary', '')[:200]}")
             except Exception as e:
-                logger.error(f"Manual retrospective failed: {e}")
+                logger.error(f"Manual SI agent failed: {e}")
 
-        thread = threading.Thread(target=run_retro, daemon=True)
+        thread = threading.Thread(target=run_agent, daemon=True)
         thread.start()
 
         return jsonify({
             "status": "started",
-            "message": "Retrospective analysis started in background"
+            "message": "Self-improvement agent started in background"
         })
     except Exception as e:
-        logger.error(f"Failed to trigger retrospective: {e}")
+        logger.error(f"Failed to trigger SI agent: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route('/admin/retrospective-log', methods=['GET'])
 @limiter.limit("30 per minute")
 def get_retrospective_log():
-    """View last retrospective results and feedback stats."""
+    """View last run results and feedback stats (legacy endpoint)."""
+    return get_self_improve_log()
+
+
+@app.route('/admin/self-improve/log', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_self_improve_log():
+    """View last self-improvement run and recent run history."""
     if config.auth_enabled:
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
@@ -2236,15 +2261,58 @@ def get_retrospective_log():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    from pkm_bridge.db_repository import AgentRunLogRepository
+
     db = get_db()
     try:
         stats = QueryFeedbackRepository.get_stats(db)
+        recent_runs = AgentRunLogRepository.get_recent(db, limit=10)
+        runs_data = []
+        for run in recent_runs:
+            runs_data.append({
+                "id": run.id,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "trigger": run.trigger,
+                "turns_used": run.turns_used,
+                "input_tokens": run.input_tokens,
+                "output_tokens": run.output_tokens,
+                "actions_summary": run.actions_summary,
+                "summary": run.summary,
+                "error": run.error,
+                "run_file": run.run_file,
+            })
+
         return jsonify({
-            "last_run": retrospective.last_run_result,
+            "last_run": si_agent.last_run_result,
+            "recent_runs": runs_data,
             "feedback_stats": stats,
         })
     finally:
         db.close()
+
+
+@app.route('/admin/self-improve/memory', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_self_improve_memory():
+    """View all agent memory files."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    from pkm_bridge.self_improvement.filesystem import MEMORY_CATEGORIES, read_memory_file
+
+    memory = {}
+    for category in MEMORY_CATEGORIES:
+        content = read_memory_file(category, config.org_dir)
+        if content:
+            memory[category] = content
+
+    return jsonify({"memory": memory})
 
 
 @app.route('/api/events')

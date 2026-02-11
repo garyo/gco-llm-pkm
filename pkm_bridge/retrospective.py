@@ -34,6 +34,9 @@ to identify patterns that can improve future retrieval and response quality.
 ## Tool Execution Summaries (last 24h)
 {tool_summaries}
 
+## Existing Skills Catalog
+{skills_catalog}
+
 ## Recent Journal Topics (last 7 days of notes)
 {journal_context}
 
@@ -72,6 +75,10 @@ Analyze the feedback signals AND the actual conversations above. Look for:
 8. **Skill candidates**: Look for recurring multi-tool patterns across sessions.
    If Claude used the same tool sequence in 3+ queries, propose it as a saveable skill.
 
+10. **Skill audit**: Review the Existing Skills Catalog above for redundancy or consolidation
+    opportunities. If two or more skills do essentially the same thing, recommend which to
+    keep and which to remove. Include these in the "skill_consolidations" field of your response.
+
 9. **Prompt amendments**: If you identify a change that should be made to the base system instructions
    (not just a rule), propose it with rule_type "prompt_amendment" and rule_data containing
    {{"action": "add|modify|remove", "section": "...", "proposed_text": "..."}}.
@@ -104,6 +111,13 @@ Respond with ONLY a JSON object (no markdown fencing):
       "description": "what this skill does",
       "trigger": "when to use it",
       "content": "script or procedure content"
+    }}
+  ],
+  "skill_consolidations": [
+    {{
+      "keep": "skill-name-to-keep",
+      "remove": ["skill-name-to-remove", "..."],
+      "reason": "why these are redundant"
     }}
   ],
   "satisfaction_notes": "Brief assessment of overall user satisfaction",
@@ -227,6 +241,7 @@ class SessionRetrospective:
             "rules_decayed": 0,
             "rules_deactivated": 0,
             "skills_proposed": 0,
+            "skills_consolidated": 0,
             "abandoned_marked": 0,
             "error": None,
         }
@@ -260,12 +275,16 @@ class SessionRetrospective:
             # 5. Load tool execution summaries (Phase 4)
             tool_summaries = self._load_tool_execution_summaries(db)
 
+            # 5b. Load existing skills catalog for audit
+            skills_catalog = self._load_skills_catalog()
+
             # 6. Build and send the prompt to Opus
             prompt = RETROSPECTIVE_PROMPT.format(
                 existing_rules=_format_existing_rules(existing_rules),
                 feedback_summary=_format_feedback_summary(feedbacks),
                 conversations=conversations_text,
                 tool_summaries=tool_summaries,
+                skills_catalog=skills_catalog,
                 journal_context=journal_context,
             )
 
@@ -318,15 +337,16 @@ class SessionRetrospective:
             proposed_skills = parsed.get("proposed_skills", [])
             result["skills_proposed"] = self._save_proposed_skills(proposed_skills)
 
+            # 9b. Process skill consolidation recommendations
+            consolidations = parsed.get("skill_consolidations", [])
+            result["skills_consolidated"] = self._process_skill_consolidations(consolidations)
+
             # 10. Mark feedback as processed
             feedback_ids = [fb.id for fb in feedbacks]
             QueryFeedbackRepository.mark_processed(db, feedback_ids)
 
-            # 11. Apply confidence decay
-            result["rules_decayed"] = LearnedRuleRepository.decay_confidence(db)
-
-            # 12. Enforce max active rules
-            result["rules_deactivated"] = LearnedRuleRepository.enforce_max_active(db)
+            # Note: confidence decay and max-active enforcement are now handled
+            # by the self-improvement agent's manage_rules tool, not hardcoded here.
 
             result["satisfaction_notes"] = parsed.get("satisfaction_notes", "")
             result["summary"] = parsed.get("summary", "")
@@ -335,7 +355,8 @@ class SessionRetrospective:
             self.logger.info(
                 f"Retrospective complete: {result['feedback_processed']} feedback, "
                 f"{result['rules_created']} new rules, {result['rules_reinforced']} reinforced, "
-                f"{result['rules_decayed']} decayed, {result['skills_proposed']} skills proposed"
+                f"{result['rules_decayed']} decayed, {result['skills_proposed']} skills proposed, "
+                f"{result.get('skills_consolidated', 0)} skills consolidated"
             )
 
         except Exception as e:
@@ -484,6 +505,95 @@ class SessionRetrospective:
 
         return "\n".join(lines)
 
+    def _load_skills_catalog(self) -> str:
+        """Load the existing skills catalog for retrospective analysis."""
+        org_dir = os.getenv("ORG_DIR", "")
+        if not org_dir:
+            return "No skills directory available."
+
+        from pathlib import Path
+        from .tools.skills import _parse_skill_file
+
+        skills_dir = Path(org_dir).expanduser() / '.pkm' / 'skills'
+        if not skills_dir.exists():
+            return "No skills saved yet."
+
+        skills = []
+        for filepath in sorted(skills_dir.iterdir()):
+            if filepath.suffix not in ('.sh', '.md'):
+                continue
+            parsed = _parse_skill_file(filepath)
+            if not parsed:
+                continue
+            skills.append(parsed)
+
+        if not skills:
+            return "No skills saved yet."
+
+        lines = [f"Total: {len(skills)} skills\n"]
+        for s in skills:
+            name = s.get('name', s.get('_file', '?'))
+            stype = s.get('_type', '?')
+            desc = s.get('description', '')
+            tags = ', '.join(s.get('tags', []))
+            use_count = s.get('use_count', 0)
+            body_preview = s.get('_body', '')[:150].replace('\n', ' ')
+            lines.append(
+                f"- **{name}** ({stype}): {desc}"
+                + (f" [tags: {tags}]" if tags else "")
+                + f" (used {use_count}x)"
+                + f"\n  Content preview: {body_preview}..."
+            )
+
+        return "\n".join(lines)
+
+    def _process_skill_consolidations(self, consolidations: list) -> int:
+        """Process skill consolidation recommendations from retrospective.
+
+        Removes redundant skill files that Opus identified as duplicates.
+        Returns number of skills removed.
+        """
+        if not consolidations:
+            return 0
+
+        org_dir = os.getenv("ORG_DIR", "")
+        if not org_dir:
+            return 0
+
+        from pathlib import Path
+        skills_dir = Path(org_dir).expanduser() / '.pkm' / 'skills'
+        if not skills_dir.exists():
+            return 0
+
+        count = 0
+        for consolidation in consolidations:
+            keep = consolidation.get("keep", "")
+            remove_list = consolidation.get("remove", [])
+            reason = consolidation.get("reason", "")
+
+            # Only remove if the "keep" skill actually exists
+            keep_exists = any(
+                (skills_dir / f'{keep}{ext}').exists() for ext in ('.sh', '.md')
+            )
+            if not keep_exists:
+                self.logger.warning(
+                    f"Skill consolidation: '{keep}' (to keep) not found, skipping"
+                )
+                continue
+
+            for skill_name in remove_list:
+                for ext in ('.sh', '.md'):
+                    filepath = skills_dir / f'{skill_name}{ext}'
+                    if filepath.exists():
+                        filepath.unlink()
+                        self.logger.info(
+                            f"Skill consolidated: removed '{skill_name}' "
+                            f"(keeping '{keep}'): {reason}"
+                        )
+                        count += 1
+
+        return count
+
     def _save_proposed_skills(self, proposed_skills: list) -> int:
         """Save proposed skills from retrospective to .pkm-skills/ if they don't exist.
 
@@ -512,7 +622,7 @@ class SessionRetrospective:
                 continue
 
             # Check if skill already exists
-            skills_dir = Path(org_dir).expanduser() / '.pkm-skills'
+            skills_dir = Path(org_dir).expanduser() / '.pkm' / 'skills'
             if (skills_dir / f'{skill_name}.sh').exists() or \
                (skills_dir / f'{skill_name}.md').exists():
                 self.logger.debug(f"Skill '{skill_name}' already exists, skipping")

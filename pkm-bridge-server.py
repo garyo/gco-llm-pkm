@@ -147,18 +147,23 @@ if voyage_api_key:
         logger.info("RAG auto-injection enabled (Voyage AI)")
 
         # Initialize background scheduler for periodic embedding
-        embedding_scheduler = BackgroundScheduler()
-        embedding_scheduler.add_job(
-            func=run_incremental_embedding,
-            trigger="interval",
-            hours=1,  # Run every hour
-            args=[logger, voyage_client, config],
-            id='incremental_embedding',
-            name='Incremental note embedding',
-            misfire_grace_time=3600  # Allow 1 hour grace if server was down
-        )
-        embedding_scheduler.start()
-        logger.info("Background embedding scheduler started (runs hourly)")
+        # Guard against Flask debug reloader: in debug mode, Werkzeug forks a child
+        # process that re-executes module-level code. Only start the scheduler in the
+        # child (WERKZEUG_RUN_MAIN=true) or when not in debug mode.
+        if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+            embedding_scheduler = BackgroundScheduler()
+            embedding_scheduler.add_job(
+                func=run_incremental_embedding,
+                trigger="interval",
+                hours=1,  # Run every hour
+                args=[logger, voyage_client, config],
+                id='incremental_embedding',
+                name='Incremental note embedding',
+                replace_existing=True,
+                misfire_grace_time=3600  # Allow 1 hour grace if server was down
+            )
+            embedding_scheduler.start()
+            logger.info("Background embedding scheduler started (runs hourly)")
     except Exception as e:
         logger.warning(f"Failed to initialize Voyage client: {e}")
 else:
@@ -167,9 +172,6 @@ else:
 # Initialize self-improvement agent (daily at 3 AM, replaces old retrospective)
 retrospective = SessionRetrospective(client, logger)  # kept for backward compat
 si_agent = SelfImprovementAgent(client, logger, config)
-if embedding_scheduler is None:
-    embedding_scheduler = BackgroundScheduler()
-    embedding_scheduler.start()
 
 # Ensure .pkm/ directory structure exists on startup
 try:
@@ -178,15 +180,24 @@ try:
 except Exception as e:
     logger.warning(f"Failed to ensure .pkm/ structure: {e}")
 
-embedding_scheduler.add_job(
-    func=si_agent.run,
-    trigger="cron",
-    hour=3,
-    id='self_improvement',
-    name='Daily self-improvement agent',
-    misfire_grace_time=7200  # Allow 2 hour grace
-)
-logger.info("Self-improvement agent scheduled (daily at 3 AM)")
+if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    if embedding_scheduler is None:
+        embedding_scheduler = BackgroundScheduler()
+        embedding_scheduler.start()
+
+    embedding_scheduler.add_job(
+        func=si_agent.run,
+        trigger="cron",
+        hour=3,
+        timezone=config.timezone,
+        id='self_improvement',
+        name='Daily self-improvement agent',
+        replace_existing=True,
+        misfire_grace_time=7200  # Allow 2 hour grace
+    )
+    logger.info(f"Self-improvement agent scheduled (daily at 3 AM {config.timezone})")
+else:
+    logger.info("Skipping scheduler setup (debug reloader parent process)")
 
 # Initialize query enhancer for vocabulary-based query expansion
 query_enhancer = QueryEnhancer(logger)

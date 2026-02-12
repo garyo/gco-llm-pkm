@@ -545,7 +545,7 @@ class TickTickClient:
             except (ValueError, AttributeError):
                 pass
 
-        # Include ID if requested (useful for updates)
-        id_str = f" [ID: {task_id}]" if include_id and task_id else ''
+        # Include ID as ticktick marker for interactive checkboxes
+        id_str = f" {{ticktick:{task_id}}}" if include_id and task_id else ''
 
         return f"{title} {priority_str}{due_str}{id_str}".strip()

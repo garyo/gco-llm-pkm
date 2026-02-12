@@ -172,7 +172,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                     return "No tasks due today or overdue."
 
                 task_summaries = [client.format_task_summary(t, include_id=True) for t in tasks]
-                return f"Tasks due today or overdue ({len(tasks)}):\n" + "\n".join(f"• {s}" for s in task_summaries)
+                return f"Tasks due today or overdue ({len(tasks)}):\n" + "\n".join(f"- [ ] {s}" for s in task_summaries)
 
             elif action == "list_all":
                 tasks = client.list_tasks()
@@ -180,7 +180,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                     return "No tasks found."
 
                 task_summaries = [client.format_task_summary(t, include_id=True) for t in tasks]
-                return f"All tasks ({len(tasks)}):\n" + "\n".join(f"• {s}" for s in task_summaries)
+                return f"All tasks ({len(tasks)}):\n" + "\n".join(f"- [ ] {s}" for s in task_summaries)
 
             elif action == "create":
                 title = params.get('title')

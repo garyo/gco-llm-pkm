@@ -78,6 +78,13 @@ services:
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Connection=keep-alive"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.X-Accel-Buffering=no"
 
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
     # Resource limits
     deploy:
       resources:

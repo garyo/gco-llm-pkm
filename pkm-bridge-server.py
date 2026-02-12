@@ -389,6 +389,12 @@ def settings():
     return send_from_directory(app.template_folder, 'settings.html')
 
 
+@app.route('/admin')
+def admin():
+    """Serve the admin page."""
+    return send_from_directory(app.template_folder, 'admin.html')
+
+
 @app.route('/<path:filename>')
 def serve_static(filename):
     """Serve static files from templates directory (Astro build output).

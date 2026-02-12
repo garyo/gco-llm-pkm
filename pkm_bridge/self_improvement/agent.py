@@ -40,7 +40,7 @@ class SelfImprovementAgent:
         *,
         max_turns: int = 15,
         max_actions: int = 10,
-        max_input_tokens: int = 50_000,
+        max_input_tokens: int = 150_000,
         max_output_tokens: int = 20_000,
     ):
         self.client = anthropic_client

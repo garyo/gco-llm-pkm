@@ -486,6 +486,19 @@ import examples from '../../../config/examples.json';
     cursor: default;
   }
 
+  /* Org-id links in chat */
+  .org-id-link {
+    color: rgb(59 130 246);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    cursor: pointer;
+    text-underline-offset: 2px;
+  }
+  .org-id-link:hover {
+    color: rgb(37 99 235);
+    text-decoration-style: solid;
+  }
+
   /* Tool logs panel */
   #tool-logs-panel {
     transition: max-height 0.3s ease-in-out;

@@ -67,6 +67,11 @@
         class="w-24 sm:w-48 px-2 sm:px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
       />
 
+      <button
+        id="nav-back-btn"
+        class="hidden px-1.5 py-1 bg-gray-200 hover:bg-gray-300 text-gray-600 rounded text-sm focus:outline-none"
+        title="Go back (Alt+Left)"
+      >&#8592;</button>
       <label for="file-selector" class="hidden sm:inline text-sm font-medium text-gray-700">File:</label>
       <select
         id="file-selector"
@@ -158,6 +163,9 @@
 
 <script>
   import { EditorView, basicSetup } from 'codemirror';
+  import { Decoration, WidgetType } from '@codemirror/view';
+  import type { DecorationSet } from '@codemirror/view';
+  import { StateField } from '@codemirror/state';
   import { markdown } from '@codemirror/lang-markdown';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { StreamLanguage } from '@codemirror/language';
@@ -421,6 +429,200 @@
     }
   });
 
+  // --- Org image inline preview & link click handling ---
+
+  const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']);
+
+  /** Walk backward from lineNum to find the enclosing heading's :ID: property. */
+  function findHeadingId(doc: any, lineNum: number): string | null {
+    // Walk backward to find the nearest heading
+    let headingLine = -1;
+    for (let i = lineNum; i >= 1; i--) {
+      const text = doc.line(i).text;
+      if (/^\*+\s/.test(text)) {
+        headingLine = i;
+        break;
+      }
+    }
+
+    // Look for :PROPERTIES: drawer after the heading (or at top of file)
+    let start = headingLine + 1;
+    if (start < 1) start = 1;
+    if (start > doc.lines) return null;
+
+    // Skip blank lines
+    let idx = start;
+    while (idx <= doc.lines && !doc.line(idx).text.trim()) idx++;
+    if (idx > doc.lines || doc.line(idx).text.trim() !== ':PROPERTIES:') return null;
+
+    // Read properties until :END:
+    idx++;
+    while (idx <= doc.lines) {
+      const text = doc.line(idx).text.trim();
+      if (text === ':END:') break;
+      const m = text.match(/^:ID:\s+(.+)/);
+      if (m) return m[1].trim();
+      idx++;
+    }
+    return null;
+  }
+
+  /** Widget that renders an inline image preview for [[attachment:...]] links. */
+  class OrgImageWidget extends WidgetType {
+    constructor(
+      private url: string,
+      private alt: string,
+    ) {
+      super();
+    }
+
+    toDOM(): HTMLElement {
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'padding: 4px 0; max-width: 400px;';
+      wrapper.className = 'org-image-preview';
+
+      const img = document.createElement('img');
+      // Add auth token
+      const authToken = localStorage.getItem('pkm-authToken');
+      const tokenParam = authToken ? `?token=${authToken}` : '';
+      img.src = this.url + tokenParam;
+      img.alt = this.alt;
+      img.loading = 'lazy';
+      img.style.cssText = 'max-width: 100%; border-radius: 4px; cursor: pointer;';
+      img.title = 'Click to open full size';
+      img.addEventListener('click', () => {
+        window.open(img.src, '_blank');
+      });
+
+      wrapper.appendChild(img);
+      return wrapper;
+    }
+
+    eq(other: OrgImageWidget): boolean {
+      return this.url === other.url;
+    }
+
+    get estimatedHeight(): number {
+      return 200;
+    }
+  }
+
+  /** Build block decorations for [[attachment:image]] links. */
+  function buildOrgImageDecorations(doc: any): DecorationSet {
+    const widgets: any[] = [];
+    const linkRe = /\[\[attachment:([^\]]+)\](?:\[([^\]]+)\])?\]/g;
+
+    for (let lineNum = 1; lineNum <= doc.lines; lineNum++) {
+      const line = doc.line(lineNum);
+      let match;
+      linkRe.lastIndex = 0;
+
+      while ((match = linkRe.exec(line.text)) !== null) {
+        const filename = match[1];
+        const ext = '.' + filename.split('.').pop()?.toLowerCase();
+        if (!IMAGE_EXTS.has(ext)) continue;
+
+        const headingId = findHeadingId(doc, lineNum);
+        if (!headingId) continue;
+
+        const url = `/api/org-attachment/${headingId}/${filename}`;
+        const alt = match[2] || filename;
+
+        widgets.push(
+          Decoration.widget({
+            widget: new OrgImageWidget(url, alt),
+            block: true,
+            side: 1,
+          }).range(line.to)
+        );
+      }
+    }
+
+    return Decoration.set(widgets, true);
+  }
+
+  /** StateField that provides block image decorations (ViewPlugins can't do block decorations). */
+  const orgImageField = StateField.define<DecorationSet>({
+    create(state) {
+      return buildOrgImageDecorations(state.doc);
+    },
+    update(value, tr) {
+      if (tr.docChanged) {
+        return buildOrgImageDecorations(tr.state.doc);
+      }
+      return value;
+    },
+    provide: f => EditorView.decorations.from(f),
+  });
+
+  /** Click handler for org-mode links in the editor. */
+  const orgLinkClickHandler = EditorView.domEventHandlers({
+    click(event: MouseEvent, view: EditorView) {
+      // Desktop: require Cmd/Ctrl+click
+      const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (!isTouch && !event.metaKey && !event.ctrlKey) return false;
+
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos === null) return false;
+
+      // Get the line text and find if we clicked inside a link
+      const line = view.state.doc.lineAt(pos);
+      const lineOffset = pos - line.from;
+      const lineText = line.text;
+
+      // Find all org links in this line
+      const linkRe = /\[\[([^\]]+)\](?:\[([^\]]+)\])?\]/g;
+      let match;
+      while ((match = linkRe.exec(lineText)) !== null) {
+        const linkStart = match.index;
+        const linkEnd = linkStart + match[0].length;
+
+        if (lineOffset >= linkStart && lineOffset <= linkEnd) {
+          const target = match[1];
+          const desc = match[2] || target;
+
+          // Handle id: links
+          if (target.startsWith('id:')) {
+            event.preventDefault();
+            const uuid = target.slice(3);
+            const authToken = localStorage.getItem('pkm-authToken');
+            const headers: HeadersInit = { 'Content-Type': 'application/json' };
+            if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+            fetch(`/api/resolve-org-id/${encodeURIComponent(uuid)}`, { headers })
+              .then(res => res.ok ? res.json() : null)
+              .then(data => {
+                if (data) {
+                  pushNavHistory();
+                  pendingScrollLine = data.line || null;
+                  loadFile(data.path);
+                }
+              })
+              .catch(err => console.error('Failed to resolve org-id:', err));
+            return true;
+          }
+
+          // Handle attachment: links (open images in new tab)
+          if (target.startsWith('attachment:')) {
+            const filename = target.slice('attachment:'.length);
+            const headingId = findHeadingId(view.state.doc, line.number);
+            if (headingId) {
+              event.preventDefault();
+              const authToken = localStorage.getItem('pkm-authToken');
+              const tokenParam = authToken ? `?token=${authToken}` : '';
+              window.open(`/api/org-attachment/${headingId}/${filename}${tokenParam}`, '_blank');
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+  });
+
+  // Pending scroll line for cross-component navigation
+  let pendingScrollLine: number | null = null;
+
   // Global singleton guard to prevent duplicate SSE connections
   const SSE_GLOBAL_KEY = '__sse_global_connection__';
 
@@ -448,6 +650,36 @@
   // Cached auto-save settings (for performance - avoid reading localStorage on every keystroke)
   let cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
   let cachedAutoSaveDelay = parseInt(localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000');
+
+  // Navigation history for back button
+  const navHistory: { path: string; line?: number }[] = [];
+  const navBackBtn = document.getElementById('nav-back-btn') as HTMLButtonElement;
+
+  function updateNavBackBtn() {
+    navBackBtn.classList.toggle('hidden', navHistory.length === 0);
+  }
+
+  /** Push current file onto history before navigating away. */
+  function pushNavHistory() {
+    if (!currentFile) return;
+    const line = editorView
+      ? editorView.state.doc.lineAt(editorView.state.selection.main.head).number
+      : undefined;
+    navHistory.push({ path: currentFile, line });
+    // Cap history at 50 entries
+    if (navHistory.length > 50) navHistory.shift();
+    updateNavBackBtn();
+  }
+
+  function navBack() {
+    const entry = navHistory.pop();
+    updateNavBackBtn();
+    if (!entry) return;
+    pendingScrollLine = entry.line ?? null;
+    loadFile(entry.path);
+  }
+
+  navBackBtn.addEventListener('click', navBack);
 
   // Fetch with timeout to prevent hanging on poor connectivity
   function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = 10000): Promise<Response> {
@@ -620,7 +852,9 @@
     if (filepath.endsWith('.org')) {
       extensions.push(
         syntaxHighlighting(orgHighlightStyle),
-        orgFoldService  // basicSetup already includes foldGutter()
+        orgFoldService,  // basicSetup already includes foldGutter()
+        orgImageField,
+        orgLinkClickHandler,
       );
     }
 
@@ -770,6 +1004,20 @@
         if (filepath.endsWith('.org')) {
           // Use setTimeout to ensure the document is fully parsed
           setTimeout(() => autoFoldPropertyDrawers(), 50);
+        }
+
+        // Scroll to pending line (from org-id navigation)
+        if (pendingScrollLine !== null && editorView) {
+          const targetLine = pendingScrollLine;
+          pendingScrollLine = null;
+          setTimeout(() => {
+            if (editorView && targetLine >= 1 && targetLine <= editorView.state.doc.lines) {
+              const line = editorView.state.doc.line(targetLine);
+              editorView.dispatch({
+                effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+              });
+            }
+          }, 100);
         }
       }
 
@@ -1451,6 +1699,24 @@
     }, 100);
   }
 
+  // Handle openFile custom events from chat (org-id link navigation)
+  window.addEventListener('openFile', ((e: CustomEvent) => {
+    const { path, line } = e.detail || {};
+    if (!path) return;
+
+    console.log('openFile event:', path, 'line:', line);
+    pushNavHistory();
+
+    // Set pending scroll line before loading
+    if (line) {
+      pendingScrollLine = line;
+    }
+
+    // Update file selector and load
+    fileSelector.value = path;
+    loadFile(path);
+  }) as EventListener);
+
   // Open today's journal file (create if doesn't exist)
   async function openTodayJournal() {
     const today = new Date();
@@ -1619,6 +1885,12 @@
       if (currentFile) {
         refreshFile();
       }
+    }
+
+    // Alt + Left arrow to go back
+    if (e.altKey && e.key === 'ArrowLeft' && navHistory.length > 0) {
+      e.preventDefault();
+      navBack();
     }
   });
 

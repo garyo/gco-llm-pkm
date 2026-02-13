@@ -232,8 +232,8 @@ import EditorInterface from '../components/EditorInterface.astro';
     const div = document.createElement('div');
     div.innerHTML = html;
 
-    // Find all images that point to /assets/
-    const images = div.querySelectorAll('img[src^="http://localhost:8000/assets/"], img[src^="/assets/"]');
+    // Find all images that point to /assets/ or /api/org-attachment/
+    const images = div.querySelectorAll('img[src^="http://localhost:8000/assets/"], img[src^="/assets/"], img[src^="/api/org-attachment/"], img[src^="http://localhost:8000/api/org-attachment/"]');
 
     images.forEach(img => {
       const src = img.getAttribute('src');
@@ -242,6 +242,34 @@ import EditorInterface from '../components/EditorInterface.astro';
         const separator = src.includes('?') ? '&' : '?';
         img.setAttribute('src', `${src}${separator}token=${authToken}`);
       }
+    });
+
+    return div.innerHTML;
+  }
+
+  // Pre-process markdown text to convert org-id links before markdown-it rendering.
+  // Handles both [desc](org-id:UUID) and [desc](id:UUID) (Claude may use either).
+  // Rewrites to [desc](#org-id:UUID) so markdown-it treats it as a fragment link.
+  function preprocessOrgIdLinks(text: string): string {
+    return text.replace(
+      /\[([^\]]+)\]\((?:org-)?id:([A-Fa-f0-9-]+)\)/g,
+      '[$1](#org-id:$2)'
+    );
+  }
+
+  // Post-process HTML to make org-id links clickable
+  function processOrgIdLinks(html: string): string {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    // Find links with #org-id: or bare id:/org-id: href
+    const links = div.querySelectorAll('a[href^="#org-id:"], a[href^="id:"], a[href^="org-id:"]');
+    links.forEach(link => {
+      const href = link.getAttribute('href')!;
+      const uuid = href.replace(/^#?(?:org-)?id:/, '');
+      link.classList.add('org-id-link');
+      link.setAttribute('data-org-id', uuid);
+      link.setAttribute('href', '#');
     });
 
     return div.innerHTML;
@@ -785,10 +813,11 @@ import EditorInterface from '../components/EditorInterface.astro';
     div.className = `message ${role}`;
 
     if (role === 'assistant') {
-      let rendered = md.render(text);
+      let rendered = md.render(preprocessOrgIdLinks(text));
       rendered = processDoneItems(rendered);
       rendered = processCheckboxMetadata(rendered);
       rendered = addTokensToImages(rendered);
+      rendered = processOrgIdLinks(rendered);
       div.innerHTML = rendered;
 
       // Add feedback bar for assistant messages with a query_id
@@ -931,6 +960,42 @@ import EditorInterface from '../components/EditorInterface.astro';
         btn.classList.remove('feedback-submitted');
       });
       target.classList.remove('feedback-selected');
+    }
+  });
+
+  // Handle org-id link clicks (event delegation)
+  chat.addEventListener('click', async (e) => {
+    const target = (e.target as HTMLElement).closest('.org-id-link') as HTMLElement | null;
+    if (!target) return;
+
+    e.preventDefault();
+    const uuid = target.dataset.orgId;
+    if (!uuid) return;
+
+    try {
+      const res = await fetchWithTimeout(`/api/resolve-org-id/${encodeURIComponent(uuid)}`, {
+        headers: getAuthHeaders()
+      }, 10000);
+
+      if (!res.ok) {
+        console.warn('Could not resolve org-id:', uuid);
+        return;
+      }
+
+      const data = await res.json();
+      // Switch to editor tab and open the file
+      const switchTabFn = (window as any).switchTab;
+      if (switchTabFn) {
+        switchTabFn('editor');
+      }
+      // Dispatch openFile event for EditorInterface to handle
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('openFile', {
+          detail: { path: data.path, line: data.line }
+        }));
+      }, 150);
+    } catch (err) {
+      console.error('Failed to resolve org-id link:', err);
     }
   });
 

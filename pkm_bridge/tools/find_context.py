@@ -20,8 +20,10 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from pkm_bridge.tools.base import BaseTool
     from pkm_bridge.logging_config import setup_logging
+    from pkm_bridge.org_links import rewrite_org_links_to_markdown
 else:
     from .base import BaseTool
+    from ..org_links import rewrite_org_links_to_markdown
 
 
 class FindContextTool(BaseTool):
@@ -192,7 +194,8 @@ Default directories searched (if paths not provided):
             'parent_headings': parent_headings,
             'current_heading': current_heading,
             'current_heading_level': current_section_level,
-            'section_content': '\n'.join(section_content).strip()
+            'section_content': '\n'.join(section_content).strip(),
+            'section_start': current_section_start,
         }
 
     def _parse_markdown_structure(self, lines: List[str], match_line: int) -> Dict[str, Any]:
@@ -420,6 +423,15 @@ Default directories searched (if paths not provided):
 
                     context_str = '\n'.join(full_context).strip()
                     matched_text = match['matched_text']
+
+                    # Rewrite org links to markdown for image/id rendering
+                    section_start = context.get('section_start', 0)
+                    context_str = rewrite_org_links_to_markdown(
+                        context_str, lines, section_start, self.org_dir
+                    )
+                    matched_text = rewrite_org_links_to_markdown(
+                        matched_text, lines, section_start, self.org_dir
+                    )
 
                     result = {
                         'filename': str(file_path),

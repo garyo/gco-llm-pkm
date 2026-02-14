@@ -188,17 +188,24 @@ if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         embedding_scheduler = BackgroundScheduler()
         embedding_scheduler.start()
 
-    embedding_scheduler.add_job(
-        func=si_agent.run,
-        trigger="cron",
-        hour=3,
-        timezone=config.timezone,
-        id='self_improvement',
-        name='Daily self-improvement agent',
-        replace_existing=True,
-        misfire_grace_time=7200  # Allow 2 hour grace
-    )
-    logger.info(f"Self-improvement agent scheduled (daily at 3 AM {config.timezone})")
+    # Only schedule the self-improvement cron job in production (not debug/dev).
+    # The agent writes to shared .pkm/memory/ files, so running on multiple
+    # machines (e.g. dev + production) causes Syncthing conflicts.
+    # Embeddings are idempotent and safe to run anywhere.
+    if not config.debug:
+        embedding_scheduler.add_job(
+            func=si_agent.run,
+            trigger="cron",
+            hour=3,
+            timezone=config.timezone,
+            id='self_improvement',
+            name='Daily self-improvement agent',
+            replace_existing=True,
+            misfire_grace_time=7200  # Allow 2 hour grace
+        )
+        logger.info(f"Self-improvement agent scheduled (daily at 3 AM {config.timezone})")
+    else:
+        logger.info("Self-improvement cron skipped in debug mode (runs only in production)")
 else:
     logger.info("Skipping scheduler setup (debug reloader parent process)")
 

@@ -601,20 +601,26 @@ import EditorInterface from '../components/EditorInterface.astro';
     localStorage.setItem('pkm-currentTab', tab);
   }
 
-  // Update model button styling based on cost
+  // Update model button styling based on selected model
   function updateModelButtonHighlight() {
     const modelBtn = document.getElementById('model-settings-btn');
     if (!modelBtn) return;
 
-    // Highlight if using non-Haiku model or extended thinking
-    const isExpensive = selectedModel !== 'claude-haiku-4-5' || thinkingEnabled;
+    // Remove all model color classes
+    const allClasses = [
+      'bg-gray-100', 'hover:bg-gray-200', 'text-gray-700',
+      'bg-green-400', 'hover:bg-green-500', 'text-green-900',
+      'bg-yellow-400', 'hover:bg-yellow-500', 'text-yellow-900',
+      'bg-red-400', 'hover:bg-red-500', 'text-red-900',
+    ];
+    modelBtn.classList.remove(...allClasses);
 
-    if (isExpensive) {
-      modelBtn.classList.remove('bg-gray-100', 'hover:bg-gray-200', 'text-gray-700');
-      modelBtn.classList.add('bg-yellow-400', 'hover:bg-yellow-500', 'text-gray-900');
+    if (selectedModel.includes('opus')) {
+      modelBtn.classList.add('bg-red-400', 'hover:bg-red-500', 'text-red-900');
+    } else if (selectedModel.includes('sonnet')) {
+      modelBtn.classList.add('bg-yellow-400', 'hover:bg-yellow-500', 'text-yellow-900');
     } else {
-      modelBtn.classList.remove('bg-yellow-400', 'hover:bg-yellow-500', 'text-gray-900');
-      modelBtn.classList.add('bg-gray-100', 'hover:bg-gray-200', 'text-gray-700');
+      modelBtn.classList.add('bg-green-400', 'hover:bg-green-500', 'text-green-900');
     }
   }
 

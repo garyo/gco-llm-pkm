@@ -30,6 +30,12 @@
 
     <!-- Filter Controls (collapsible on mobile, always visible on desktop) -->
     <div id="filter-controls" class="hidden sm:flex flex-wrap items-center gap-2 sm:gap-3">
+      <button
+        id="nav-back-btn"
+        class="hidden px-1.5 py-1 bg-gray-200 hover:bg-gray-300 text-gray-600 rounded text-sm focus:outline-none"
+        title="Go back (Alt+Left)"
+      >&#8592;</button>
+
       <!-- Desktop: Today button in same row -->
       <button
         id="today-button-desktop"
@@ -67,11 +73,6 @@
         class="w-24 sm:w-48 px-2 sm:px-3 py-1 bg-white border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
       />
 
-      <button
-        id="nav-back-btn"
-        class="hidden px-1.5 py-1 bg-gray-200 hover:bg-gray-300 text-gray-600 rounded text-sm focus:outline-none"
-        title="Go back (Alt+Left)"
-      >&#8592;</button>
       <label for="file-selector" class="hidden sm:inline text-sm font-medium text-gray-700">File:</label>
       <select
         id="file-selector"
@@ -159,6 +160,8 @@
     line-height: 1.6;
     overflow: auto;
   }
+
+
 </style>
 
 <script>
@@ -198,6 +201,7 @@
     checkboxUnchecked: Tag.define(tags.list),
     checkboxChecked: Tag.define(tags.list),
     checkboxCheckedText: Tag.define(tags.strikethrough),
+    orgLink: Tag.define(),
   };
 
   // Define highlight styles for Org mode
@@ -230,7 +234,7 @@
     { tag: tags.strong, fontWeight: 'bold', color: '#d19a66' },
     { tag: tags.emphasis, fontStyle: 'italic', color: '#c678dd' },
     { tag: tags.monospace, fontFamily: 'monospace', color: '#98c379' },
-    { tag: tags.link, color: '#56b6c2', textDecoration: 'underline' },
+    { tag: orgTags.orgLink, color: '#6cb6ff', textDecoration: 'underline', cursor: 'pointer' },
     { tag: tags.list, color: '#61afef' },
     { tag: tags.meta, color: '#5c6370', fontStyle: 'italic' },
   ]);
@@ -265,7 +269,8 @@
     startState: () => ({
       inSourceBlock: false,
       inPropertyDrawer: false,
-      inCheckedItem: false
+      inCheckedItem: false,
+      headingLevel: 0
     }),
     tokenTable: {
       "org-propertyDrawer": orgTags.propertyDrawer,
@@ -281,11 +286,13 @@
       "org-checkboxUnchecked": orgTags.checkboxUnchecked,
       "org-checkboxChecked": orgTags.checkboxChecked,
       "org-checkboxCheckedText": orgTags.checkboxCheckedText,
+      "org-link": orgTags.orgLink,
     },
     token: (stream, state) => {
-      // Reset checked item state at start of line
+      // Reset per-line state at start of line
       if (stream.sol()) {
         state.inCheckedItem = false;
+        state.headingLevel = 0;
       }
 
       // Table lines (start and end with |)
@@ -370,13 +377,20 @@
           const tagsMatch = restOfLine.match(/^(.*?)((?:\s+)?:[a-zA-Z0-9_@]+(?::[a-zA-Z0-9_@]+)*:)\s*$/);
 
           if (tagsMatch) {
-            // There are tags - consume just the heading text
+            // There are tags - consume just the heading text (up to tags)
             stream.pos += tagsMatch[1].length;
           } else {
-            // No tags - consume entire line
-            stream.skipToEnd();
+            // Consume up to first [[ link (so links get styled separately), or end of line
+            const linkIdx = restOfLine.indexOf('[[');
+            if (linkIdx > 0) {
+              stream.pos += linkIdx;
+            } else if (linkIdx < 0) {
+              stream.skipToEnd();
+            }
+            // linkIdx === 0: don't consume anything, let the link matcher handle it
           }
 
+          state.headingLevel = level;
           if (level === 1) return "org-heading1";
           if (level === 2) return "org-heading2";
           if (level === 3) return "org-heading3";
@@ -406,12 +420,28 @@
 
       // Links [[url][description]]
       if (stream.match(/\[\[[^\]]+\]\[[^\]]+\]\]/)) {
-        return "link";
+        return "org-link";
       }
 
       // Simple links [[url]]
       if (stream.match(/\[\[[^\]]+\]\]/)) {
-        return "link";
+        return "org-link";
+      }
+
+      // Heading continuation: style text between/after links on heading lines
+      if (state.headingLevel > 0) {
+        // Consume up to next [[ link or end of line
+        const rest = stream.string.slice(stream.pos);
+        const linkIdx = rest.indexOf('[[');
+        if (linkIdx > 0) {
+          stream.pos += linkIdx;
+        } else {
+          stream.skipToEnd();
+        }
+        if (state.headingLevel === 1) return "org-heading1";
+        if (state.headingLevel === 2) return "org-heading2";
+        if (state.headingLevel === 3) return "org-heading3";
+        return "heading";
       }
 
       // List items
@@ -863,6 +893,7 @@
       parent: editorContainer,
       doc: ''
     });
+
   }
 
   // Load all files from backend

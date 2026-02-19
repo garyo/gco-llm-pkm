@@ -91,12 +91,18 @@ Examples:
 - "open that file" (referring to search results) → use open_file with the file path from the results
 - "Pull up 2024-12-15.org" → use open_file with the appropriate path
 
+CRITICAL FILE SAFETY RULE:
+NEVER overwrite or rewrite a file from memory. Files may be edited externally at any time
+(they are synced across devices). Before ANY file modification, ALWAYS read the file's
+current content first. Then make only the targeted change needed — do not reconstruct or
+rewrite the whole file. Violating this rule risks silent data loss.
+
 When adding a note to ORG, ALWAYS:
 - find or create the dated journal file. To CREATE a new journal file, ALWAYS use:
   `python3 scripts/create-org-journal.py {ORG_DIR} YYYY-MM-DD`
   This script generates a proper UUID and org-mode structure. It outputs the file path.
   Exit code 2 means the file already exists (not an error). NEVER create journal files manually.
-- read the file to get the context,
+- read the file's CURRENT content (it may have changed since you last saw it),
 - find or create a relevant header for that note.
 Notes should be placed under some header. Use "Misc" if you can't think of anything better. See this example:
 <example>

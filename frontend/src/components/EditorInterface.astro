@@ -45,6 +45,24 @@
         📅 Today
       </button>
 
+      <!-- Calendar popup toggle -->
+      <div class="relative inline-block">
+        <button id="calendar-toggle-btn"
+          class="hidden sm:inline-block px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-600 rounded text-sm focus:outline-none"
+          title="Calendar"><svg class="w-4 h-4 inline-block" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" /><line x1="3" y1="10" x2="21" y2="10" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="16" y1="2" x2="16" y2="6" /></svg></button>
+        <div id="calendar-popup" class="hidden absolute top-full left-0 mt-1 z-50 bg-white border border-gray-300 rounded-lg shadow-lg p-3 w-72">
+          <div class="flex items-center justify-between mb-2">
+            <button id="cal-prev-month" class="px-2 py-1 text-gray-600 hover:bg-gray-100 rounded">&lt;</button>
+            <span id="cal-month-label" class="text-sm font-semibold text-gray-800"></span>
+            <button id="cal-next-month" class="px-2 py-1 text-gray-600 hover:bg-gray-100 rounded">&gt;</button>
+          </div>
+          <div class="grid grid-cols-7 text-center text-xs text-gray-500 mb-1">
+            <span>Su</span><span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+          </div>
+          <div id="cal-days-grid" class="grid grid-cols-7 text-center text-sm gap-y-0.5"></div>
+        </div>
+      </div>
+
       <label class="hidden sm:inline text-sm font-medium text-gray-700">Source:</label>
       <select
         id="source-filter"
@@ -161,7 +179,9 @@
     overflow: auto;
   }
 
-
+  #cal-days-grid span.underline {
+    text-underline-offset: 3px;
+  }
 </style>
 
 <script>
@@ -908,6 +928,7 @@
       }
 
       allFiles = await res.json();
+      buildJournalDates();
       updateStatus(`Loaded ${allFiles.length} files`);
       filterAndPopulateFiles();
     } catch (e: any) {
@@ -916,6 +937,121 @@
       console.error('Failed to load file list:', e);
     }
   }
+
+  // Build journal date lookup from allFiles for calendar
+  let journalDates = new Map<string, { path: string; dir: string }>();
+
+  function buildJournalDates() {
+    journalDates = new Map();
+    for (const f of allFiles) {
+      if (f.type !== 'journal') continue;
+      const m = f.name.match(/(\d{4})[-_](\d{2})[-_](\d{2})/);
+      if (!m) continue;
+      const dateKey = `${m[1]}-${m[2]}-${m[3]}`;
+      if (!journalDates.has(dateKey) || f.dir === 'org') {
+        journalDates.set(dateKey, { path: f.full_path, dir: f.dir });
+      }
+    }
+  }
+
+  // Calendar state and rendering
+  let calendarMonth = new Date();
+
+  function renderCalendar() {
+    const grid = document.getElementById('cal-days-grid');
+    const label = document.getElementById('cal-month-label');
+    if (!grid || !label) return;
+
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    label.textContent = calendarMonth.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const today = new Date();
+
+    let html = '';
+    for (let i = 0; i < firstDay; i++) html += '<span></span>';
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const entry = journalDates.get(dateKey);
+      const isToday = (today.getFullYear() === year && today.getMonth() === month && today.getDate() === d);
+
+      const classes = ['py-0.5', 'rounded', 'cursor-pointer', 'hover:bg-blue-100'];
+      if (entry) classes.push('underline', 'font-medium', 'text-blue-700');
+      else classes.push('text-gray-400');
+      if (isToday) classes.push('bg-blue-50', 'ring-1', 'ring-blue-400');
+
+      html += `<span class="${classes.join(' ')}" data-date="${dateKey}">${d}</span>`;
+    }
+
+    grid.innerHTML = html;
+  }
+
+  // Calendar event handlers
+  (function initCalendar() {
+    const toggleBtn = document.getElementById('calendar-toggle-btn');
+    const popup = document.getElementById('calendar-popup');
+    const prevBtn = document.getElementById('cal-prev-month');
+    const nextBtn = document.getElementById('cal-next-month');
+    const grid = document.getElementById('cal-days-grid');
+
+    if (!toggleBtn || !popup) return;
+
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isHidden = popup.classList.contains('hidden');
+      if (isHidden) {
+        calendarMonth = new Date();
+        renderCalendar();
+        popup.classList.remove('hidden');
+      } else {
+        popup.classList.add('hidden');
+      }
+    });
+
+    prevBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      calendarMonth.setMonth(calendarMonth.getMonth() - 1);
+      renderCalendar();
+    });
+
+    nextBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      calendarMonth.setMonth(calendarMonth.getMonth() + 1);
+      renderCalendar();
+    });
+
+    grid?.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const dateKey = target.dataset?.date;
+      if (!dateKey) return;
+
+      popup.classList.add('hidden');
+
+      const entry = journalDates.get(dateKey);
+      if (entry) {
+        pushNavHistory();
+        fileSelector.value = entry.path;
+        loadFile(entry.path);
+      } else {
+        // Create journal for that date
+        const [yyyy, mm, dd] = dateKey.split('-');
+        const date = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const dayName = dayNames[date.getDay()];
+        createTodayJournal(dateKey, dayName);
+      }
+    });
+
+    // Close popup on outside click
+    document.addEventListener('click', (e) => {
+      if (!popup.classList.contains('hidden') && !popup.contains(e.target as Node) && e.target !== toggleBtn) {
+        popup.classList.add('hidden');
+      }
+    });
+  })();
 
   // Debounced version for automatic updates (waits 2s after last call)
   const debouncedLoadFileList = debounce(loadFileList, 2000);

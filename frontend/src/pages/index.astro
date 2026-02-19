@@ -257,6 +257,17 @@ import EditorInterface from '../components/EditorInterface.astro';
     );
   }
 
+  // Pre-process markdown text to convert pkm-file links before markdown-it rendering.
+  // Rewrites [desc](pkm-file:TYPE:PATH) to [desc](#pkm-file:TYPE:PATH) so markdown-it
+  // treats it as a fragment link instead of an external URL.
+  // Encodes the path portion so spaces don't break markdown-it's link parser.
+  function preprocessPkmFileLinks(text: string): string {
+    return text.replace(
+      /\[([^\]]+)\]\(pkm-file:([^:]+):([^)]+)\)/g,
+      (_match, desc, type, path) => `[${desc}](#pkm-file:${type}:${encodeURIComponent(path)})`
+    );
+  }
+
   // Post-process HTML to make org-id links clickable
   function processOrgIdLinks(html: string): string {
     const div = document.createElement('div');
@@ -270,6 +281,27 @@ import EditorInterface from '../components/EditorInterface.astro';
       link.classList.add('org-id-link');
       link.setAttribute('data-org-id', uuid);
       link.setAttribute('href', '#');
+    });
+
+    return div.innerHTML;
+  }
+
+  // Post-process HTML to make pkm-file links clickable
+  function processPkmFileLinks(html: string): string {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+
+    const links = div.querySelectorAll('a[href^="#pkm-file:"]');
+    links.forEach(link => {
+      const href = link.getAttribute('href')!;
+      // href is "#pkm-file:TYPE:PATH" — extract TYPE and PATH
+      const match = href.match(/^#pkm-file:([^:]+):(.+)$/);
+      if (match) {
+        link.classList.add('pkm-file-link');
+        link.setAttribute('data-file-type', match[1]);
+        link.setAttribute('data-file-path', decodeURIComponent(match[2]));
+        link.setAttribute('href', '#');
+      }
     });
 
     return div.innerHTML;
@@ -813,11 +845,12 @@ import EditorInterface from '../components/EditorInterface.astro';
     div.className = `message ${role}`;
 
     if (role === 'assistant') {
-      let rendered = md.render(preprocessOrgIdLinks(text));
+      let rendered = md.render(preprocessPkmFileLinks(preprocessOrgIdLinks(text)));
       rendered = processDoneItems(rendered);
       rendered = processCheckboxMetadata(rendered);
       rendered = addTokensToImages(rendered);
       rendered = processOrgIdLinks(rendered);
+      rendered = processPkmFileLinks(rendered);
       div.innerHTML = rendered;
 
       // Add feedback bar for assistant messages with a query_id
@@ -997,6 +1030,29 @@ import EditorInterface from '../components/EditorInterface.astro';
     } catch (err) {
       console.error('Failed to resolve org-id link:', err);
     }
+  });
+
+  // Handle pkm-file link clicks (event delegation)
+  chat.addEventListener('click', (e) => {
+    const target = (e.target as HTMLElement).closest('.pkm-file-link') as HTMLElement | null;
+    if (!target) return;
+
+    e.preventDefault();
+    const fileType = target.dataset.fileType;
+    const filePath = target.dataset.filePath;
+    if (!fileType || !filePath) return;
+
+    // Switch to editor tab and open the file
+    const switchTabFn = (window as any).switchTab;
+    if (switchTabFn) {
+      switchTabFn('editor');
+    }
+    // Dispatch openFile event for EditorInterface to handle
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('openFile', {
+        detail: { path: `${fileType}:${filePath}` }
+      }));
+    }, 150);
   });
 
   // Show/hide model settings modal

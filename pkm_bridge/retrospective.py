@@ -15,7 +15,7 @@ from .db_repository import (
     LearnedRuleRepository, ToolExecutionLogExtendedRepository,
 )
 
-RETROSPECTIVE_MODEL = "claude-opus-4-5-20251101"
+RETROSPECTIVE_MODEL = "claude-opus-4-6"
 
 RETROSPECTIVE_PROMPT = """\
 You are a system analyst for a Personal Knowledge Management (PKM) assistant.

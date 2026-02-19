@@ -16,7 +16,7 @@ from .filesystem import ensure_pkm_structure, get_runs_dir
 from .meta_tools import create_action_tools, create_inspection_tools
 from .prompt import build_system_prompt, gather_run_stats
 
-AGENT_MODEL = "claude-sonnet-4-5-20250929"
+AGENT_MODEL = "claude-sonnet-4-6"
 
 # Action tool names that consume the write budget
 ACTION_TOOL_NAMES = frozenset({

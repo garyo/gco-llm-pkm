@@ -928,14 +928,14 @@ def query():
                 cost_cache_write = (cache_write * 1.00) / 1_000_000
                 cost_cache_read = (cache_read * 0.08) / 1_000_000
                 cost_output = (output_tokens * 4.00) / 1_000_000
-            elif model == 'claude-sonnet-4-5':
-                # Sonnet 4.5: $3/M input, $0.30/M cached, $15/M output
+            elif model in ('claude-sonnet-4-5', 'claude-sonnet-4-6'):
+                # Sonnet 4.5/4.6: $3/M input, $0.30/M cached, $15/M output
                 cost_input = (input_tokens * 3.00) / 1_000_000
                 cost_cache_write = (cache_write * 3.75) / 1_000_000
                 cost_cache_read = (cache_read * 0.30) / 1_000_000
                 cost_output = (output_tokens * 15.00) / 1_000_000
-            elif model == 'claude-opus-4-5':
-                # Opus 4.5: $5/M input, $0.50/M cached, $25/M output
+            elif model in ('claude-opus-4-5', 'claude-opus-4-6'):
+                # Opus 4.5/4.6: $5/M input, $0.50/M cached, $25/M output
                 cost_input = (input_tokens * 5.00) / 1_000_000
                 cost_cache_write = (cache_write * 6.25) / 1_000_000
                 cost_cache_read = (cache_read * 0.50) / 1_000_000

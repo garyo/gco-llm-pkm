@@ -109,8 +109,8 @@ import examples from '../../../config/examples.json';
             onchange="updateModel()"
           >
             <option value="claude-haiku-4-5">Haiku 4.5 (Fast)</option>
-            <option value="claude-sonnet-4-5">Sonnet 4.5 (Balanced)</option>
-            <option value="claude-opus-4-5">Opus 4.5 (Best)</option>
+            <option value="claude-sonnet-4-6">Sonnet 4.6 (Balanced)</option>
+            <option value="claude-opus-4-6">Opus 4.6 (Best)</option>
           </select>
         </div>
 
@@ -495,6 +495,19 @@ import examples from '../../../config/examples.json';
     text-underline-offset: 2px;
   }
   .org-id-link:hover {
+    color: rgb(37 99 235);
+    text-decoration-style: solid;
+  }
+
+  /* PKM file links in chat */
+  .pkm-file-link {
+    color: rgb(59 130 246);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    cursor: pointer;
+    text-underline-offset: 2px;
+  }
+  .pkm-file-link:hover {
     color: rgb(37 99 235);
     text-decoration-style: solid;
   }

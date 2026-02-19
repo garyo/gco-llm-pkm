@@ -190,7 +190,9 @@ class SessionRepository:
         session_id: str,
         input_tokens: int,
         output_tokens: int,
-        cost: float
+        cost: float,
+        cache_write_tokens: int = 0,
+        cache_read_tokens: int = 0,
     ) -> ConversationSession:
         """Update session token and cost totals."""
         session = SessionRepository.get_session(db, session_id)
@@ -199,6 +201,8 @@ class SessionRepository:
 
         session.total_input_tokens += input_tokens
         session.total_output_tokens += output_tokens
+        session.total_cache_write_tokens += cache_write_tokens
+        session.total_cache_read_tokens += cache_read_tokens
         session.total_cost += cost
         session.updated_at = datetime.utcnow()
 

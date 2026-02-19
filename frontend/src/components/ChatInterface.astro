@@ -449,10 +449,23 @@ import examples from '../../../config/examples.json';
   /* Feedback bar */
   .message.assistant .feedback-bar {
     display: flex;
-    gap: 0.25rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
     margin-top: 0.75rem;
     padding-top: 0.5rem;
     border-top: 1px solid rgb(229 231 235);
+  }
+
+  .feedback-bar .usage-info {
+    font-size: 0.75rem;
+    color: rgb(156 163 175);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .feedback-bar .feedback-buttons {
+    display: flex;
+    gap: 0.25rem;
   }
 
   .feedback-btn {

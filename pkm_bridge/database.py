@@ -42,6 +42,8 @@ class ConversationSession(Base):
     system_prompt = Column(Text, nullable=True)  # Optional custom system prompt
     total_input_tokens = Column(Integer, nullable=False, default=0)  # Cumulative input tokens
     total_output_tokens = Column(Integer, nullable=False, default=0)  # Cumulative output tokens
+    total_cache_write_tokens = Column(Integer, nullable=False, default=0, server_default='0')  # Cumulative cache write tokens
+    total_cache_read_tokens = Column(Integer, nullable=False, default=0, server_default='0')  # Cumulative cache read tokens
     total_cost = Column(Float, nullable=False, default=0.0)  # Cumulative cost in USD
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -126,6 +128,21 @@ def get_database_url() -> str:
 def _upgrade_schema(engine) -> None:
     """Add missing columns to existing tables (lightweight migration)."""
     insp = inspect(engine)
+
+    # ConversationSession: add cache token columns if missing
+    if 'conversation_sessions' in insp.get_table_names():
+        columns = {c['name'] for c in insp.get_columns('conversation_sessions')}
+        with engine.begin() as conn:
+            if 'total_cache_write_tokens' not in columns:
+                conn.execute(text(
+                    "ALTER TABLE conversation_sessions ADD COLUMN total_cache_write_tokens INTEGER NOT NULL DEFAULT 0"
+                ))
+                print("[DB] Added 'total_cache_write_tokens' column to conversation_sessions", flush=True)
+            if 'total_cache_read_tokens' not in columns:
+                conn.execute(text(
+                    "ALTER TABLE conversation_sessions ADD COLUMN total_cache_read_tokens INTEGER NOT NULL DEFAULT 0"
+                ))
+                print("[DB] Added 'total_cache_read_tokens' column to conversation_sessions", flush=True)
 
     # ToolExecutionLog: add was_helpful column if missing
     if 'tool_execution_logs' in insp.get_table_names():

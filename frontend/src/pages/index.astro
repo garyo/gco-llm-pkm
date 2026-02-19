@@ -750,7 +750,7 @@ import EditorInterface from '../components/EditorInterface.astro';
       loading.classList.add('hidden');
       loading.classList.remove('flex');
 
-      appendMessage('assistant', data.response, data.query_id);
+      appendMessage('assistant', data.response, data.query_id, data.usage);
 
       // Auto-update Activity panel if it's open
       const toolLogsPanel = document.getElementById('tool-logs-panel');
@@ -845,8 +845,23 @@ import EditorInterface from '../components/EditorInterface.astro';
     send();
   }
 
+  // Format token count for display (e.g., 1234 -> "1.2K", 56 -> "56")
+  function formatTokens(n: number): string {
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+    return String(n);
+  }
+
   // Append message to chat
-  function appendMessage(role: string, text: string, queryId?: string) {
+  interface UsageInfo {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    tool_calls: number;
+    cost: number;
+  }
+
+  function appendMessage(role: string, text: string, queryId?: string, usage?: UsageInfo) {
     const div = document.createElement('div');
     div.className = `message ${role}`;
 
@@ -864,9 +879,31 @@ import EditorInterface from '../components/EditorInterface.astro';
         const feedbackBar = document.createElement('div');
         feedbackBar.className = 'feedback-bar';
         feedbackBar.dataset.queryId = queryId;
+
+        // Build usage summary if available
+        let usageHtml = '';
+        if (usage) {
+          const parts = [];
+          if (usage.tool_calls > 0) {
+            parts.push(`${usage.tool_calls} tool${usage.tool_calls !== 1 ? 's' : ''}`);
+          }
+          parts.push(`${formatTokens(usage.input_tokens)} in`);
+          parts.push(`${formatTokens(usage.output_tokens)} out`);
+          if (usage.cache_read_tokens > 0) {
+            parts.push(`${formatTokens(usage.cache_read_tokens)} cached`);
+          }
+          const costStr = usage.cost < 0.01
+            ? `$${usage.cost.toFixed(4)}`
+            : `$${usage.cost.toFixed(3)}`;
+          usageHtml = `<span class="usage-info" title="Input / Output / Cache read tokens">${parts.join(' / ')} &middot; ${costStr}</span>`;
+        }
+
         feedbackBar.innerHTML = `
-          <button class="feedback-btn thumbs-up" title="Good response">&#128077;</button>
-          <button class="feedback-btn thumbs-down" title="Bad response">&#128078;</button>
+          ${usageHtml}
+          <span class="feedback-buttons">
+            <button class="feedback-btn thumbs-up" title="Good response">&#128077;</button>
+            <button class="feedback-btn thumbs-down" title="Bad response">&#128078;</button>
+          </span>
         `;
         div.appendChild(feedbackBar);
       }
@@ -1106,6 +1143,11 @@ import EditorInterface from '../components/EditorInterface.astro';
         const preview = session.preview || 'Empty session';
         const cost = session.total_cost || 0;
         const costDisplay = cost > 0 ? `$${cost.toFixed(3)}` : '';
+        const totalTokens = (session.total_input_tokens || 0) + (session.total_output_tokens || 0);
+        const cacheRead = session.total_cache_read_tokens || 0;
+        const tokenSummary = totalTokens > 0
+          ? `${formatTokens(totalTokens)} tokens${cacheRead > 0 ? ` (${formatTokens(cacheRead)} cached)` : ''}`
+          : '';
 
         return `
           <div class="border rounded-lg p-4 mb-3 hover:bg-gray-50 cursor-pointer ${isActive ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}"
@@ -1118,7 +1160,7 @@ import EditorInterface from '../components/EditorInterface.astro';
               </div>
             </div>
             <div class="text-gray-800 truncate mb-1">${preview}</div>
-            <div class="text-xs text-gray-500">${session.message_count} messages</div>
+            <div class="text-xs text-gray-500">${session.message_count} messages${tokenSummary ? ` · ${tokenSummary}` : ''}</div>
           </div>
         `;
       }).join('');

@@ -748,6 +748,22 @@ def query():
         tool_names_used = []  # Track tool names for feedback capture
         tool_error_count = 0  # Track tool errors for feedback capture
 
+        # Accumulate token usage across all API calls in the tool loop
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cache_write_tokens = 0
+        total_cache_read_tokens = 0
+
+        def accumulate_usage(resp):
+            nonlocal total_input_tokens, total_output_tokens, total_cache_write_tokens, total_cache_read_tokens
+            usage = resp.usage
+            total_input_tokens += getattr(usage, 'input_tokens', 0)
+            total_output_tokens += getattr(usage, 'output_tokens', 0)
+            total_cache_write_tokens += getattr(usage, 'cache_creation_input_tokens', 0)
+            total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0)
+
+        accumulate_usage(response)
+
         # Tool loop
         while response.stop_reason == "tool_use":
             tool_results = []
@@ -830,6 +846,7 @@ def query():
             api_call_count += 1
             with timer(f"Claude API call #{api_call_count} ({model})"):
                 response = client.messages.create(**api_params)
+            accumulate_usage(response)
 
         # Final text
         assistant_text = ""
@@ -849,33 +866,17 @@ def query():
         total_elapsed = time.time() - request_start
         logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
 
-        # Log cache performance if available
-        usage = response.usage
-        if hasattr(usage, 'cache_creation_input_tokens') or hasattr(usage, 'cache_read_input_tokens'):
-            cache_write = getattr(usage, 'cache_creation_input_tokens', 0)
-            cache_read = getattr(usage, 'cache_read_input_tokens', 0)
-            input_tokens = getattr(usage, 'input_tokens', 0)
+        # Log token usage (accumulated across all API calls in the tool loop)
+        history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
+        system_blocks = len(system_prompt_blocks)
 
-            # Calculate breakdown
-            history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
-            system_blocks = len(system_prompt_blocks)
+        logger.info(f"Token usage ({api_call_count} API calls): {total_input_tokens} input, {total_cache_write_tokens} cache write, {total_cache_read_tokens} cache read, {total_output_tokens} output")
+        logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
 
-            # Estimate cost (Haiku-4.5 rates: $0.80/M input, $0.08/M cached, $4/M output)
-            output_tokens = getattr(usage, 'output_tokens', 0)
-            cost_input = (input_tokens * 0.80) / 1_000_000
-            cost_cache_write = (cache_write * 1.00) / 1_000_000  # Cache writes cost more
-            cost_cache_read = (cache_read * 0.08) / 1_000_000
-            cost_output = (output_tokens * 4.00) / 1_000_000
-            total_cost = cost_input + cost_cache_write + cost_cache_read + cost_output
-
-            logger.info(f"Token usage: {input_tokens} input, {cache_write} cache write, {cache_read} cache read, {output_tokens} output")
-            logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
-            logger.info(f"  Estimated cost: ${total_cost:.4f} (${cost_input:.4f} input + ${cost_cache_read:.4f} cached + ${cost_output:.4f} output)")
-
-            # Warn if conversation is getting large
-            uncached_input = input_tokens - cache_read
-            if uncached_input > 20000:
-                logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
+        # Warn if conversation is getting large
+        uncached_input = total_input_tokens - total_cache_read_tokens
+        if uncached_input > 20000:
+            logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
 
         logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
 
@@ -914,65 +915,67 @@ def query():
             logger=logger,
         )
 
-        # Update session cost tracking
-        if hasattr(usage, 'input_tokens') and hasattr(usage, 'output_tokens'):
-            input_tokens = getattr(usage, 'input_tokens', 0)
-            output_tokens = getattr(usage, 'output_tokens', 0)
-            cache_write = getattr(usage, 'cache_creation_input_tokens', 0)
-            cache_read = getattr(usage, 'cache_read_input_tokens', 0)
-
-            # Calculate cost using appropriate model rates
-            if model == 'claude-haiku-4-5':
-                # Haiku 4.5: $0.80/M input, $0.08/M cached, $4/M output
-                cost_input = (input_tokens * 0.80) / 1_000_000
-                cost_cache_write = (cache_write * 1.00) / 1_000_000
-                cost_cache_read = (cache_read * 0.08) / 1_000_000
-                cost_output = (output_tokens * 4.00) / 1_000_000
-            elif model in ('claude-sonnet-4-5', 'claude-sonnet-4-6'):
-                # Sonnet 4.5/4.6: $3/M input, $0.30/M cached, $15/M output
-                cost_input = (input_tokens * 3.00) / 1_000_000
-                cost_cache_write = (cache_write * 3.75) / 1_000_000
-                cost_cache_read = (cache_read * 0.30) / 1_000_000
-                cost_output = (output_tokens * 15.00) / 1_000_000
-            elif model in ('claude-opus-4-5', 'claude-opus-4-6'):
-                # Opus 4.5/4.6: $5/M input, $0.50/M cached, $25/M output
-                cost_input = (input_tokens * 5.00) / 1_000_000
-                cost_cache_write = (cache_write * 6.25) / 1_000_000
-                cost_cache_read = (cache_read * 0.50) / 1_000_000
-                cost_output = (output_tokens * 25.00) / 1_000_000
-            else:
-                # Unknown model, use Haiku rates as fallback
-                cost_input = (input_tokens * 0.80) / 1_000_000
-                cost_cache_write = (cache_write * 1.00) / 1_000_000
-                cost_cache_read = (cache_read * 0.08) / 1_000_000
-                cost_output = (output_tokens * 4.00) / 1_000_000
-
-            request_cost = cost_input + cost_cache_write + cost_cache_read + cost_output
-
-            # Update session totals in database
-            db = get_db()
-            try:
-                SessionRepository.update_session_cost(
-                    db,
-                    session_id,
-                    input_tokens,
-                    output_tokens,
-                    request_cost
-                )
-
-                # Get updated totals
-                db_session_obj = SessionRepository.get_session(db, session_id)
-                total_session_cost = db_session_obj.total_cost if db_session_obj else request_cost
-            finally:
-                db.close()
+        # Calculate cost using accumulated totals and appropriate model rates
+        if model == 'claude-haiku-4-5':
+            # Haiku 4.5: $0.80/M input, $0.08/M cached, $4/M output
+            cost_input = (total_input_tokens * 0.80) / 1_000_000
+            cost_cache_write = (total_cache_write_tokens * 1.00) / 1_000_000
+            cost_cache_read = (total_cache_read_tokens * 0.08) / 1_000_000
+            cost_output = (total_output_tokens * 4.00) / 1_000_000
+        elif model in ('claude-sonnet-4-5', 'claude-sonnet-4-6'):
+            # Sonnet 4.5/4.6: $3/M input, $0.30/M cached, $15/M output
+            cost_input = (total_input_tokens * 3.00) / 1_000_000
+            cost_cache_write = (total_cache_write_tokens * 3.75) / 1_000_000
+            cost_cache_read = (total_cache_read_tokens * 0.30) / 1_000_000
+            cost_output = (total_output_tokens * 15.00) / 1_000_000
+        elif model in ('claude-opus-4-5', 'claude-opus-4-6'):
+            # Opus 4.5/4.6: $5/M input, $0.50/M cached, $25/M output
+            cost_input = (total_input_tokens * 5.00) / 1_000_000
+            cost_cache_write = (total_cache_write_tokens * 6.25) / 1_000_000
+            cost_cache_read = (total_cache_read_tokens * 0.50) / 1_000_000
+            cost_output = (total_output_tokens * 25.00) / 1_000_000
         else:
-            total_session_cost = 0.0
+            # Unknown model, use Haiku rates as fallback
+            cost_input = (total_input_tokens * 0.80) / 1_000_000
+            cost_cache_write = (total_cache_write_tokens * 1.00) / 1_000_000
+            cost_cache_read = (total_cache_read_tokens * 0.08) / 1_000_000
+            cost_output = (total_output_tokens * 4.00) / 1_000_000
+
+        request_cost = cost_input + cost_cache_write + cost_cache_read + cost_output
+        logger.info(f"  Estimated cost: ${request_cost:.4f} (${cost_input:.4f} input + ${cost_cache_write:.4f} cache write + ${cost_cache_read:.4f} cached + ${cost_output:.4f} output)")
+
+        # Update session totals in database
+        db = get_db()
+        try:
+            SessionRepository.update_session_cost(
+                db,
+                session_id,
+                total_input_tokens,
+                total_output_tokens,
+                request_cost,
+                cache_write_tokens=total_cache_write_tokens,
+                cache_read_tokens=total_cache_read_tokens,
+            )
+
+            # Get updated totals
+            db_session_obj = SessionRepository.get_session(db, session_id)
+            total_session_cost = db_session_obj.total_cost if db_session_obj else request_cost
+        finally:
+            db.close()
 
         return jsonify({
             "response": assistant_text,
             "session_id": session_id,
             "session_cost": total_session_cost,
             "query_id": query_id,
+            "usage": {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "cache_read_tokens": total_cache_read_tokens,
+                "cache_write_tokens": total_cache_write_tokens,
+                "tool_calls": tool_call_count,
+                "cost": round(request_cost, 6),
+            },
         })
 
     except Exception as e:
@@ -1127,7 +1130,9 @@ def list_sessions():
                 "preview": preview,
                 "total_cost": session.total_cost,
                 "total_input_tokens": session.total_input_tokens,
-                "total_output_tokens": session.total_output_tokens
+                "total_output_tokens": session.total_output_tokens,
+                "total_cache_write_tokens": getattr(session, 'total_cache_write_tokens', 0),
+                "total_cache_read_tokens": getattr(session, 'total_cache_read_tokens', 0),
             })
 
         return jsonify(sessions_list)

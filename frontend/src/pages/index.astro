@@ -738,7 +738,7 @@ import EditorInterface from '../components/EditorInterface.astro';
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(requestBody)
-      }, 60000); // 60s timeout for streaming queries
+      }, 180000); // 3min timeout for complex/extended-thinking queries
 
       if (res.status === 401) {
         handle401();

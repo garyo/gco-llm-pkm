@@ -29,6 +29,7 @@ gco-pkm-llm Bridge Server
 A modular server providing Claude API access to Personal Knowledge Management files.
 """
 
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -372,20 +373,35 @@ def timer(label: str):
 
 
 def serialize_message_content(content):
-    """Convert Anthropic message content to JSON-serializable format."""
+    """Convert Anthropic message content to JSON-serializable format.
+
+    Strips thinking blocks (both API-level thinking blocks and inline <thinking>
+    XML tags) to avoid bloating conversation history with transient reasoning.
+    """
     if isinstance(content, str):
-        return content
+        return re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
     elif isinstance(content, list):
         serialized = []
         for item in content:
+            # Skip API-level thinking blocks
+            item_type = getattr(item, 'type', None) or (item.get('type') if isinstance(item, dict) else None)
+            if item_type == 'thinking':
+                continue
+
             if hasattr(item, 'model_dump'):
-                # Anthropic SDK objects have model_dump()
-                serialized.append(item.model_dump())
+                dumped = item.model_dump()
             elif isinstance(item, dict):
-                serialized.append(item)
+                dumped = item
             else:
-                # Fallback: convert to dict manually
-                serialized.append({"type": getattr(item, "type", "unknown"), "data": str(item)})
+                dumped = {"type": item_type or "unknown", "data": str(item)}
+
+            # Strip inline <thinking> tags from text blocks
+            if dumped.get('type') == 'text' and 'text' in dumped:
+                dumped = {**dumped, 'text': re.sub(r'<thinking>[\s\S]*?</thinking>', '', dumped['text']).strip()}
+
+            if dumped.get('type') == 'text' and not dumped.get('text'):
+                continue  # Skip empty text blocks after stripping
+            serialized.append(dumped)
         return serialized
     else:
         return str(content)

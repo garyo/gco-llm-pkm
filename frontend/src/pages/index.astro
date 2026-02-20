@@ -115,7 +115,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Initialize markdown-it with task-lists plugin
   const md = (window as any).markdownit({
-    html: false,
+    html: true,
     linkify: true,
     typographer: true
   }).use((window as any).markdownitTaskLists, {enabled: true});
@@ -866,7 +866,15 @@ import EditorInterface from '../components/EditorInterface.astro';
     div.className = `message ${role}`;
 
     if (role === 'assistant') {
-      let rendered = md.render(preprocessPkmFileLinks(preprocessOrgIdLinks(text)));
+      // Extract <thinking> blocks before markdown rendering
+      let processedText = text.replace(
+        /<thinking>([\s\S]*?)<\/thinking>/g,
+        (_match: string, content: string) => {
+          const trimmed = content.trim();
+          return `\n\n<details class="thinking-block"><summary>Thinking</summary>\n\n${trimmed}\n\n</details>\n\n`;
+        }
+      );
+      let rendered = md.render(preprocessPkmFileLinks(preprocessOrgIdLinks(processedText)));
       rendered = processDoneItems(rendered);
       rendered = processCheckboxMetadata(rendered);
       rendered = addTokensToImages(rendered);

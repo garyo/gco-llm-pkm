@@ -401,6 +401,38 @@ import examples from '../../../config/examples.json';
     color: rgb(107 114 128);
   }
 
+  /* Thinking blocks (collapsible) */
+  .message.assistant .thinking-block {
+    margin: 0.75em 0;
+    border: 1px solid rgb(209 213 219);
+    border-radius: 0.5rem;
+    background-color: rgb(249 250 251);
+    font-size: 0.875em;
+  }
+
+  .message.assistant .thinking-block summary {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    color: rgb(107 114 128);
+    font-style: italic;
+    font-weight: 500;
+    user-select: none;
+  }
+
+  .message.assistant .thinking-block summary:hover {
+    color: rgb(75 85 99);
+  }
+
+  .message.assistant .thinking-block[open] summary {
+    border-bottom: 1px solid rgb(229 231 235);
+    margin-bottom: 0.25rem;
+  }
+
+  .message.assistant .thinking-block > *:not(summary) {
+    padding: 0 0.75rem;
+    color: rgb(107 114 128);
+  }
+
   /* Mobile optimizations */
   @media (max-width: 640px) {
     .message {

@@ -276,6 +276,74 @@ class NoteChunker:
 
         return chunks
 
+    def chunk_email(self, subject: str, from_addr: str, date: str, body: str) -> List[Chunk]:
+        """Chunk an email message for embedding.
+
+        Args:
+            subject: Email subject
+            from_addr: Sender address
+            date: Email date string
+            body: Email body text
+
+        Returns:
+            List of Chunk objects
+        """
+        header = f"From: {from_addr}\nSubject: {subject}\nDate: {date}\n\n"
+        full_text = header + body
+        heading_path = f"From: {from_addr} | {subject}"
+
+        token_count = self.estimate_tokens(full_text)
+
+        if token_count <= self.max_tokens:
+            if token_count < self.min_tokens:
+                return []
+            return [Chunk(
+                content=full_text,
+                chunk_type='email',
+                heading_path=heading_path,
+                start_line=0,
+                token_count=token_count,
+            )]
+
+        # Split body on paragraph boundaries
+        paragraphs = re.split(r'\n\s*\n', body)
+        chunks: List[Chunk] = []
+        current_body = ''
+
+        for para in paragraphs:
+            candidate = current_body + ('\n\n' if current_body else '') + para
+            candidate_full = header + candidate
+
+            if self.estimate_tokens(candidate_full) > self.max_tokens and current_body:
+                chunk_text = header + current_body
+                tc = self.estimate_tokens(chunk_text)
+                if tc >= self.min_tokens:
+                    chunks.append(Chunk(
+                        content=chunk_text,
+                        chunk_type='email',
+                        heading_path=heading_path,
+                        start_line=0,
+                        token_count=tc,
+                    ))
+                current_body = para
+            else:
+                current_body = candidate
+
+        # Last chunk
+        if current_body:
+            chunk_text = header + current_body
+            tc = self.estimate_tokens(chunk_text)
+            if tc >= self.min_tokens:
+                chunks.append(Chunk(
+                    content=chunk_text,
+                    chunk_type='email',
+                    heading_path=heading_path,
+                    start_line=0,
+                    token_count=tc,
+                ))
+
+        return chunks
+
     def _create_markdown_chunk(
         self,
         heading_stack: List[str],

@@ -69,6 +69,7 @@ from pkm_bridge.tools.files import ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.ticktick import TickTickTool
 from pkm_bridge.tools.google_calendar import GoogleCalendarTool
+from pkm_bridge.tools.google_gmail import GoogleGmailTool
 from pkm_bridge.tools.open_file import OpenFileTool
 from pkm_bridge.tools.find_context import FindContextTool
 from pkm_bridge.tools.semantic_search import SemanticSearchTool
@@ -155,11 +156,14 @@ if voyage_api_key:
         # child (WERKZEUG_RUN_MAIN=true) or when not in debug mode.
         if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
             embedding_scheduler = BackgroundScheduler()
+            def _scheduled_embedding():
+                gmail_oauth = globals().get('google_gmail_oauth')
+                run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
+
             embedding_scheduler.add_job(
-                func=run_incremental_embedding,
+                func=_scheduled_embedding,
                 trigger="interval",
                 hours=1,  # Run every hour
-                args=[logger, voyage_client, config],
                 id='incremental_embedding',
                 name='Incremental note embedding',
                 replace_existing=True,
@@ -261,6 +265,17 @@ try:
 except ValueError as e:
     logger.info(f"Google Calendar not configured: {e}")
 
+# Initialize Google Gmail OAuth handler (optional - only if configured)
+google_gmail_oauth = None
+try:
+    google_gmail_oauth = GoogleOAuth(
+        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        redirect_uri_env='GOOGLE_GMAIL_REDIRECT_URI'
+    )
+    logger.info("Google Gmail OAuth handler initialized")
+except ValueError as e:
+    logger.info(f"Google Gmail not configured: {e}")
+
 # Initialize rate limiter
 limiter = Limiter(
     app=app,
@@ -311,6 +326,11 @@ if ticktick_oauth:
 if google_oauth:
     tool_registry.register(GoogleCalendarTool(logger, google_oauth))
     logger.info("Google Calendar tool registered")
+
+# Register Google Gmail tool if configured
+if google_gmail_oauth:
+    tool_registry.register(GoogleGmailTool(logger, google_gmail_oauth))
+    logger.info("Google Gmail tool registered")
 
 # Register semantic search tool if RAG is enabled
 if context_retriever:
@@ -2003,6 +2023,146 @@ def google_calendar_disconnect():
         return jsonify({"error": str(e)}), 500
 
 
+# -------------------------
+# Google Gmail OAuth Routes
+# -------------------------
+
+@app.route('/auth/google-gmail/authorize', methods=['GET'])
+def google_gmail_authorize():
+    """Initiate Google Gmail OAuth flow."""
+    if not google_gmail_oauth:
+        return jsonify({"error": "Google Gmail not configured"}), 503
+
+    try:
+        auth_data = google_gmail_oauth.get_authorization_url()
+        return f"""
+        <html>
+            <head>
+                <meta http-equiv="refresh" content="0;url={auth_data['url']}" />
+                <title>Redirecting to Google...</title>
+            </head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <p>Redirecting to Google Gmail authorization...</p>
+                <p>If not redirected automatically, <a href="{auth_data['url']}">click here</a>.</p>
+            </body>
+        </html>
+        """
+    except Exception as e:
+        logger.error(f"Error initiating Google Gmail OAuth: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/auth/google-gmail/callback', methods=['GET'])
+def google_gmail_callback():
+    """Handle Google Gmail OAuth callback."""
+    if not google_gmail_oauth:
+        return jsonify({"error": "Google Gmail not configured"}), 503
+
+    code = request.args.get('code')
+    error = request.args.get('error')
+
+    if error:
+        logger.error(f"Google Gmail OAuth error: {error}")
+        return jsonify({"error": error}), 400
+
+    if not code:
+        return jsonify({"error": "No authorization code received"}), 400
+
+    try:
+        token_data = google_gmail_oauth.exchange_code(code)
+
+        db = get_db()
+        OAuthRepository.save_token(
+            db=db,
+            service='google_gmail',
+            access_token=token_data['access_token'],
+            refresh_token=token_data.get('refresh_token'),
+            expires_at=token_data['expires_at'],
+            scope=token_data.get('scope')
+        )
+        db.close()
+
+        logger.info("Google Gmail OAuth completed successfully")
+        return """
+        <html>
+            <head>
+                <title>Gmail Connected</title>
+                <meta http-equiv="refresh" content="3;url=/" />
+            </head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <h1 style="color: #4CAF50;">✓ Gmail Connected Successfully!</h1>
+                <p>Claude can now read your Gmail messages.</p>
+                <p>Redirecting to home page... <a href="/">Click here</a> if not redirected.</p>
+            </body>
+        </html>
+        """
+
+    except Exception as e:
+        logger.error(f"Error completing Google Gmail OAuth: {e}")
+        return f"""
+        <html>
+            <head><title>Gmail Connection Error</title></head>
+            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+                <h1 style="color: #f44336;">✗ Connection Failed</h1>
+                <p>Error: {str(e)}</p>
+                <p><a href="/auth/google-gmail/authorize">Try again</a></p>
+            </body>
+        </html>
+        """, 500
+
+
+@app.route('/auth/google-gmail/status', methods=['GET'])
+def google_gmail_status():
+    """Check Google Gmail connection status."""
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        db = get_db()
+        token = OAuthRepository.get_token(db, 'google_gmail')
+        db.close()
+
+        if token:
+            is_expired = OAuthRepository.is_token_expired(token)
+            return jsonify({
+                "connected": True,
+                "expired": is_expired,
+                "expires_at": token.expires_at.isoformat() if token.expires_at else None
+            })
+        else:
+            return jsonify({"connected": False})
+
+    except Exception as e:
+        logger.error(f"Error checking Gmail status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/auth/google-gmail/disconnect', methods=['POST'])
+def google_gmail_disconnect():
+    """Disconnect Gmail."""
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    try:
+        db = get_db()
+        deleted = OAuthRepository.delete_token(db, 'google_gmail')
+        db.close()
+
+        if deleted:
+            logger.info("Gmail disconnected")
+            return jsonify({"status": "success", "message": "Gmail disconnected"})
+        else:
+            return jsonify({"error": "Gmail not connected"}), 404
+
+    except Exception as e:
+        logger.error(f"Error disconnecting Gmail: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check with database connectivity test."""
@@ -2051,7 +2211,7 @@ def trigger_embedding():
 
         def run_embedding():
             try:
-                stats = run_incremental_embedding(logger, voyage_client, config)
+                stats = run_incremental_embedding(logger, voyage_client, config, google_gmail_oauth)
                 logger.info(f"Manual embedding complete: {stats}")
             except Exception as e:
                 logger.error(f"Manual embedding failed: {e}")

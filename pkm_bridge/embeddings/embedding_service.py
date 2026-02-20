@@ -301,7 +301,196 @@ def find_note_files(directories: list[Path], logger=None) -> list[Path]:
     return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
 
 
-def run_incremental_embedding(logger, voyage_client: VoyageClient, config: Config = None) -> dict:
+def embed_gmail_messages(
+    voyage_client: VoyageClient,
+    gmail_oauth,
+    db,
+    days_back: int = 7,
+    max_emails: int = 200,
+    logger=None,
+) -> dict:
+    """Embed recent Gmail messages into the RAG pipeline.
+
+    Args:
+        voyage_client: Voyage AI client
+        gmail_oauth: GoogleOAuth instance for Gmail
+        db: Database session
+        days_back: How many days back to fetch emails
+        max_emails: Maximum emails to process
+        logger: Optional logger
+
+    Returns:
+        Dictionary with stats
+    """
+    from pkm_bridge.db_repository import OAuthRepository
+    from pkm_bridge.google_gmail_client import GoogleGmailClient
+
+    def log(msg):
+        if logger:
+            logger.info(msg)
+
+    stats = {"gmail_embedded": 0, "gmail_skipped": 0, "gmail_errors": 0}
+
+    if not gmail_oauth:
+        return stats
+
+    # Get Gmail token
+    try:
+        token = OAuthRepository.get_token(db, 'google_gmail')
+        if not token:
+            log("Gmail not connected, skipping email embedding")
+            return stats
+
+        # Refresh if expired
+        if OAuthRepository.is_token_expired(token):
+            try:
+                new_token_data = gmail_oauth.refresh_token(token.refresh_token)
+                OAuthRepository.save_token(
+                    db=db,
+                    service='google_gmail',
+                    access_token=new_token_data['access_token'],
+                    refresh_token=new_token_data.get('refresh_token'),
+                    expires_at=new_token_data['expires_at'],
+                    scope=new_token_data.get('scope'),
+                )
+                token = OAuthRepository.get_token(db, 'google_gmail')
+            except Exception as e:
+                log(f"Failed to refresh Gmail token for embedding: {e}")
+                return stats
+
+        client = GoogleGmailClient(token.access_token, token.refresh_token)
+    except Exception as e:
+        log(f"Error initializing Gmail client for embedding: {e}")
+        return stats
+
+    # Search for recent emails
+    from datetime import datetime, timedelta
+    date_str = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y/%m/%d')
+    query = f"after:{date_str}"
+
+    chunker = NoteChunker()
+
+    try:
+        all_messages = []
+        page_token = None
+
+        while len(all_messages) < max_emails:
+            results = client.list_messages(
+                query=query,
+                max_results=min(50, max_emails - len(all_messages)),
+                page_token=page_token,
+            )
+            messages = results.get('messages', [])
+            if not messages:
+                break
+            all_messages.extend(messages)
+            page_token = results.get('nextPageToken')
+            if not page_token:
+                break
+
+        log(f"📧 Found {len(all_messages)} recent emails to process for embedding")
+
+        for msg_stub in all_messages:
+            try:
+                msg_id = msg_stub['id']
+                synthetic_path = f"gmail://{msg_id}"
+
+                # Fetch full message
+                msg = client.get_message(msg_id)
+                payload = msg.get('payload', {})
+                headers = payload.get('headers', [])
+
+                subject = client.extract_header(headers, 'Subject') or '(no subject)'
+                from_addr = client.extract_header(headers, 'From')
+                date = client.extract_header(headers, 'Date')
+                body = client.decode_body(payload)
+
+                # Compute hash for change detection
+                content_hash = hashlib.sha256(
+                    (subject + from_addr + body).encode('utf-8')
+                ).hexdigest()
+
+                # Check if already embedded
+                existing = db.query(Document).filter_by(file_path=synthetic_path).first()
+                if existing and existing.file_hash == content_hash:
+                    stats["gmail_skipped"] += 1
+                    continue
+
+                # Chunk the email
+                chunks = chunker.chunk_email(subject, from_addr, date, body)
+                if not chunks:
+                    stats["gmail_skipped"] += 1
+                    continue
+
+                # Embed chunks
+                texts = [chunk.content for chunk in chunks]
+                result = voyage_client.embed(texts=texts, input_type="document")
+                embeddings = result.embeddings
+
+                # Extract date for the document
+                date_extracted = None
+                try:
+                    from email.utils import parsedate_to_datetime
+                    dt = parsedate_to_datetime(date)
+                    date_extracted = dt.strftime('%Y-%m-%d')
+                except Exception:
+                    pass
+
+                # Save to database
+                if existing:
+                    db.query(DocumentChunk).filter_by(document_id=existing.id).delete()
+                    doc = existing
+                    doc.file_hash = content_hash
+                    doc.updated_at = datetime.utcnow()
+                    doc.date_extracted = date_extracted
+                else:
+                    doc = Document(
+                        file_path=synthetic_path,
+                        file_type='gmail',
+                        file_hash=content_hash,
+                        date_extracted=date_extracted,
+                    )
+                    db.add(doc)
+                    db.flush()
+
+                for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                    chunk_obj = DocumentChunk(
+                        document_id=doc.id,
+                        chunk_index=idx,
+                        chunk_type=chunk.chunk_type,
+                        heading_path=chunk.heading_path,
+                        content=chunk.content,
+                        start_line=chunk.start_line,
+                        token_count=chunk.token_count,
+                        embedding=embedding,
+                    )
+                    db.add(chunk_obj)
+
+                doc.total_chunks = len(chunks)
+                doc.last_embedded_at = datetime.utcnow()
+                db.commit()
+
+                stats["gmail_embedded"] += 1
+
+            except Exception as e:
+                db.rollback()
+                if logger:
+                    logger.error(f"Error embedding email {msg_stub.get('id')}: {e}")
+                stats["gmail_errors"] += 1
+
+    except Exception as e:
+        log(f"Error fetching Gmail messages for embedding: {e}")
+
+    log(
+        f"📧 Gmail embedding complete: {stats['gmail_embedded']} embedded, "
+        f"{stats['gmail_skipped']} skipped, {stats['gmail_errors']} errors"
+    )
+    return stats
+
+
+def run_incremental_embedding(
+    logger, voyage_client: VoyageClient, config: Config = None, gmail_oauth=None
+) -> dict:
     """Run incremental embedding (only changed files).
 
     This is the main entry point for the background scheduler.
@@ -310,6 +499,7 @@ def run_incremental_embedding(logger, voyage_client: VoyageClient, config: Confi
         logger: Logger instance
         voyage_client: Voyage AI client
         config: Optional config (will create if not provided)
+        gmail_oauth: Optional GoogleOAuth instance for Gmail embedding
 
     Returns:
         Dictionary with stats (embedded_count, skipped_count, error_count)
@@ -329,9 +519,8 @@ def run_incremental_embedding(logger, voyage_client: VoyageClient, config: Confi
 
     if not files:
         logger.warning("No files found to embed")
-        return {"embedded_count": 0, "skipped_count": 0, "error_count": 0}
-
-    logger.info(f"📁 Found {len(files)} files to process")
+    else:
+        logger.info(f"📁 Found {len(files)} files to process")
 
     # Initialize components
     db = get_db()
@@ -352,6 +541,15 @@ def run_incremental_embedding(logger, voyage_client: VoyageClient, config: Confi
             except Exception as e:
                 logger.error(f"Error processing {file_path}: {e}")
                 error_count += 1
+
+        # Embed recent Gmail messages (if connected)
+        if gmail_oauth:
+            gmail_stats = embed_gmail_messages(
+                voyage_client, gmail_oauth, db, logger=logger
+            )
+            embedded_count += gmail_stats.get("gmail_embedded", 0)
+            skipped_count += gmail_stats.get("gmail_skipped", 0)
+            error_count += gmail_stats.get("gmail_errors", 0)
     finally:
         db.close()
 

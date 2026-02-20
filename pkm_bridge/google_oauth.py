@@ -1,4 +1,4 @@
-"""Google OAuth2 authentication handler for Calendar API."""
+"""Google OAuth2 authentication handler for Google APIs (Calendar, Gmail, etc.)."""
 
 import os
 import secrets
@@ -9,24 +9,37 @@ import requests
 
 
 class GoogleOAuth:
-    """Handle Google OAuth2 authentication flow for Calendar API."""
+    """Handle Google OAuth2 authentication flow for Google APIs.
+
+    Supports multiple Google APIs (Calendar, Gmail, etc.) by parameterizing
+    scopes and redirect URI. Defaults to Calendar scopes for backward compatibility.
+    """
 
     # Google OAuth endpoints
     AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-    # Google Calendar API scopes
-    # Use full access for read/write operations
-    SCOPES = [
+    # Default scopes (Google Calendar - backward compatible)
+    DEFAULT_SCOPES = [
         "https://www.googleapis.com/auth/calendar",  # Full calendar access
         "https://www.googleapis.com/auth/calendar.events"  # Events access
     ]
 
-    def __init__(self):
-        """Initialize OAuth handler with credentials from environment."""
+    def __init__(
+        self,
+        scopes: list[str] | None = None,
+        redirect_uri_env: str = 'GOOGLE_REDIRECT_URI'
+    ):
+        """Initialize OAuth handler with credentials from environment.
+
+        Args:
+            scopes: OAuth scopes to request. Defaults to Calendar scopes.
+            redirect_uri_env: Environment variable name for redirect URI.
+        """
         self.client_id = os.getenv('GOOGLE_CLIENT_ID')
         self.client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
-        self.redirect_uri = os.getenv('GOOGLE_REDIRECT_URI')
+        self.redirect_uri = os.getenv(redirect_uri_env)
+        self.scopes = scopes or self.DEFAULT_SCOPES
 
         if not all([self.client_id, self.client_secret, self.redirect_uri]):
             raise ValueError(
@@ -51,7 +64,7 @@ class GoogleOAuth:
             'client_id': self.client_id,
             'redirect_uri': self.redirect_uri,
             'response_type': 'code',
-            'scope': ' '.join(self.SCOPES),  # Space-delimited scopes
+            'scope': ' '.join(self.scopes),  # Space-delimited scopes
             'access_type': 'offline',  # Request refresh token
             'state': state,
             'prompt': 'consent'  # Force consent to ensure refresh token
@@ -103,7 +116,7 @@ class GoogleOAuth:
             'refresh_token': token_data.get('refresh_token'),
             'expires_at': expires_at,
             'token_type': token_data.get('token_type', 'Bearer'),
-            'scope': token_data.get('scope', ' '.join(self.SCOPES))
+            'scope': token_data.get('scope', ' '.join(self.scopes))
         }
 
     def refresh_token(self, refresh_token: str) -> Dict[str, any]:
@@ -139,7 +152,7 @@ class GoogleOAuth:
             'refresh_token': token_data.get('refresh_token', refresh_token),  # Use old if not provided
             'expires_at': expires_at,
             'token_type': token_data.get('token_type', 'Bearer'),
-            'scope': token_data.get('scope', ' '.join(self.SCOPES))
+            'scope': token_data.get('scope', ' '.join(self.scopes))
         }
 
     def is_token_expired(self, expires_at: datetime, buffer_seconds: int = 300) -> bool:

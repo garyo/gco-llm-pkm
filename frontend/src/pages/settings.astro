@@ -114,6 +114,23 @@ import Layout from '../layouts/Layout.astro';
                     </button>
                 </div>
             </div>
+
+            <div class="integration-card">
+                <div class="integration-header">
+                    <h3>Gmail</h3>
+                    <span id="gmail-status" class="status-badge">Checking...</span>
+                </div>
+                <p>Connect Gmail to let Claude search and read your email (read-only).</p>
+
+                <div id="gmail-actions">
+                    <button id="connect-gmail" class="btn btn-primary" style="display: none;">
+                        Connect Gmail
+                    </button>
+                    <button id="disconnect-gmail" class="btn btn-danger" style="display: none;">
+                        Disconnect
+                    </button>
+                </div>
+            </div>
         </section>
 
         <section class="account-section">
@@ -698,6 +715,72 @@ import Layout from '../layouts/Layout.astro';
         }
     });
 
+    // Gmail Integration Management
+    async function checkGmailStatus() {
+        const token = localStorage.getItem('pkm-authToken');
+        const statusBadge = document.getElementById('gmail-status');
+        const connectBtn = document.getElementById('connect-gmail');
+        const disconnectBtn = document.getElementById('disconnect-gmail');
+
+        try {
+            const response = await fetch('/auth/google-gmail/status', {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.connected) {
+                statusBadge.textContent = 'Connected';
+                statusBadge.className = 'status-badge connected';
+                disconnectBtn.style.display = 'inline-block';
+                connectBtn.style.display = 'none';
+            } else {
+                statusBadge.textContent = 'Not Connected';
+                statusBadge.className = 'status-badge disconnected';
+                connectBtn.style.display = 'inline-block';
+                disconnectBtn.style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Error checking Gmail status:', error);
+            statusBadge.textContent = 'Error';
+            statusBadge.className = 'status-badge disconnected';
+            connectBtn.style.display = 'inline-block';
+        }
+    }
+
+    document.getElementById('connect-gmail')?.addEventListener('click', () => {
+        window.location.href = '/auth/google-gmail/authorize';
+    });
+
+    document.getElementById('disconnect-gmail')?.addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to disconnect Gmail?')) {
+            return;
+        }
+
+        const token = localStorage.getItem('pkm-authToken');
+
+        try {
+            const response = await fetch('/auth/google-gmail/disconnect', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            if (response.ok) {
+                alert('Gmail disconnected successfully');
+                checkGmailStatus();
+            } else {
+                alert('Failed to disconnect Gmail');
+            }
+        } catch (error) {
+            console.error('Error disconnecting Gmail:', error);
+            alert('Error disconnecting Gmail');
+        }
+    });
+
     // Logout handler
     document.getElementById('logout-btn')?.addEventListener('click', () => {
         localStorage.removeItem('pkm-authToken');
@@ -773,5 +856,6 @@ import Layout from '../layouts/Layout.astro';
     loadUserContext();
     checkTickTickStatus();
     checkGoogleCalendarStatus();
+    checkGmailStatus();
     loadBuildVersion();
 </script>

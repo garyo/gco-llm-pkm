@@ -329,6 +329,65 @@ class LearnedRule(Base):
         return f"<LearnedRule(type='{self.rule_type}', confidence={self.confidence:.2f}, active={self.is_active})>"
 
 
+class ScheduledTask(Base):
+    """A task that runs on a cron or interval schedule via Claude."""
+    __tablename__ = 'scheduled_tasks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text, nullable=True)
+    prompt = Column(Text, nullable=False)
+    schedule_type = Column(String(10), nullable=False)  # 'cron' or 'interval'
+    schedule_expr = Column(String(100), nullable=False)  # "0 9 * * 1-5" or "4h"
+    tools_allowed = Column(JSON, nullable=True)  # null = all tools
+    is_heartbeat = Column(Boolean, default=False)
+    enabled = Column(Boolean, default=True)
+    max_turns = Column(Integer, default=10)
+    max_input_tokens = Column(Integer, default=200_000)
+    max_output_tokens = Column(Integer, default=10_000)
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
+    created_by = Column(String(20), default='user')  # 'user', 'chat', or 'system'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ScheduledTask(name='{self.name}', schedule='{self.schedule_type}:{self.schedule_expr}', enabled={self.enabled})>"
+
+
+class ScheduledTaskRun(Base):
+    """Log of a single execution of a scheduled task."""
+    __tablename__ = 'scheduled_task_runs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(Integer, ForeignKey('scheduled_tasks.id', ondelete='CASCADE'), index=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String(20))  # 'running', 'completed', 'failed', 'budget_exceeded'
+    turns_used = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    summary = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return f"<ScheduledTaskRun(task_id={self.task_id}, status='{self.status}', turns={self.turns_used})>"
+
+
+class DailyTokenUsage(Base):
+    """Aggregate daily token usage for scheduled task budget enforcement."""
+    __tablename__ = 'daily_token_usage'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), unique=True, index=True)  # 'YYYY-MM-DD'
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    task_runs = Column(Integer, default=0)
+
+    def __repr__(self):
+        return f"<DailyTokenUsage(date='{self.date}', runs={self.task_runs})>"
+
+
 class AgentRunLog(Base):
     """Lightweight log of self-improvement agent runs (for admin API)."""
     __tablename__ = 'agent_run_log'

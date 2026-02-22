@@ -133,6 +133,96 @@ import Layout from '../layouts/Layout.astro';
             </div>
         </section>
 
+        <section class="scheduled-tasks-section">
+            <h2>Scheduled Tasks</h2>
+            <p class="section-description">
+                Configure tasks that run automatically on a schedule. Claude executes each task with access to your tools.
+            </p>
+
+            <!-- Daily Budget Bar -->
+            <div class="budget-card" id="budget-card">
+                <div class="budget-header">
+                    <span class="budget-label">Daily Token Budget</span>
+                    <span id="budget-summary" class="budget-summary">Loading...</span>
+                </div>
+                <div class="budget-bar-container">
+                    <div class="budget-bar">
+                        <div id="budget-bar-fill" class="budget-bar-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="budget-details">
+                    <span id="budget-input">Input: —</span>
+                    <span id="budget-output">Output: —</span>
+                    <span id="budget-runs">Runs: —</span>
+                </div>
+            </div>
+
+            <!-- Task List -->
+            <div id="task-list" class="task-list">
+                <p class="loading-text">Loading tasks...</p>
+            </div>
+
+            <!-- Add Task Button + Form -->
+            <button id="add-task-btn" class="btn btn-primary" style="margin-top: 1rem;">
+                + Add Task
+            </button>
+
+            <div id="add-task-form" class="task-form" style="display: none;">
+                <h3>New Scheduled Task</h3>
+                <div class="form-group">
+                    <label for="new-task-name">Name</label>
+                    <input type="text" id="new-task-name" placeholder="e.g. morning-calendar-check" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label for="new-task-prompt">Prompt</label>
+                    <textarea id="new-task-prompt" rows="4" placeholder="What should Claude do when this task runs?" class="form-input"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="new-task-schedule-type">Schedule Type</label>
+                        <select id="new-task-schedule-type" class="form-input">
+                            <option value="cron">Cron</option>
+                            <option value="interval">Interval</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-task-schedule-expr">Expression</label>
+                        <input type="text" id="new-task-schedule-expr" placeholder="0 9 * * 1-5 or 4h" class="form-input">
+                    </div>
+                </div>
+                <details class="form-advanced">
+                    <summary>Advanced</summary>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="new-task-max-turns">Max Turns</label>
+                            <input type="number" id="new-task-max-turns" value="10" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-task-max-input">Max Input Tokens</label>
+                            <input type="number" id="new-task-max-input" value="200000" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="new-task-max-output">Max Output Tokens</label>
+                            <input type="number" id="new-task-max-output" value="10000" class="form-input">
+                        </div>
+                    </div>
+                </details>
+                <div class="form-actions">
+                    <button id="cancel-task-btn" class="btn btn-secondary">Cancel</button>
+                    <button id="save-task-btn" class="btn btn-primary">Create Task</button>
+                </div>
+                <span id="task-form-status" class="status-text"></span>
+            </div>
+
+            <!-- Recent Runs -->
+            <details class="recent-runs-section" style="margin-top: 1.5rem;">
+                <summary><strong>Recent Runs</strong></summary>
+                <div id="recent-runs" class="recent-runs">
+                    <p class="loading-text">Loading...</p>
+                </div>
+            </details>
+        </section>
+
         <section class="account-section">
             <h2>Account</h2>
             <button id="logout-btn" class="btn btn-danger">
@@ -208,6 +298,7 @@ import Layout from '../layouts/Layout.astro';
     .user-context-section,
     .editor-autosave-section,
     .integrations-section,
+    .scheduled-tasks-section,
     .account-section,
     .version-section {
         margin-bottom: 3rem;
@@ -477,6 +568,303 @@ import Layout from '../layouts/Layout.astro';
         outline: none;
         border-color: #007bff;
         box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+    }
+
+    /* Scheduled Tasks */
+    .budget-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        background: white;
+        margin-bottom: 1.5rem;
+    }
+
+    .budget-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+
+    .budget-label {
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+
+    .budget-summary {
+        font-size: 0.85rem;
+        color: #666;
+    }
+
+    .budget-bar-container {
+        margin-bottom: 0.5rem;
+    }
+
+    .budget-bar {
+        height: 8px;
+        background: #e9ecef;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+
+    .budget-bar-fill {
+        height: 100%;
+        background: #007bff;
+        border-radius: 4px;
+        transition: width 0.3s, background 0.3s;
+    }
+
+    .budget-bar-fill.warning {
+        background: #ffc107;
+    }
+
+    .budget-bar-fill.critical {
+        background: #dc3545;
+    }
+
+    .budget-details {
+        display: flex;
+        gap: 1.5rem;
+        font-size: 0.8rem;
+        color: #888;
+    }
+
+    .task-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .task-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        background: white;
+    }
+
+    .task-card.heartbeat {
+        border-left: 4px solid #007bff;
+    }
+
+    .task-card.disabled {
+        opacity: 0.6;
+    }
+
+    .task-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+
+    .task-card-title {
+        font-weight: 600;
+        font-size: 1rem;
+    }
+
+    .task-card-title .heartbeat-badge {
+        font-size: 0.75rem;
+        background: #e7f1ff;
+        color: #0056b3;
+        padding: 0.1rem 0.5rem;
+        border-radius: 10px;
+        margin-left: 0.5rem;
+        font-weight: 500;
+    }
+
+    .task-card-actions {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .task-card-actions button {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.8rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        background: white;
+        cursor: pointer;
+    }
+
+    .task-card-actions button:hover {
+        background: #f8f9fa;
+    }
+
+    .task-card-actions button.btn-run {
+        color: #28a745;
+        border-color: #28a745;
+    }
+
+    .task-card-actions button.btn-delete {
+        color: #dc3545;
+        border-color: #dc3545;
+    }
+
+    .task-card-meta {
+        display: flex;
+        gap: 1.5rem;
+        font-size: 0.8rem;
+        color: #888;
+        margin-bottom: 0.25rem;
+    }
+
+    .task-card-prompt {
+        font-size: 0.85rem;
+        color: #555;
+        margin-top: 0.5rem;
+        white-space: pre-wrap;
+        max-height: 60px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* Edit heartbeat prompt */
+    .heartbeat-edit-area {
+        margin-top: 0.75rem;
+    }
+
+    .heartbeat-edit-area textarea {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+        font-size: 0.85rem;
+        resize: vertical;
+        min-height: 80px;
+    }
+
+    /* Task form */
+    .task-form {
+        border: 1px solid #007bff;
+        border-radius: 8px;
+        padding: 1.5rem;
+        background: #f8f9ff;
+        margin-top: 1rem;
+    }
+
+    .task-form h3 {
+        margin: 0 0 1rem 0;
+        font-size: 1.1rem;
+    }
+
+    .form-group {
+        margin-bottom: 1rem;
+    }
+
+    .form-group label {
+        display: block;
+        font-weight: 500;
+        margin-bottom: 0.3rem;
+        font-size: 0.9rem;
+    }
+
+    .form-input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 0.9rem;
+        font-family: inherit;
+    }
+
+    .form-input:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+    }
+
+    .form-row {
+        display: flex;
+        gap: 1rem;
+    }
+
+    .form-row .form-group {
+        flex: 1;
+    }
+
+    .form-advanced {
+        margin-bottom: 1rem;
+        font-size: 0.9rem;
+    }
+
+    .form-advanced summary {
+        cursor: pointer;
+        color: #666;
+        margin-bottom: 0.75rem;
+    }
+
+    .form-actions {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: flex-end;
+    }
+
+    /* Recent runs */
+    .recent-runs-section {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        background: white;
+    }
+
+    .recent-runs-section summary {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .run-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 0.85rem;
+    }
+
+    .run-item:last-child {
+        border-bottom: none;
+    }
+
+    .run-status {
+        padding: 0.1rem 0.5rem;
+        border-radius: 10px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    .run-status.completed {
+        background: #d4edda;
+        color: #155724;
+    }
+
+    .run-status.failed {
+        background: #f8d7da;
+        color: #721c24;
+    }
+
+    .run-status.running {
+        background: #d1ecf1;
+        color: #0c5460;
+    }
+
+    .run-summary {
+        color: #555;
+        margin-top: 0.25rem;
+        max-height: 40px;
+        overflow: hidden;
+    }
+
+    .run-meta {
+        color: #888;
+        white-space: nowrap;
+        text-align: right;
+    }
+
+    .loading-text {
+        color: #888;
+        font-style: italic;
     }
 
 </style>
@@ -852,10 +1240,216 @@ import Layout from '../layouts/Layout.astro';
         localStorage.setItem(STORAGE_KEYS.AUTO_SAVE_DELAY, autoSaveDelay.value);
     });
 
+    // ---- Scheduled Tasks ----
+
+    const authHeaders = () => {
+        const token = localStorage.getItem('pkm-authToken');
+        return { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    };
+
+    async function loadBudget() {
+        try {
+            const res = await fetch('/api/scheduled-tasks/budget', { headers: authHeaders() });
+            if (!res.ok) return;
+            const d = await res.json();
+            const pct = Math.max(d.input_pct, d.output_pct);
+            const fill = document.getElementById('budget-bar-fill') as HTMLElement;
+            fill.style.width = `${Math.min(pct, 100)}%`;
+            fill.className = 'budget-bar-fill' + (pct >= 95 ? ' critical' : pct >= 80 ? ' warning' : '');
+            document.getElementById('budget-summary')!.textContent = `${pct.toFixed(0)}% used today`;
+            document.getElementById('budget-input')!.textContent = `Input: ${(d.input_tokens / 1000).toFixed(0)}k / ${(d.input_limit / 1_000_000).toFixed(1)}M`;
+            document.getElementById('budget-output')!.textContent = `Output: ${(d.output_tokens / 1000).toFixed(0)}k / ${(d.output_limit / 1000).toFixed(0)}k`;
+            document.getElementById('budget-runs')!.textContent = `Runs: ${d.task_runs}`;
+        } catch (e) {
+            console.error('Error loading budget:', e);
+        }
+    }
+
+    function formatDateTime(iso: string | null): string {
+        if (!iso) return '—';
+        const d = new Date(iso + 'Z'); // treat as UTC
+        return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function loadTasks() {
+        const container = document.getElementById('task-list')!;
+        try {
+            const res = await fetch('/api/scheduled-tasks', { headers: authHeaders() });
+            if (!res.ok) { container.innerHTML = '<p class="loading-text">Failed to load tasks</p>'; return; }
+            const tasks = await res.json();
+            if (tasks.length === 0) {
+                container.innerHTML = '<p class="loading-text">No scheduled tasks yet.</p>';
+                return;
+            }
+
+            // Sort: heartbeat first, then by id
+            tasks.sort((a: any, b: any) => (b.is_heartbeat ? 1 : 0) - (a.is_heartbeat ? 1 : 0) || a.id - b.id);
+
+            container.innerHTML = tasks.map((t: any) => `
+                <div class="task-card ${t.is_heartbeat ? 'heartbeat' : ''} ${!t.enabled ? 'disabled' : ''}" data-id="${t.id}">
+                    <div class="task-card-header">
+                        <span class="task-card-title">
+                            ${t.name}
+                            ${t.is_heartbeat ? '<span class="heartbeat-badge">heartbeat</span>' : ''}
+                        </span>
+                        <div class="task-card-actions">
+                            <label class="toggle-label" style="gap: 0.4rem; font-size: 0.8rem;">
+                                <input type="checkbox" class="toggle-input task-toggle" data-id="${t.id}" ${t.enabled ? 'checked' : ''} style="width: 36px; height: 18px;">
+                            </label>
+                            <button class="btn-run" onclick="runTaskNow(${t.id})">Run Now</button>
+                            ${!t.is_heartbeat ? `<button class="btn-delete" onclick="deleteTask(${t.id}, '${t.name}')">Delete</button>` : ''}
+                        </div>
+                    </div>
+                    <div class="task-card-meta">
+                        <span>${t.schedule_type}: <code>${t.schedule_expr}</code></span>
+                        <span>Last: ${formatDateTime(t.last_run_at)}</span>
+                        <span>Next: ${formatDateTime(t.next_run_at)}</span>
+                    </div>
+                    <div class="task-card-prompt">${escapeHtml(t.prompt).substring(0, 200)}${t.prompt.length > 200 ? '...' : ''}</div>
+                </div>
+            `).join('');
+
+            // Toggle event listeners
+            container.querySelectorAll('.task-toggle').forEach(el => {
+                el.addEventListener('change', async (e) => {
+                    const id = (e.target as HTMLInputElement).dataset.id;
+                    await fetch(`/api/scheduled-tasks/${id}/toggle`, { method: 'POST', headers: authHeaders() });
+                    loadTasks();
+                });
+            });
+        } catch (e) {
+            console.error('Error loading tasks:', e);
+            container.innerHTML = '<p class="loading-text">Error loading tasks</p>';
+        }
+    }
+
+    function escapeHtml(text: string): string {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Make these available globally for onclick handlers
+    (window as any).runTaskNow = async (id: number) => {
+        if (!confirm('Run this task now?')) return;
+        try {
+            await fetch(`/api/scheduled-tasks/${id}/run`, { method: 'POST', headers: authHeaders() });
+            alert('Task started in background');
+        } catch (e) {
+            alert('Failed to start task');
+        }
+    };
+
+    (window as any).deleteTask = async (id: number, name: string) => {
+        if (!confirm(`Delete task "${name}"?`)) return;
+        try {
+            await fetch(`/api/scheduled-tasks/${id}`, { method: 'DELETE', headers: authHeaders() });
+            loadTasks();
+        } catch (e) {
+            alert('Failed to delete task');
+        }
+    };
+
+    // Add task form
+    document.getElementById('add-task-btn')?.addEventListener('click', () => {
+        document.getElementById('add-task-form')!.style.display = 'block';
+        document.getElementById('add-task-btn')!.style.display = 'none';
+    });
+
+    document.getElementById('cancel-task-btn')?.addEventListener('click', () => {
+        document.getElementById('add-task-form')!.style.display = 'none';
+        document.getElementById('add-task-btn')!.style.display = 'inline-block';
+    });
+
+    document.getElementById('save-task-btn')?.addEventListener('click', async () => {
+        const name = (document.getElementById('new-task-name') as HTMLInputElement).value.trim();
+        const prompt = (document.getElementById('new-task-prompt') as HTMLTextAreaElement).value.trim();
+        const scheduleType = (document.getElementById('new-task-schedule-type') as HTMLSelectElement).value;
+        const scheduleExpr = (document.getElementById('new-task-schedule-expr') as HTMLInputElement).value.trim();
+        const maxTurns = parseInt((document.getElementById('new-task-max-turns') as HTMLInputElement).value) || 10;
+        const maxInput = parseInt((document.getElementById('new-task-max-input') as HTMLInputElement).value) || 200000;
+        const maxOutput = parseInt((document.getElementById('new-task-max-output') as HTMLInputElement).value) || 10000;
+        const statusEl = document.getElementById('task-form-status')!;
+
+        if (!name || !prompt || !scheduleExpr) {
+            statusEl.textContent = 'Please fill in name, prompt, and schedule expression.';
+            statusEl.className = 'status-text error';
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/scheduled-tasks', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({
+                    name, prompt,
+                    schedule_type: scheduleType,
+                    schedule_expr: scheduleExpr,
+                    max_turns: maxTurns,
+                    max_input_tokens: maxInput,
+                    max_output_tokens: maxOutput,
+                }),
+            });
+
+            if (res.ok) {
+                document.getElementById('add-task-form')!.style.display = 'none';
+                document.getElementById('add-task-btn')!.style.display = 'inline-block';
+                // Clear form
+                (document.getElementById('new-task-name') as HTMLInputElement).value = '';
+                (document.getElementById('new-task-prompt') as HTMLTextAreaElement).value = '';
+                (document.getElementById('new-task-schedule-expr') as HTMLInputElement).value = '';
+                statusEl.textContent = '';
+                loadTasks();
+            } else {
+                const data = await res.json();
+                statusEl.textContent = data.error || 'Failed to create task';
+                statusEl.className = 'status-text error';
+            }
+        } catch (e) {
+            statusEl.textContent = 'Error creating task';
+            statusEl.className = 'status-text error';
+        }
+    });
+
+    // Recent runs
+    async function loadRecentRuns() {
+        const container = document.getElementById('recent-runs')!;
+        try {
+            const res = await fetch('/api/scheduled-tasks/runs?limit=10', { headers: authHeaders() });
+            if (!res.ok) { container.innerHTML = '<p class="loading-text">Failed to load runs</p>'; return; }
+            const runs = await res.json();
+            if (runs.length === 0) {
+                container.innerHTML = '<p class="loading-text">No runs yet.</p>';
+                return;
+            }
+
+            container.innerHTML = runs.map((r: any) => `
+                <div class="run-item">
+                    <div>
+                        <span class="run-status ${r.status}">${r.status}</span>
+                        <span style="margin-left: 0.5rem; font-weight: 500;">Task #${r.task_id}</span>
+                        ${r.summary ? `<div class="run-summary">${escapeHtml(r.summary).substring(0, 150)}</div>` : ''}
+                        ${r.error ? `<div class="run-summary" style="color: #dc3545;">${escapeHtml(r.error).substring(0, 150)}</div>` : ''}
+                    </div>
+                    <div class="run-meta">
+                        <div>${formatDateTime(r.started_at)}</div>
+                        <div>${r.turns_used} turns, ${((r.input_tokens + r.output_tokens) / 1000).toFixed(0)}k tokens</div>
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            console.error('Error loading runs:', e);
+            container.innerHTML = '<p class="loading-text">Error loading runs</p>';
+        }
+    }
+
     // Load data on page load
     loadUserContext();
     checkTickTickStatus();
     checkGoogleCalendarStatus();
     checkGmailStatus();
     loadBuildVersion();
+    loadBudget();
+    loadTasks();
+    loadRecentRuns();
 </script>

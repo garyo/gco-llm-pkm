@@ -21,6 +21,7 @@
 #   "pgvector>=0.2.0",
 #   "voyageai>=0.2.0",
 #   "apscheduler>=3.10.0",
+#   "croniter>=1.3.0",
 # ]
 # ///
 """
@@ -75,6 +76,7 @@ from pkm_bridge.tools.open_file import OpenFileTool
 from pkm_bridge.tools.find_context import FindContextTool
 from pkm_bridge.tools.semantic_search import SemanticSearchTool
 from pkm_bridge.tools.skills import SaveSkillTool, ListSkillsTool, UseSkillTool, NoteToSelfTool
+from pkm_bridge.tools.schedule_task import ScheduleTaskTool
 
 # Import database components
 from pkm_bridge.database import init_db, get_db
@@ -111,6 +113,14 @@ from pkm_bridge.retrospective import SessionRetrospective
 from pkm_bridge.query_enhancer import QueryEnhancer
 from pkm_bridge.self_improvement.agent import SelfImprovementAgent
 from pkm_bridge.self_improvement.filesystem import ensure_pkm_structure
+from pkm_bridge.scheduler.executor import TaskExecutor
+from pkm_bridge.scheduler.dispatcher import TaskDispatcher
+from pkm_bridge.scheduler.heartbeat import ensure_heartbeat_task
+from pkm_bridge.scheduler.repository import (
+    ScheduledTaskRepository,
+    ScheduledTaskRunRepository,
+    DailyTokenUsageRepository,
+)
 
 # Import scheduler
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -181,6 +191,9 @@ else:
 retrospective = SessionRetrospective(client, logger)  # kept for backward compat
 si_agent = SelfImprovementAgent(client, logger, config)
 
+# Master switch for scheduled task execution
+cron_enabled = os.environ.get('CRON_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
 # Ensure .pkm/ directory structure exists on startup
 try:
     ensure_pkm_structure(config.org_dir)
@@ -211,6 +224,25 @@ if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         logger.info(f"Self-improvement agent scheduled (daily at 3 AM {config.timezone})")
     else:
         logger.info("Self-improvement cron skipped in debug mode (runs only in production)")
+
+    # Scheduled task dispatcher (60s tick) — runs in both debug and production
+    # Uses a wrapper because task_dispatcher is initialized later (after tool registry)
+    if cron_enabled:
+        def _scheduled_task_tick():
+            task_dispatcher.tick()
+
+        embedding_scheduler.add_job(
+            func=_scheduled_task_tick,
+            trigger="interval",
+            seconds=60,
+            id='scheduled_task_dispatcher',
+            name='Scheduled task dispatcher (60s tick)',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+        logger.info("Scheduled task dispatcher started (60s tick)")
+    else:
+        logger.info("Scheduled task dispatcher disabled (CRON_ENABLED=false)")
 else:
     logger.info("Skipping scheduler setup (debug reloader parent process)")
 
@@ -343,9 +375,20 @@ tool_registry.register(SaveSkillTool(logger, config.org_dir, config.dangerous_pa
 tool_registry.register(ListSkillsTool(logger, config.org_dir))
 tool_registry.register(UseSkillTool(logger, config.org_dir))
 tool_registry.register(NoteToSelfTool(logger))
-logger.info("Skill and note_to_self tools registered")
+tool_registry.register(ScheduleTaskTool(logger))
+logger.info("Skill, note_to_self, and schedule_task tools registered")
 
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
+
+# Initialize scheduled task executor and dispatcher
+task_executor = TaskExecutor(client, tool_registry, logger)
+task_dispatcher = TaskDispatcher(task_executor, logger, org_dir=str(config.org_dir))
+
+# Ensure heartbeat task exists in DB
+try:
+    ensure_heartbeat_task(config.org_dir, logger)
+except Exception as e:
+    logger.warning(f"Failed to ensure heartbeat task: {e}")
 
 # Initialize file editor
 from pkm_bridge.file_editor import FileEditor, ConflictError
@@ -2594,6 +2637,258 @@ def get_self_improve_memory():
             memory[category] = content
 
     return jsonify({"memory": memory})
+
+
+# -------------------------
+# Scheduled Tasks API
+# -------------------------
+
+def _check_auth():
+    """Check auth if enabled. Returns error response or None."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+    return None
+
+
+@app.route('/api/scheduled-tasks', methods=['GET'])
+@limiter.limit("30 per minute")
+def list_scheduled_tasks():
+    """List all scheduled tasks."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    db = get_db()
+    try:
+        tasks = ScheduledTaskRepository.get_all(db)
+        return jsonify([
+            {
+                "id": t.id,
+                "name": t.name,
+                "description": t.description,
+                "prompt": t.prompt,
+                "schedule_type": t.schedule_type,
+                "schedule_expr": t.schedule_expr,
+                "tools_allowed": t.tools_allowed,
+                "is_heartbeat": t.is_heartbeat,
+                "enabled": t.enabled,
+                "max_turns": t.max_turns,
+                "max_input_tokens": t.max_input_tokens,
+                "max_output_tokens": t.max_output_tokens,
+                "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+                "next_run_at": t.next_run_at.isoformat() if t.next_run_at else None,
+                "created_by": t.created_by,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in tasks
+        ])
+    finally:
+        db.close()
+
+
+@app.route('/api/scheduled-tasks', methods=['POST'])
+@limiter.limit("10 per minute")
+def create_scheduled_task():
+    """Create a new scheduled task."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    required = ['name', 'prompt', 'schedule_type', 'schedule_expr']
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
+
+    if data['schedule_type'] not in ('cron', 'interval'):
+        return jsonify({"error": "schedule_type must be 'cron' or 'interval'"}), 400
+
+    db = get_db()
+    try:
+        existing = ScheduledTaskRepository.get_by_name(db, data['name'])
+        if existing:
+            return jsonify({"error": f"Task '{data['name']}' already exists"}), 409
+
+        task = ScheduledTaskRepository.create(
+            db,
+            name=data['name'],
+            description=data.get('description', ''),
+            prompt=data['prompt'],
+            schedule_type=data['schedule_type'],
+            schedule_expr=data['schedule_expr'],
+            tools_allowed=data.get('tools_allowed'),
+            max_turns=data.get('max_turns', 10),
+            max_input_tokens=data.get('max_input_tokens', 200_000),
+            max_output_tokens=data.get('max_output_tokens', 10_000),
+            created_by='user',
+        )
+        return jsonify({"id": task.id, "name": task.name, "next_run_at": task.next_run_at.isoformat() if task.next_run_at else None}), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    finally:
+        db.close()
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>', methods=['PUT'])
+@limiter.limit("10 per minute")
+def update_scheduled_task(task_id):
+    """Update a scheduled task."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    allowed_fields = {
+        'name', 'description', 'prompt', 'schedule_type', 'schedule_expr',
+        'tools_allowed', 'max_turns', 'max_input_tokens', 'max_output_tokens',
+    }
+    updates = {k: v for k, v in data.items() if k in allowed_fields}
+
+    db = get_db()
+    try:
+        task = ScheduledTaskRepository.update(db, task_id, **updates)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+        return jsonify({"id": task.id, "name": task.name, "next_run_at": task.next_run_at.isoformat() if task.next_run_at else None})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    finally:
+        db.close()
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>', methods=['DELETE'])
+@limiter.limit("10 per minute")
+def delete_scheduled_task(task_id):
+    """Delete a scheduled task."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    db = get_db()
+    try:
+        task = ScheduledTaskRepository.get_by_id(db, task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+        if task.is_heartbeat:
+            return jsonify({"error": "Cannot delete the heartbeat task. Disable it instead."}), 400
+        ScheduledTaskRepository.delete(db, task_id)
+        return jsonify({"status": "deleted"})
+    finally:
+        db.close()
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>/toggle', methods=['POST'])
+@limiter.limit("10 per minute")
+def toggle_scheduled_task(task_id):
+    """Enable or disable a scheduled task."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    db = get_db()
+    try:
+        task = ScheduledTaskRepository.get_by_id(db, task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+        new_state = not task.enabled
+        ScheduledTaskRepository.update(db, task_id, enabled=new_state)
+        return jsonify({"id": task_id, "enabled": new_state})
+    finally:
+        db.close()
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>/run', methods=['POST'])
+@limiter.limit("5 per hour")
+def run_scheduled_task_now(task_id):
+    """Trigger a scheduled task to run immediately."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    db = get_db()
+    try:
+        task = ScheduledTaskRepository.get_by_id(db, task_id)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+    finally:
+        db.close()
+
+    import threading
+    thread = threading.Thread(target=task_dispatcher.run_task_now, args=(task_id,), daemon=True)
+    thread.start()
+
+    return jsonify({"status": "started", "task_id": task_id, "task_name": task.name})
+
+
+@app.route('/api/scheduled-tasks/runs', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_scheduled_task_runs():
+    """Get recent task runs, optionally filtered by task_id."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    task_id = request.args.get('task_id', type=int)
+    limit = request.args.get('limit', default=20, type=int)
+
+    db = get_db()
+    try:
+        runs = ScheduledTaskRunRepository.get_recent(db, limit=min(limit, 100), task_id=task_id)
+        return jsonify([
+            {
+                "id": r.id,
+                "task_id": r.task_id,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "status": r.status,
+                "turns_used": r.turns_used,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "summary": r.summary,
+                "error": r.error,
+            }
+            for r in runs
+        ])
+    finally:
+        db.close()
+
+
+@app.route('/api/scheduled-tasks/budget', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_scheduled_task_budget():
+    """Get today's token usage vs daily limits."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    db = get_db()
+    try:
+        usage = DailyTokenUsageRepository.get_today(db)
+        input_limit = int(os.environ.get('CRON_DAILY_INPUT_TOKEN_LIMIT', 2_000_000))
+        output_limit = int(os.environ.get('CRON_DAILY_OUTPUT_TOKEN_LIMIT', 200_000))
+        return jsonify({
+            "date": usage.date,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "task_runs": usage.task_runs,
+            "input_limit": input_limit,
+            "output_limit": output_limit,
+            "input_pct": round(usage.input_tokens / max(input_limit, 1) * 100, 1),
+            "output_pct": round(usage.output_tokens / max(output_limit, 1) * 100, 1),
+        })
+    finally:
+        db.close()
 
 
 @app.route('/api/events')

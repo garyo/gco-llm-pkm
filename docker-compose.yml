@@ -65,8 +65,8 @@ services:
       # Mount Logseq files
       - ${LOGSEQ_DIR}:/data/logseq:rw
 
-      # Optional: Persist session data (if we add Redis/DB later)
-      # - ./data/sessions:/app/data/sessions
+      # Persist config (system prompts, etc.) across redeploys
+      - ./config:/app/config:rw
 
     networks:
       - traefik-net

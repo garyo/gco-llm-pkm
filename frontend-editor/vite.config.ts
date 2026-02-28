@@ -15,6 +15,8 @@ export default defineConfig({
       '/login': 'http://localhost:8000',
       '/verify-token': 'http://localhost:8000',
       '/assets': 'http://localhost:8000',
+      '/auth': 'http://localhost:8000',
+      '/admin': 'http://localhost:8000',
     },
   },
 });

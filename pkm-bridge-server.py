@@ -1802,6 +1802,38 @@ def toggle_checkbox():
 
 
 # -------------------------
+# OAuth Helpers
+# -------------------------
+
+# Store return_to URLs for OAuth flows (keyed by service name, short-lived)
+_oauth_return_to: dict[str, str] = {}
+
+
+def _get_oauth_return_to(service: str) -> str:
+    """Pop and return the stored return_to URL for a service, defaulting to '/'."""
+    return _oauth_return_to.pop(service, "/")
+
+
+def _oauth_success_html(service_name: str, message: str, return_to: str) -> str:
+    """Generate the HTML page shown after successful OAuth connection."""
+    from markupsafe import escape
+    safe_url = escape(return_to)
+    return f"""
+    <html>
+        <head>
+            <title>{service_name} Connected</title>
+            <meta http-equiv="refresh" content="3;url={safe_url}" />
+        </head>
+        <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+            <h1 style="color: #4CAF50;">&#10003; {service_name} Connected Successfully!</h1>
+            <p>{message}</p>
+            <p>Redirecting... <a href="{safe_url}">Click here</a> if not redirected.</p>
+        </body>
+    </html>
+    """
+
+
+# -------------------------
 # TickTick OAuth Routes
 # -------------------------
 
@@ -1812,9 +1844,14 @@ def ticktick_authorize():
     This endpoint doesn't require authentication since it's part of the initial
     setup flow. The actual authorization happens on TickTick's servers.
     Redirects user to TickTick's authorization page.
+
+    Optional query param: return_to — URL to redirect to after successful auth.
     """
     if not ticktick_oauth:
         return jsonify({"error": "TickTick not configured"}), 503
+
+    return_to = request.args.get('return_to', '/')
+    _oauth_return_to['ticktick'] = return_to
 
     try:
         auth_data = ticktick_oauth.get_authorization_url()
@@ -1870,19 +1907,10 @@ def ticktick_callback():
         db.close()
 
         logger.info("TickTick OAuth completed successfully")
-        return """
-        <html>
-            <head>
-                <title>TickTick Connected</title>
-                <meta http-equiv="refresh" content="3;url=/" />
-            </head>
-            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
-                <h1 style="color: #4CAF50;">✓ TickTick Connected Successfully!</h1>
-                <p>Claude can now access your TickTick tasks.</p>
-                <p>Redirecting to home page... <a href="/">Click here</a> if not redirected.</p>
-            </body>
-        </html>
-        """
+        return_to = _get_oauth_return_to('ticktick')
+        return _oauth_success_html(
+            "TickTick", "Claude can now access your TickTick tasks.", return_to
+        )
 
     except Exception as e:
         logger.error(f"Error completing TickTick OAuth: {e}")
@@ -1958,12 +1986,13 @@ def ticktick_disconnect():
 def google_calendar_authorize():
     """Initiate Google Calendar OAuth flow.
 
-    This endpoint doesn't require authentication since it's part of the initial
-    setup flow. The actual authorization happens on Google's servers.
-    Redirects user to Google's authorization page.
+    Optional query param: return_to — URL to redirect to after successful auth.
     """
     if not google_oauth:
         return jsonify({"error": "Google Calendar not configured"}), 503
+
+    return_to = request.args.get('return_to', '/')
+    _oauth_return_to['google_calendar'] = return_to
 
     try:
         auth_data = google_oauth.get_authorization_url()
@@ -2019,19 +2048,10 @@ def google_calendar_callback():
         db.close()
 
         logger.info("Google Calendar OAuth completed successfully")
-        return """
-        <html>
-            <head>
-                <title>Google Calendar Connected</title>
-                <meta http-equiv="refresh" content="3;url=/" />
-            </head>
-            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
-                <h1 style="color: #4CAF50;">✓ Google Calendar Connected Successfully!</h1>
-                <p>Claude can now access your Google Calendar.</p>
-                <p>Redirecting to home page... <a href="/">Click here</a> if not redirected.</p>
-            </body>
-        </html>
-        """
+        return_to = _get_oauth_return_to('google_calendar')
+        return _oauth_success_html(
+            "Google Calendar", "Claude can now access your Google Calendar.", return_to
+        )
 
     except Exception as e:
         logger.error(f"Error completing Google Calendar OAuth: {e}")
@@ -2105,9 +2125,15 @@ def google_calendar_disconnect():
 
 @app.route('/auth/google-gmail/authorize', methods=['GET'])
 def google_gmail_authorize():
-    """Initiate Google Gmail OAuth flow."""
+    """Initiate Google Gmail OAuth flow.
+
+    Optional query param: return_to — URL to redirect to after successful auth.
+    """
     if not google_gmail_oauth:
         return jsonify({"error": "Google Gmail not configured"}), 503
+
+    return_to = request.args.get('return_to', '/')
+    _oauth_return_to['google_gmail'] = return_to
 
     try:
         auth_data = google_gmail_oauth.get_authorization_url()
@@ -2159,19 +2185,10 @@ def google_gmail_callback():
         db.close()
 
         logger.info("Google Gmail OAuth completed successfully")
-        return """
-        <html>
-            <head>
-                <title>Gmail Connected</title>
-                <meta http-equiv="refresh" content="3;url=/" />
-            </head>
-            <body style="font-family: sans-serif; padding: 40px; text-align: center;">
-                <h1 style="color: #4CAF50;">✓ Gmail Connected Successfully!</h1>
-                <p>Claude can now read your Gmail messages.</p>
-                <p>Redirecting to home page... <a href="/">Click here</a> if not redirected.</p>
-            </body>
-        </html>
-        """
+        return_to = _get_oauth_return_to('google_gmail')
+        return _oauth_success_html(
+            "Gmail", "Claude can now read your Gmail messages.", return_to
+        )
 
     except Exception as e:
         logger.error(f"Error completing Google Gmail OAuth: {e}")
@@ -2305,6 +2322,86 @@ def trigger_embedding():
             "error": "Failed to start embedding",
             "message": str(e)
         }), 500
+
+
+# -------------------------
+# System Prompt API
+# -------------------------
+
+_PROMPT_FILES = {
+    'web': 'system_prompt.txt',
+    'mcp': 'system_prompt_mcp.txt',
+}
+
+
+@app.route('/api/system-prompt/<prompt_type>', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_system_prompt(prompt_type: str):
+    """Read a system prompt file.
+
+    Args:
+        prompt_type: 'web' or 'mcp'
+    """
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    filename = _PROMPT_FILES.get(prompt_type)
+    if not filename:
+        return jsonify({"error": f"Unknown prompt type: {prompt_type}"}), 400
+
+    prompt_path = Path(__file__).parent / "config" / filename
+    if not prompt_path.exists():
+        return jsonify({"error": f"Prompt file not found: {filename}"}), 404
+
+    content = prompt_path.read_text(encoding="utf-8")
+    mtime = prompt_path.stat().st_mtime
+    return jsonify({"content": content, "modified": mtime})
+
+
+@app.route('/api/system-prompt/<prompt_type>', methods=['PUT'])
+@limiter.limit("10 per minute")
+def put_system_prompt(prompt_type: str):
+    """Update a system prompt file.
+
+    Body: { "content": "...", "expected_mtime": <optional float> }
+    """
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    filename = _PROMPT_FILES.get(prompt_type)
+    if not filename:
+        return jsonify({"error": f"Unknown prompt type: {prompt_type}"}), 400
+
+    data = request.get_json()
+    if not data or 'content' not in data:
+        return jsonify({"error": "Missing 'content' in request body"}), 400
+
+    prompt_path = Path(__file__).parent / "config" / filename
+
+    # Optimistic concurrency check
+    expected_mtime = data.get('expected_mtime')
+    if expected_mtime is not None and prompt_path.exists():
+        actual_mtime = prompt_path.stat().st_mtime
+        if actual_mtime > expected_mtime:
+            return jsonify({
+                "error": "File was modified since you loaded it",
+                "modified": actual_mtime,
+            }), 409
+
+    prompt_path.write_text(data['content'], encoding="utf-8")
+    new_mtime = prompt_path.stat().st_mtime
+    logger.info(f"System prompt '{prompt_type}' updated ({len(data['content'])} bytes)")
+    return jsonify({"status": "saved", "modified": new_mtime})
 
 
 # -------------------------

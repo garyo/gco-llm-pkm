@@ -4,15 +4,17 @@ export interface UrlParams {
   file: string | null;
   id: string | null;
   line: number | null;
+  page: string | null;
 }
 
-/** Parse URL parameters (?file=, ?id=, ?line=). */
+/** Parse URL parameters (?file=, ?id=, ?line=, ?page=). */
 export function parseUrlParams(): UrlParams {
   const params = new URLSearchParams(window.location.search);
   return {
     file: params.get('file'),
     id: params.get('id'),
     line: params.has('line') ? parseInt(params.get('line')!, 10) : null,
+    page: params.get('page'),
   };
 }
 

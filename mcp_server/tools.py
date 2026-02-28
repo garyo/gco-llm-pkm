@@ -307,6 +307,9 @@ def register_all_tools(mcp: FastMCP):
     def read_file(path: str) -> str:
         """Read a PKM file's content.
 
+        Response includes an [mtime=<float>] header line with the file's modification time.
+        Pass this value as expected_mtime to write_file to prevent overwriting external changes.
+
         Args:
             path: File path in format 'org:relative/path.org' or 'logseq:relative/path.md'
         """
@@ -315,31 +318,55 @@ def register_all_tools(mcp: FastMCP):
         try:
             result = editor.read_file(path)
             content = result["content"]
+            mtime = result.get("modified", 0)
             duration_ms = int((time.time() - start) * 1000)
             _log_tool_execution("read_file", {"path": path}, f"({len(content)} bytes)", duration_ms)
-            return content
+            return f"[mtime={mtime}]\n{content}"
         except Exception as e:
             return f"Error reading file '{path}': {type(e).__name__}: {e}. Use list_files to verify the path exists. Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
 
     @mcp.tool()
-    def write_file(path: str, content: str, create_only: bool = False) -> str:
+    def write_file(
+        path: str,
+        content: str,
+        create_only: bool = False,
+        expected_mtime: float | None = None,
+    ) -> str:
         """Write content to a PKM file. Creates parent directories if needed.
 
         Args:
             path: File path in format 'org:relative/path.org' or 'logseq:relative/path.md'
             content: File content to write
             create_only: If true, only create the file if it doesn't already exist
+            expected_mtime: If set, reject the write if the file was modified since this timestamp.
+                            Get this value from the [mtime=...] header in read_file responses.
         """
+        from pkm_bridge.file_editor import ConflictError
+
         editor = _get_file_editor()
         start = time.time()
         try:
-            result = editor.write_file(path, content, create_only=create_only)
+            result = editor.write_file(
+                path, content, create_only=create_only, expected_mtime=expected_mtime
+            )
             duration_ms = int((time.time() - start) * 1000)
             _log_tool_execution(
                 "write_file", {"path": path, "create_only": create_only},
                 f"status={result['status']}", duration_ms,
             )
-            return f"File {result['status']}: {path} ({result.get('size', 0)} bytes)"
+            msg = f"File {result['status']}: {path} ({result.get('size', 0)} bytes)"
+            if expected_mtime is None and result["status"] == "saved" and not create_only:
+                msg += (
+                    "\n\nTip: pass expected_mtime from read_file's [mtime=...] header"
+                    " to prevent overwriting external changes."
+                )
+            return msg
+        except ConflictError as e:
+            return (
+                f"CONFLICT: {e}. The file was modified externally since you last read it. "
+                f"Please re-read the file with read_file('{path}') to get the latest "
+                "content and mtime, then retry your write."
+            )
         except Exception as e:
             return f"Error writing file '{path}': {type(e).__name__}: {e}. Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
 

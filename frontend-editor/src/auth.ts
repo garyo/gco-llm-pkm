@@ -47,16 +47,25 @@ export async function handleLogin(password: string): Promise<{ ok: boolean; erro
   }
 }
 
-/** Show the login screen, hide editor. */
+/** Show the login screen, hide editor and admin. */
 export function showLogin(): void {
   document.getElementById('login-container')!.classList.remove('hidden');
   document.getElementById('editor-app')!.classList.add('hidden');
+  document.getElementById('admin-app')!.classList.add('hidden');
 }
 
 /** Hide login, show editor. */
 export function showEditor(): void {
   document.getElementById('login-container')!.classList.add('hidden');
   document.getElementById('editor-app')!.classList.remove('hidden');
+  document.getElementById('admin-app')!.classList.add('hidden');
+}
+
+/** Hide login and editor, show admin. */
+export function showAdmin(): void {
+  document.getElementById('login-container')!.classList.add('hidden');
+  document.getElementById('editor-app')!.classList.add('hidden');
+  document.getElementById('admin-app')!.classList.remove('hidden');
 }
 
 /** Handle 401 responses: clear token and show login. */

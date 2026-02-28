@@ -36,6 +36,7 @@
       <div id="editor-header-status" class="flex items-center gap-2">
         <button id="save-button" disabled class="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded text-xs font-medium">Save</button>
         <button id="refresh-button" class="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium">Refresh</button>
+        <a id="admin-link" href="?page=admin" class="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium no-underline">Admin</a>
         <span id="sse-status" class="w-2.5 h-2.5 rounded-full bg-gray-400 inline-block" title="Connecting..."></span>
       </div>
     </div>
@@ -129,6 +130,32 @@
     <!-- Editor Container -->
     <div id="editor-container" class="flex-1 overflow-hidden">
       <!-- CodeMirror will be mounted here -->
+    </div>
+  </div>
+
+  <!-- Admin App -->
+  <div id="admin-app" class="hidden flex flex-col h-full">
+    <!-- Header -->
+    <div class="bg-gray-800 border-b border-gray-700 px-3 py-1.5 flex items-center gap-3 text-sm">
+      <a href="?" class="font-semibold text-gray-300 hover:text-white no-underline">PKM Editor</a>
+      <span class="text-gray-500">/</span>
+      <span class="font-semibold text-gray-100">Admin</span>
+      <span class="flex-1"></span>
+      <a href="?" class="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-xs font-medium no-underline">Back to Editor</a>
+    </div>
+
+    <!-- Tab Bar -->
+    <div class="bg-gray-800 border-b border-gray-700 px-3 flex gap-1">
+      <button class="admin-tab px-4 py-2 text-sm text-gray-400 hover:text-white border-b-2 border-transparent" data-tab="connections">Connections</button>
+      <button class="admin-tab px-4 py-2 text-sm text-gray-400 hover:text-white border-b-2 border-transparent" data-tab="prompts">Prompts</button>
+      <button class="admin-tab px-4 py-2 text-sm text-gray-400 hover:text-white border-b-2 border-transparent" data-tab="rules">Rules</button>
+      <button class="admin-tab px-4 py-2 text-sm text-gray-400 hover:text-white border-b-2 border-transparent" data-tab="tasks">Tasks</button>
+      <button class="admin-tab px-4 py-2 text-sm text-gray-400 hover:text-white border-b-2 border-transparent" data-tab="self-improve">Self-Improve</button>
+    </div>
+
+    <!-- Tab Content -->
+    <div id="admin-content" class="flex-1 overflow-auto p-4 sm:p-6">
+      <!-- Sections are rendered dynamically by admin-page.ts -->
     </div>
   </div>
 

@@ -2,7 +2,8 @@ import './styles/editor.css';
 import type { EditorState as AppState } from './types';
 import { STORAGE_KEYS } from './types';
 import { debounce, fetchWithTimeout, getAuthHeaders } from './utils';
-import { checkAuth, handleLogin, showLogin, showEditor } from './auth';
+import { checkAuth, handleLogin, showLogin, showEditor, showAdmin } from './auth';
+import { initAdmin } from './admin/admin-page';
 import * as api from './api';
 import { createEditor, setEditorContent } from './editor';
 import {
@@ -476,6 +477,9 @@ initCalendar(state, (dateKey, entry) => {
 // Init
 // ---------------------------------------------------------------------------
 async function init(): Promise<void> {
+  const params = parseUrlParams();
+  const isAdminPage = params.page === 'admin';
+
   // Check auth
   const authed = await checkAuth();
   if (!authed) {
@@ -490,8 +494,13 @@ async function init(): Promise<void> {
       const result = await handleLogin(passwordInput.value);
       if (result.ok) {
         errorDiv.classList.add('hidden');
-        showEditor();
-        await bootstrap();
+        if (isAdminPage) {
+          showAdmin();
+          initAdmin();
+        } else {
+          showEditor();
+          await bootstrap();
+        }
       } else {
         errorDiv.textContent = result.error || 'Login failed';
         errorDiv.classList.remove('hidden');
@@ -500,8 +509,13 @@ async function init(): Promise<void> {
     return;
   }
 
-  showEditor();
-  await bootstrap();
+  if (isAdminPage) {
+    showAdmin();
+    initAdmin();
+  } else {
+    showEditor();
+    await bootstrap();
+  }
 }
 
 async function bootstrap(): Promise<void> {

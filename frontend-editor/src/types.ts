@@ -46,3 +46,42 @@ export const STORAGE_KEYS = {
 
 export const MAX_RECONNECT_DELAY = 30000;
 export const SSE_GLOBAL_KEY = '__sse_editor_connection__';
+
+// --- Admin types ---
+
+export interface OAuthStatus {
+  connected: boolean;
+  expired?: boolean;
+  expires_at?: string | null;
+}
+
+export interface LearnedRule {
+  id: number;
+  rule_type: string;
+  rule_text: string;
+  rule_data: Record<string, unknown> | null;
+  confidence: number;
+  hit_count: number;
+  is_active: boolean;
+  source_query_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduledTask {
+  name: string;
+  prompt: string;
+  schedule_type: string;
+  schedule_expr: string;
+  enabled: boolean;
+  max_turns: number;
+  last_run?: string;
+  next_run?: string;
+}
+
+export interface SystemPrompt {
+  content: string;
+  modified: number;
+}
+
+export type AdminTab = 'connections' | 'prompts' | 'rules' | 'tasks' | 'self-improve';

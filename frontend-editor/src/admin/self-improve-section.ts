@@ -52,30 +52,65 @@ export function initSelfImproveSection(container: HTMLElement): void {
     }
   });
 
+  function formatRunEntry(run: Record<string, unknown>): string {
+    const lines: string[] = [];
+    if (run.started_at) lines.push(`Started:  ${run.started_at}`);
+    if (run.completed_at) lines.push(`Finished: ${run.completed_at}`);
+    if (run.trigger) lines.push(`Trigger:  ${run.trigger}`);
+    if (run.turns_used != null) lines.push(`Turns:    ${run.turns_used}`);
+    if (run.input_tokens != null || run.output_tokens != null) {
+      lines.push(`Tokens:   ${run.input_tokens ?? '?'} in / ${run.output_tokens ?? '?'} out`);
+    }
+    if (run.error) lines.push(`Error:    ${run.error}`);
+    if (run.summary) lines.push(`\nSummary:\n${run.summary}`);
+    if (run.actions_summary) {
+      const actions = run.actions_summary;
+      if (typeof actions === 'string') {
+        lines.push(`\nActions:\n${actions}`);
+      } else if (typeof actions === 'object') {
+        lines.push(`\nActions:\n${JSON.stringify(actions, null, 2)}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
   async function loadLog() {
     try {
       const data = await getSelfImproveLog() as Record<string, unknown>;
-      if (data.last_run) {
-        const run = data.last_run as Record<string, unknown>;
-        const lines: string[] = [];
-        if (run.started_at) lines.push(`Started: ${run.started_at}`);
-        if (run.completed_at) lines.push(`Completed: ${run.completed_at}`);
-        if (run.status) lines.push(`Status: ${run.status}`);
-        if (run.summary) lines.push(`\nSummary:\n${run.summary}`);
-        if (run.rules_created != null) lines.push(`Rules created: ${run.rules_created}`);
-        if (run.rules_updated != null) lines.push(`Rules updated: ${run.rules_updated}`);
-        logEl.textContent = lines.join('\n');
-      } else {
-        logEl.textContent = JSON.stringify(data, null, 2);
+      const parts: string[] = [];
+
+      // Last run result (from si_agent.last_run_result, may be a dict or null)
+      if (data.last_run && typeof data.last_run === 'object') {
+        parts.push('=== Last Run ===');
+        parts.push(formatRunEntry(data.last_run as Record<string, unknown>));
       }
 
-      // Show history if available
-      if (data.recent_runs && Array.isArray(data.recent_runs) && (data.recent_runs as unknown[]).length > 0) {
-        const history = (data.recent_runs as Array<Record<string, unknown>>)
-          .map((r) => `${r.started_at || '?'} - ${r.status || '?'}`)
+      // Feedback stats
+      if (data.feedback_stats && typeof data.feedback_stats === 'object') {
+        const stats = data.feedback_stats as Record<string, unknown>;
+        const statLines = Object.entries(stats)
+          .map(([k, v]) => `  ${k}: ${v}`)
           .join('\n');
-        logEl.textContent += `\n\n--- History ---\n${history}`;
+        if (statLines) {
+          parts.push('\n=== Feedback Stats ===');
+          parts.push(statLines);
+        }
       }
+
+      // Recent runs history
+      if (data.recent_runs && Array.isArray(data.recent_runs) && data.recent_runs.length > 0) {
+        parts.push('\n=== Recent Runs ===');
+        for (const run of data.recent_runs as Array<Record<string, unknown>>) {
+          const time = run.started_at || '?';
+          const trigger = run.trigger ? ` (${run.trigger})` : '';
+          const turns = run.turns_used != null ? `, ${run.turns_used} turns` : '';
+          const err = run.error ? ` [ERROR: ${String(run.error).slice(0, 80)}]` : '';
+          const summary = run.summary ? ` - ${String(run.summary).slice(0, 120)}` : '';
+          parts.push(`  ${time}${trigger}${turns}${err}${summary}`);
+        }
+      }
+
+      logEl.textContent = parts.length > 0 ? parts.join('\n') : 'No run data available.';
     } catch (e) {
       logEl.textContent = `Error loading log: ${e instanceof Error ? e.message : e}`;
     }
@@ -83,18 +118,21 @@ export function initSelfImproveSection(container: HTMLElement): void {
 
   async function loadMemory() {
     try {
-      const data = await getSelfImproveMemory();
-      if (typeof data === 'object' && data !== null) {
-        const entries = Object.entries(data as Record<string, unknown>);
-        if (entries.length === 0) {
-          memoryEl.textContent = 'No memory files found.';
-        } else {
-          memoryEl.textContent = entries
-            .map(([name, content]) => `=== ${name} ===\n${content}`)
-            .join('\n\n');
-        }
+      const data = await getSelfImproveMemory() as Record<string, unknown>;
+      // API returns {"memory": {"category_name": "file_content", ...}}
+      const memory = (data.memory && typeof data.memory === 'object')
+        ? data.memory as Record<string, unknown>
+        : data;
+      const entries = Object.entries(memory);
+      if (entries.length === 0) {
+        memoryEl.textContent = 'No memory files found.';
       } else {
-        memoryEl.textContent = String(data);
+        memoryEl.textContent = entries
+          .map(([name, content]) => {
+            const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+            return `=== ${name} ===\n${text}`;
+          })
+          .join('\n\n');
       }
     } catch (e) {
       memoryEl.textContent = `Error loading memory: ${e instanceof Error ? e.message : e}`;

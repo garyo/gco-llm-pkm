@@ -1944,7 +1944,7 @@ def ticktick_status():
             return jsonify({
                 "connected": True,
                 "expired": is_expired,
-                "expires_at": token.expires_at.isoformat() if token.expires_at else None
+                "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
             })
         else:
             return jsonify({"connected": False})
@@ -2085,7 +2085,7 @@ def google_calendar_status():
             return jsonify({
                 "connected": True,
                 "expired": is_expired,
-                "expires_at": token.expires_at.isoformat() if token.expires_at else None
+                "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
             })
         else:
             return jsonify({"connected": False})
@@ -2222,7 +2222,7 @@ def google_gmail_status():
             return jsonify({
                 "connected": True,
                 "expired": is_expired,
-                "expires_at": token.expires_at.isoformat() if token.expires_at else None
+                "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
             })
         else:
             return jsonify({"connected": False})

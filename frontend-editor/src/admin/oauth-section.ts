@@ -27,6 +27,7 @@ function createCard(service: ServiceConfig): HTMLElement {
       <span class="expires-text text-xs text-gray-500"></span>
       <span class="flex-1"></span>
       <button class="connect-btn hidden px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium">Connect</button>
+      <button class="refresh-btn hidden px-3 py-1 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-sm font-medium">Reconnect</button>
       <button class="disconnect-btn hidden px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm font-medium">Disconnect</button>
     </div>
   `;
@@ -34,12 +35,18 @@ function createCard(service: ServiceConfig): HTMLElement {
   const badge = card.querySelector('.status-badge')!;
   const expiresText = card.querySelector('.expires-text')!;
   const connectBtn = card.querySelector('.connect-btn') as HTMLButtonElement;
+  const refreshBtn = card.querySelector('.refresh-btn') as HTMLButtonElement;
   const disconnectBtn = card.querySelector('.disconnect-btn') as HTMLButtonElement;
 
   const returnTo = `/editor/?page=admin`;
+  const authUrl = `/auth/${service.key}/authorize?return_to=${encodeURIComponent(returnTo)}`;
 
   connectBtn.addEventListener('click', () => {
-    window.location.href = `/auth/${service.key}/authorize?return_to=${encodeURIComponent(returnTo)}`;
+    window.location.href = authUrl;
+  });
+
+  refreshBtn.addEventListener('click', () => {
+    window.location.href = authUrl;
   });
 
   disconnectBtn.addEventListener('click', async () => {
@@ -64,18 +71,21 @@ function createCard(service: ServiceConfig): HTMLElement {
           expiresText.textContent = `Expires: ${new Date(status.expires_at).toLocaleString()}`;
         }
         connectBtn.classList.add('hidden');
+        refreshBtn.classList.toggle('hidden', !status.expired);
         disconnectBtn.classList.remove('hidden');
       } else {
         badge.textContent = 'Disconnected';
         badge.className = 'status-badge px-2 py-0.5 rounded text-xs font-medium bg-gray-600 text-gray-300';
         expiresText.textContent = '';
         connectBtn.classList.remove('hidden');
+        refreshBtn.classList.add('hidden');
         disconnectBtn.classList.add('hidden');
       }
     } catch {
       badge.textContent = 'Error';
       badge.className = 'status-badge px-2 py-0.5 rounded text-xs font-medium bg-red-900 text-red-300';
       connectBtn.classList.remove('hidden');
+      refreshBtn.classList.add('hidden');
       disconnectBtn.classList.add('hidden');
     }
   }

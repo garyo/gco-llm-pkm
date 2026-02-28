@@ -38,28 +38,45 @@ function createCard(service: ServiceConfig): HTMLElement {
   const refreshBtn = card.querySelector('.refresh-btn') as HTMLButtonElement;
   const disconnectBtn = card.querySelector('.disconnect-btn') as HTMLButtonElement;
 
-  const returnTo = `/editor/?page=admin`;
-  const authUrl = `/auth/${service.key}/authorize?return_to=${encodeURIComponent(returnTo)}`;
+  // Use return_to=/ since the popup will be closed anyway
+  const authUrl = `/auth/${service.key}/authorize?return_to=/`;
 
-  connectBtn.addEventListener('click', () => {
-    window.location.href = authUrl;
-  });
+  function openAuthPopup() {
+    const popup = window.open(authUrl, '_blank', 'width=600,height=700');
+    // Poll for status change while popup is open
+    const pollInterval = setInterval(async () => {
+      if (popup && popup.closed) {
+        clearInterval(pollInterval);
+        await refreshStatus();
+        return;
+      }
+      try {
+        const status = await getOAuthStatus(service.key);
+        if (status.connected && !status.expired) {
+          clearInterval(pollInterval);
+          if (popup && !popup.closed) popup.close();
+          await refreshStatus();
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 2000);
+  }
 
-  refreshBtn.addEventListener('click', () => {
-    window.location.href = authUrl;
-  });
+  connectBtn.addEventListener('click', openAuthPopup);
+  refreshBtn.addEventListener('click', openAuthPopup);
 
   disconnectBtn.addEventListener('click', async () => {
     if (!confirm(`Disconnect ${service.label}?`)) return;
     try {
       await disconnectOAuth(service.key);
-      refresh();
+      refreshStatus();
     } catch (e) {
       alert(`Error: ${e instanceof Error ? e.message : e}`);
     }
   });
 
-  async function refresh() {
+  async function refreshStatus() {
     try {
       const status = await getOAuthStatus(service.key);
       if (status.connected) {
@@ -90,7 +107,7 @@ function createCard(service: ServiceConfig): HTMLElement {
     }
   }
 
-  refresh();
+  refreshStatus();
   return card;
 }
 

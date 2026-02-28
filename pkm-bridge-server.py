@@ -582,8 +582,15 @@ def verify_token():
     if not config.auth_enabled:
         return jsonify({"valid": True})  # No auth = always valid
 
-    data = request.json
-    token = data.get('token', '')
+    # Accept token from JSON body or Authorization header
+    token = ''
+    data = request.get_json(silent=True)
+    if data:
+        token = data.get('token', '')
+    if not token:
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
 
     if not token:
         logger.debug(f"Token verification from {request.remote_addr}: no token provided")

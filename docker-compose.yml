@@ -76,6 +76,7 @@ services:
       - "traefik.enable=true"
       # Flask server (main PKM UI)
       - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.oberbrunner.com`)||Host(`pkm.home.oberbrunner.com`)||Host(`pkm`)"
+      - "traefik.http.routers.pkm-bridge.service=pkm-bridge"
       - "traefik.http.services.pkm-bridge.loadbalancer.server.port=8000"
       # SSE-specific configuration for /api/events endpoint
       - "traefik.http.routers.pkm-bridge.middlewares=sse-headers"
@@ -84,6 +85,7 @@ services:
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.X-Accel-Buffering=no"
       # MCP server (for Claude.ai connector via mcp.oberbrunner.com)
       - "traefik.http.routers.pkm-mcp.rule=Host(`mcp.oberbrunner.com`)"
+      - "traefik.http.routers.pkm-mcp.service=pkm-mcp"
       - "traefik.http.services.pkm-mcp.loadbalancer.server.port=8001"
 
     healthcheck:

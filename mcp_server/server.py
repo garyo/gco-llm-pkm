@@ -55,6 +55,8 @@ def create_server() -> FastMCP:
         "transport_security": TransportSecuritySettings(
             allowed_hosts=[mcp_host, "localhost", "127.0.0.1"],
         ),
+        # Claude.ai sends MCP requests to / not /mcp
+        "streamable_http_path": "/",
     }
 
     # Set up OAuth authentication

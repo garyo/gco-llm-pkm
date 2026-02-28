@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -483,9 +484,21 @@ def register_all_tools(mcp: FastMCP):
 
         config = _get_config()
 
-        # 1. System prompt (instructions + persona)
-        system_prompt = config.get_system_prompt()
-        parts.append("# SYSTEM INSTRUCTIONS\n\n" + system_prompt)
+        # 1. MCP-specific system prompt (no direct file access assumptions)
+        mcp_prompt_file = Path(__file__).parent.parent / "config" / "system_prompt_mcp.txt"
+        if mcp_prompt_file.exists():
+            prompt_text = mcp_prompt_file.read_text(encoding="utf-8")
+            editor_base = os.getenv(
+                "EDITOR_BASE_URL", "https://pkm.oberbrunner.com/editor"
+            )
+            prompt_text = prompt_text.replace("{EDITOR_BASE_URL}", editor_base)
+            prompt_text = prompt_text.replace("{ORG_DIR}", str(config.org_dir))
+            prompt_text = prompt_text.replace("{LOGSEQ_DIR}", str(config.logseq_dir))
+            parts.append("# SYSTEM INSTRUCTIONS\n\n" + prompt_text)
+        else:
+            # Fallback to standard prompt
+            system_prompt = config.get_system_prompt()
+            parts.append("# SYSTEM INSTRUCTIONS\n\n" + system_prompt)
 
         # 2. Learned rules from self-improvement agent
         try:
@@ -541,16 +554,6 @@ def register_all_tools(mcp: FastMCP):
         parts.append(
             f"\n\nThe CURRENT date/time is {now.isoformat()} ({timestring}). "
             "Always use this for time-related questions."
-        )
-
-        # 6. Editor link instructions
-        editor_base = os.getenv("EDITOR_BASE_URL", "https://pkm.oberbrunner.com/editor")
-        parts.append(
-            f"\n\n# EDITOR LINKS\n\n"
-            f"When referencing PKM files, format as clickable editor links:\n"
-            f"[display name]({editor_base}/?file=TYPE:PATH)\n"
-            f"For org-id links: [description]({editor_base}/?id=UUID)\n"
-            f"When asked to open a file, call open_in_editor and include the returned URL."
         )
 
         result = "\n".join(parts)

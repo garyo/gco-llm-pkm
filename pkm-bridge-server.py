@@ -484,6 +484,23 @@ def admin():
     return send_from_directory(app.template_folder, 'admin.html')
 
 
+@app.route('/editor/')
+@app.route('/editor/<path:filename>')
+def serve_editor(filename='index.html'):
+    """Serve the standalone editor SPA from editor-dist/."""
+    editor_dir = Path(__file__).parent / 'editor-dist'
+    file_path = editor_dir / filename
+    # Security: ensure the file is within editor-dist
+    try:
+        file_path.resolve().relative_to(editor_dir.resolve())
+    except ValueError:
+        return "Not found", 404
+    if not file_path.exists():
+        # SPA fallback: serve index.html for any unknown path
+        return send_from_directory(editor_dir, 'index.html')
+    return send_from_directory(editor_dir, filename)
+
+
 @app.route('/<path:filename>')
 def serve_static(filename):
     """Serve static files from templates directory (Astro build output).

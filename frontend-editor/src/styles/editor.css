@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+/* CodeMirror container */
+#editor-container {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  overflow: auto;
+}
+
+#editor-container .cm-editor {
+  height: 100%;
+}
+
+#editor-container .cm-scroller {
+  line-height: 1.6;
+  overflow: auto;
+}
+
+#cal-days-grid span.underline {
+  text-underline-offset: 3px;
+}

@@ -17,6 +17,20 @@ COPY config/ ../config/
 RUN bun run build
 
 
+# Build standalone editor SPA
+FROM node:20-alpine AS editor-builder
+
+WORKDIR /app/frontend-editor
+
+RUN npm install -g bun
+
+COPY frontend-editor/package.json frontend-editor/bun.lockb* ./
+RUN bun install
+
+COPY frontend-editor/ ./
+RUN bun run build
+
+
 # Backend runtime image
 FROM python:3.11-slim
 
@@ -54,6 +68,9 @@ COPY docker-entrypoint.sh ./
 
 # Copy built frontend from first stage
 COPY --from=frontend-builder /app/templates ./templates/
+
+# Copy built editor SPA from editor-builder stage
+COPY --from=editor-builder /app/editor-dist ./editor-dist/
 
 # Create non-root user
 RUN useradd -m -u 1000 pkm && \

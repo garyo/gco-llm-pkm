@@ -45,6 +45,7 @@ RUN uv pip install --no-cache -r requirements.txt
 
 # Copy Python application
 COPY pkm_bridge/ ./pkm_bridge/
+COPY mcp_server/ ./mcp_server/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 COPY pkm-bridge-server.py ./
@@ -58,8 +59,8 @@ COPY --from=frontend-builder /app/templates ./templates/
 RUN useradd -m -u 1000 pkm && \
     chown -R pkm:pkm /app
 
-# Expose port
-EXPOSE 8000
+# Expose ports (Flask + MCP server)
+EXPOSE 8000 8001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

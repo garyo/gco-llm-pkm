@@ -54,6 +54,10 @@ services:
       # Database - use placeholders so Python can URL-encode the password
       - DATABASE_URL=postgresql://{DB_USER}:{DB_PASSWORD}@postgres:5432/pkm_db
 
+      # MCP server
+      - MCP_PORT=8001
+      - MCP_HOST=0.0.0.0
+
     volumes:
       # Mount org files
       - ${ORG_DIR}:/data/org-agenda:rw
@@ -70,6 +74,7 @@ services:
     # Traefik labels for reverse proxy
     labels:
       - "traefik.enable=true"
+      # Flask server (main PKM UI)
       - "traefik.http.routers.pkm-bridge.rule=Host(`pkm.oberbrunner.com`)||Host(`pkm.home.oberbrunner.com`)||Host(`pkm`)"
       - "traefik.http.services.pkm-bridge.loadbalancer.server.port=8000"
       # SSE-specific configuration for /api/events endpoint
@@ -77,6 +82,9 @@ services:
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Cache-Control=no-cache"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.Connection=keep-alive"
       - "traefik.http.middlewares.sse-headers.headers.customresponseheaders.X-Accel-Buffering=no"
+      # MCP server (for Claude.ai connector via mcp.oberbrunner.com)
+      - "traefik.http.routers.pkm-mcp.rule=Host(`mcp.oberbrunner.com`)"
+      - "traefik.http.services.pkm-mcp.loadbalancer.server.port=8001"
 
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]

@@ -84,4 +84,16 @@ export interface SystemPrompt {
   modified: number;
 }
 
-export type AdminTab = 'connections' | 'prompts' | 'rules' | 'tasks' | 'self-improve';
+export interface Skill {
+  name: string;
+  type: 'shell' | 'recipe';
+  description: string;
+  trigger: string;
+  tags: string[];
+  created: string;
+  last_used: string;
+  use_count: number;
+  body: string;
+}
+
+export type AdminTab = 'connections' | 'prompts' | 'rules' | 'tasks' | 'skills' | 'self-improve';

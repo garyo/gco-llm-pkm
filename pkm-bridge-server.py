@@ -2761,6 +2761,154 @@ def get_self_improve_memory():
 
 
 # -------------------------
+# Skills API
+# -------------------------
+
+@app.route('/api/skills', methods=['GET'])
+@limiter.limit("30 per minute")
+def list_skills():
+    """List all saved skills with metadata."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    from pkm_bridge.tools.skills import _get_skills_dir, _parse_skill_file
+
+    skills_dir = _get_skills_dir(config.org_dir)
+    skills = []
+    for filepath in sorted(skills_dir.iterdir()):
+        if filepath.suffix not in ('.sh', '.md'):
+            continue
+        parsed = _parse_skill_file(filepath)
+        if not parsed:
+            continue
+        skills.append({
+            'name': parsed.get('name', filepath.stem),
+            'type': parsed.get('_type', 'unknown'),
+            'description': parsed.get('description', ''),
+            'trigger': parsed.get('trigger', ''),
+            'tags': parsed.get('tags', []),
+            'created': parsed.get('created', ''),
+            'last_used': parsed.get('last_used', ''),
+            'use_count': parsed.get('use_count', 0),
+            'body': parsed.get('_body', ''),
+        })
+
+    return jsonify(skills)
+
+
+@app.route('/api/skills/<name>', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_skill(name: str):
+    """Get a single skill's full content."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    from pkm_bridge.tools.skills import _get_skills_dir, _parse_skill_file
+
+    skills_dir = _get_skills_dir(config.org_dir)
+    for ext in ('.sh', '.md'):
+        filepath = skills_dir / f'{name}{ext}'
+        if filepath.exists():
+            parsed = _parse_skill_file(filepath)
+            if parsed:
+                return jsonify({
+                    'name': parsed.get('name', name),
+                    'type': parsed.get('_type', 'unknown'),
+                    'description': parsed.get('description', ''),
+                    'trigger': parsed.get('trigger', ''),
+                    'tags': parsed.get('tags', []),
+                    'created': parsed.get('created', ''),
+                    'last_used': parsed.get('last_used', ''),
+                    'use_count': parsed.get('use_count', 0),
+                    'body': parsed.get('_body', ''),
+                })
+
+    return jsonify({"error": f"Skill '{name}' not found"}), 404
+
+
+@app.route('/api/skills/<name>', methods=['PUT'])
+@limiter.limit("10 per minute")
+def update_skill(name: str):
+    """Update a skill's metadata and/or body."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    import stat
+    from pkm_bridge.tools.skills import (
+        _get_skills_dir, _parse_skill_file, _parse_shell_frontmatter,
+        _parse_md_frontmatter, _build_shell_frontmatter, _build_md_frontmatter,
+    )
+
+    data = request.get_json(silent=True) or {}
+    skills_dir = _get_skills_dir(config.org_dir)
+
+    # Find existing file
+    filepath = None
+    for ext in ('.sh', '.md'):
+        candidate = skills_dir / f'{name}{ext}'
+        if candidate.exists():
+            filepath = candidate
+            break
+
+    if not filepath:
+        return jsonify({"error": f"Skill '{name}' not found"}), 404
+
+    content = filepath.read_text(encoding='utf-8')
+    if filepath.suffix == '.sh':
+        metadata, body = _parse_shell_frontmatter(content)
+    else:
+        metadata, body = _parse_md_frontmatter(content)
+
+    # Update fields if provided
+    if 'description' in data:
+        metadata['description'] = data['description']
+    if 'trigger' in data:
+        metadata['trigger'] = data['trigger']
+    if 'tags' in data:
+        metadata['tags'] = data['tags']
+    if 'body' in data:
+        body = data['body']
+
+    # Rebuild file
+    if filepath.suffix == '.sh':
+        fm = _build_shell_frontmatter(metadata)
+        file_content = fm + '\n' + body.lstrip('\n')
+    else:
+        fm = _build_md_frontmatter(metadata)
+        file_content = fm + '\n\n' + body.lstrip('\n')
+
+    filepath.write_text(file_content, encoding='utf-8')
+
+    if filepath.suffix == '.sh':
+        filepath.chmod(filepath.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
+
+    return jsonify({"status": "saved"})
+
+
+@app.route('/api/skills/<name>', methods=['DELETE'])
+@limiter.limit("10 per minute")
+def delete_skill(name: str):
+    """Delete a skill."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
+    from pkm_bridge.tools.skills import _get_skills_dir
+
+    skills_dir = _get_skills_dir(config.org_dir)
+    for ext in ('.sh', '.md'):
+        filepath = skills_dir / f'{name}{ext}'
+        if filepath.exists():
+            filepath.unlink()
+            return jsonify({"status": "deleted"})
+
+    return jsonify({"error": f"Skill '{name}' not found"}), 404
+
+
+# -------------------------
 # Scheduled Tasks API
 # -------------------------
 

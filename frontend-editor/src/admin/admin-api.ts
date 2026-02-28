@@ -132,6 +132,37 @@ export async function getScheduledTaskBudget(): Promise<unknown> {
   return res.json();
 }
 
+// --- Skills ---
+
+export async function getSkills(): Promise<import('../types').Skill[]> {
+  const res = await authFetch('/api/skills');
+  if (!res.ok) throw new Error(`Failed to load skills: ${res.status}`);
+  return res.json();
+}
+
+export async function getSkill(name: string): Promise<import('../types').Skill> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`Failed to load skill '${name}': ${res.status}`);
+  return res.json();
+}
+
+export async function updateSkill(
+  name: string,
+  updates: Partial<Pick<import('../types').Skill, 'description' | 'trigger' | 'tags' | 'body'>>,
+): Promise<void> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) throw new Error(`Failed to update skill '${name}': ${res.status}`);
+}
+
+export async function deleteSkill(name: string): Promise<void> {
+  const res = await authFetch(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Failed to delete skill '${name}': ${res.status}`);
+}
+
 // --- Self-Improvement ---
 
 export async function triggerSelfImprove(): Promise<{ status: string; message?: string }> {

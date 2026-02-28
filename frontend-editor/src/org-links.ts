@@ -84,7 +84,7 @@ export const orgLinkField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-/** Open an org link target (id: or attachment:). */
+/** Open an org link target. Handles id:, attachment:, http(s):, and file: links. */
 function openOrgLinkTarget(
   target: string,
   view: EditorView,
@@ -92,6 +92,14 @@ function openOrgLinkTarget(
   event: MouseEvent,
   _state: EditorState,
 ): boolean {
+  // External URLs
+  if (target.startsWith('http://') || target.startsWith('https://')) {
+    event.preventDefault();
+    event.stopPropagation();
+    window.open(target, '_blank');
+    return true;
+  }
+
   if (target.startsWith('id:')) {
     event.preventDefault();
     const uuid = target.slice(3);

@@ -16,7 +16,7 @@ from mcp.server.fastmcp import FastMCP
 # Add project root to path so we can import pkm_bridge
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from mcp_server.auth import get_token_verifier
+from mcp_server.auth import get_auth_settings, get_oauth_provider
 from mcp_server.resources import register_resources
 from mcp_server.tools import register_all_tools
 
@@ -38,15 +38,13 @@ def create_server() -> FastMCP:
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
 
-    # Set up auth
-    token_verifier = get_token_verifier()
-
-    # Create FastMCP server with optional auth
+    # Set up transport security for reverse proxy
     from mcp.server.transport_security import TransportSecuritySettings
 
     mcp_base_url = os.getenv("MCP_BASE_URL", "https://mcp.oberbrunner.com")
     mcp_host = mcp_base_url.replace("https://", "").replace("http://", "")
 
+    # Create FastMCP server with optional auth
     kwargs: dict = {
         "name": "PKM Bridge",
         "instructions": (
@@ -59,16 +57,23 @@ def create_server() -> FastMCP:
         ),
     }
 
-    if token_verifier:
-        from mcp.server.auth.settings import AuthSettings
-
-        kwargs["token_verifier"] = token_verifier
-        kwargs["auth"] = AuthSettings(
-            issuer_url=mcp_base_url,
-            resource_server_url=mcp_base_url,
-        )
+    # Set up OAuth authentication
+    oauth_provider = get_oauth_provider()
+    if oauth_provider:
+        kwargs["auth_server_provider"] = oauth_provider
+        kwargs["auth"] = get_auth_settings(mcp_base_url)
 
     mcp = FastMCP(**kwargs)
+
+    # Register login routes if OAuth is enabled
+    if oauth_provider:
+        @mcp.custom_route("/login", methods=["GET"])
+        async def login_page(request):
+            return await oauth_provider.handle_login(request)
+
+        @mcp.custom_route("/login/callback", methods=["POST"])
+        async def login_callback(request):
+            return await oauth_provider.handle_login_callback(request)
 
     # Register tools and resources
     register_all_tools(mcp)

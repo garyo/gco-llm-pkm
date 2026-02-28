@@ -42,6 +42,11 @@ def create_server() -> FastMCP:
     token_verifier = get_token_verifier()
 
     # Create FastMCP server with optional auth
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    mcp_base_url = os.getenv("MCP_BASE_URL", "https://mcp.oberbrunner.com")
+    mcp_host = mcp_base_url.replace("https://", "").replace("http://", "")
+
     kwargs: dict = {
         "name": "PKM Bridge",
         "instructions": (
@@ -49,12 +54,14 @@ def create_server() -> FastMCP:
             "start of every conversation to load instructions and context. Use "
             "semantic_search before answering knowledge-base questions."
         ),
+        "transport_security": TransportSecuritySettings(
+            allowed_hosts=[mcp_host, "localhost", "127.0.0.1"],
+        ),
     }
 
     if token_verifier:
         from mcp.server.auth.settings import AuthSettings
 
-        mcp_base_url = os.getenv("MCP_BASE_URL", "https://mcp.oberbrunner.com")
         kwargs["token_verifier"] = token_verifier
         kwargs["auth"] = AuthSettings(
             issuer_url=mcp_base_url,

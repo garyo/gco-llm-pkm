@@ -88,11 +88,11 @@ class ScheduleTaskTool(BaseTool):
             else:
                 return f"Unknown action: '{action}'. Use create, list, update, delete, or toggle."
         except Exception as e:
-            self.logger.error(f"schedule_task error: {e}")
-            return f"Error: {e}"
+            self.logger.error(f"schedule_task error ({action}): {e}", exc_info=True)
+            return f"Error in schedule_task '{action}': {type(e).__name__}: {e}. Try 'list' action to see existing tasks."
 
     def _get_task(self, params: Dict[str, Any]):
-        """Find a task by ID or name."""
+        """Find a task by ID or name. Returns (db, task, identifier_desc)."""
         from ..database import get_db
         from ..scheduler.repository import ScheduledTaskRepository
 
@@ -102,12 +102,13 @@ class ScheduleTaskTool(BaseTool):
 
         if task_id:
             task = ScheduledTaskRepository.get_by_id(db, task_id)
+            return db, task, f"id={task_id}"
         elif name:
             task = ScheduledTaskRepository.get_by_name(db, name)
+            return db, task, f"name='{name}'"
         else:
             db.close()
-            return None, None
-        return db, task
+            return None, None, None
 
     def _create(self, params: Dict[str, Any]) -> str:
         from ..database import get_db
@@ -174,12 +175,12 @@ class ScheduleTaskTool(BaseTool):
     def _update(self, params: Dict[str, Any]) -> str:
         from ..scheduler.repository import ScheduledTaskRepository
 
-        db, task = self._get_task(params)
+        db, task, ident = self._get_task(params)
         if not db:
-            return "Error: provide 'task_id' or 'name' to identify the task."
+            return "Error: provide 'task_id' or 'name' to identify the task. Use 'list' action to see all tasks."
         if not task:
             db.close()
-            return "Error: task not found."
+            return f"Error: task not found ({ident}). Use 'list' action to see all tasks with their IDs and names."
 
         try:
             updates = params.get("updates", {})
@@ -202,12 +203,12 @@ class ScheduleTaskTool(BaseTool):
     def _delete(self, params: Dict[str, Any]) -> str:
         from ..scheduler.repository import ScheduledTaskRepository
 
-        db, task = self._get_task(params)
+        db, task, ident = self._get_task(params)
         if not db:
-            return "Error: provide 'task_id' or 'name' to identify the task."
+            return "Error: provide 'task_id' or 'name' to identify the task. Use 'list' action to see all tasks."
         if not task:
             db.close()
-            return "Error: task not found."
+            return f"Error: task not found ({ident}). Use 'list' action to see all tasks with their IDs and names."
 
         try:
             if task.is_heartbeat:
@@ -221,12 +222,12 @@ class ScheduleTaskTool(BaseTool):
     def _toggle(self, params: Dict[str, Any]) -> str:
         from ..scheduler.repository import ScheduledTaskRepository
 
-        db, task = self._get_task(params)
+        db, task, ident = self._get_task(params)
         if not db:
-            return "Error: provide 'task_id' or 'name' to identify the task."
+            return "Error: provide 'task_id' or 'name' to identify the task. Use 'list' action to see all tasks."
         if not task:
             db.close()
-            return "Error: task not found."
+            return f"Error: task not found ({ident}). Use 'list' action to see all tasks with their IDs and names."
 
         try:
             new_state = not task.enabled

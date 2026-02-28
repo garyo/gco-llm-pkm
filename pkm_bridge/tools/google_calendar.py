@@ -370,5 +370,5 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 return f"Error: Unknown action: {action}"
 
         except Exception as e:
-            self.logger.error(f"Google Calendar error: {e}")
-            return f"Error: {str(e)}"
+            self.logger.error(f"Google Calendar error ({action}): {e}", exc_info=True)
+            return f"Calendar '{action}' failed: {type(e).__name__}: {e}. Check that Google Calendar is connected via OAuth."

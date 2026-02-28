@@ -372,7 +372,7 @@ class UseSkillTool(BaseTool):
 
         parsed = _parse_skill_file(filepath)
         if not parsed:
-            return f"Error reading skill '{skill_name}'."
+            return f"Error reading skill '{skill_name}': file exists at {filepath.name} but could not be parsed. Check that it has valid YAML frontmatter."
 
         # Bump use_count and last_used
         now = datetime.utcnow().isoformat(timespec='seconds') + 'Z'

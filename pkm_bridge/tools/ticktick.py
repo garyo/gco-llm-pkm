@@ -346,6 +346,6 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 return f"Error: Unknown action: {action}"
 
         except Exception as e:
-            self.logger.error(f"TickTick error: {e}")
-            return f"Error: {str(e)}"
+            self.logger.error(f"TickTick error ({action}): {e}", exc_info=True)
+            return f"TickTick '{action}' failed: {type(e).__name__}: {e}. Try 'list_today' or 'search' to verify connectivity."
 

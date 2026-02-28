@@ -319,7 +319,7 @@ def register_all_tools(mcp: FastMCP):
             _log_tool_execution("read_file", {"path": path}, f"({len(content)} bytes)", duration_ms)
             return content
         except Exception as e:
-            return f"Error reading file: {e}"
+            return f"Error reading file '{path}': {type(e).__name__}: {e}. Use list_files to verify the path exists. Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
 
     @mcp.tool()
     def write_file(path: str, content: str, create_only: bool = False) -> str:
@@ -341,7 +341,7 @@ def register_all_tools(mcp: FastMCP):
             )
             return f"File {result['status']}: {path} ({result.get('size', 0)} bytes)"
         except Exception as e:
-            return f"Error writing file: {e}"
+            return f"Error writing file '{path}': {type(e).__name__}: {e}. Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
 
     # --- Shell tools ---
 
@@ -643,7 +643,7 @@ def register_all_tools(mcp: FastMCP):
             finally:
                 db.close()
         except Exception as e:
-            return f"Failed to log feedback: {e}"
+            return f"Failed to log feedback: {type(e).__name__}: {e}. This is a non-critical error; feedback was not saved but the session can continue."
 
     @mcp.tool()
     def open_in_editor(

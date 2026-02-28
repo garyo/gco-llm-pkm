@@ -229,5 +229,5 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
                 return f"Error: Unknown action: {action}"
 
         except Exception as e:
-            self.logger.error(f"Gmail error: {e}")
-            return f"Error: {str(e)}"
+            self.logger.error(f"Gmail error ({action}): {e}", exc_info=True)
+            return f"Gmail '{action}' failed: {type(e).__name__}: {e}. Check that Gmail is connected via OAuth."

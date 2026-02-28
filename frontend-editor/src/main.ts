@@ -474,11 +474,94 @@ initCalendar(state, (dateKey, entry) => {
 });
 
 // ---------------------------------------------------------------------------
+// Tab reuse via BroadcastChannel
+// ---------------------------------------------------------------------------
+const TAB_CHANNEL = 'pkm-editor-tab';
+
+/** Try to hand off file open to an existing editor tab. Returns true if handled. */
+function tryHandoffToExistingTab(params: import('./url-params').UrlParams): boolean {
+  // Only hand off editor file opens (not admin, not empty)
+  if (params.page === 'admin' || (!params.file && !params.id)) return false;
+
+  const bc = new BroadcastChannel(TAB_CHANNEL);
+  let handled = false;
+
+  bc.onmessage = (e) => {
+    if (e.data?.type === 'ack') {
+      handled = true;
+      // Existing tab will handle it; close this tab
+      window.close();
+      // Fallback if window.close() is blocked (e.g. not opened by script):
+      // show a brief message then redirect to editor without params
+      setTimeout(() => {
+        document.body.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111827;color:#9ca3af;font-family:sans-serif">
+            <p>File opened in existing editor tab. <a href="?" style="color:#60a5fa">Open new editor</a></p>
+          </div>`;
+      }, 300);
+    }
+  };
+
+  // Ask existing tabs to open the file
+  bc.postMessage({ type: 'open', file: params.file, id: params.id, line: params.line });
+
+  // Give existing tab 200ms to respond
+  setTimeout(() => {
+    if (!handled) {
+      // No existing tab responded; proceed normally in this tab
+      bc.close();
+    }
+  }, 200);
+
+  // We can't block, so return false and let init() proceed.
+  // If an ack arrives within 200ms, the tab will close itself.
+  return false;
+}
+
+/** Listen for file-open requests from other tabs. */
+function listenForTabHandoff(): void {
+  const bc = new BroadcastChannel(TAB_CHANNEL);
+  bc.onmessage = async (e) => {
+    if (e.data?.type !== 'open') return;
+    const { file, id, line } = e.data;
+
+    // Resolve the target file
+    let targetPath: string | null = null;
+    let targetLine: number | null = line ?? null;
+
+    if (file) {
+      targetPath = file;
+    } else if (id) {
+      const result = await api.resolveOrgId(id);
+      if (result) {
+        targetPath = result.path;
+        targetLine = result.line ?? line ?? null;
+      }
+    }
+
+    if (targetPath) {
+      // Acknowledge so the new tab can close
+      bc.postMessage({ type: 'ack' });
+
+      // Focus this window and open the file
+      window.focus();
+      pushNavHistory();
+      state.pendingScrollLine = targetLine;
+      fileSelector.value = targetPath;
+      await loadFile(targetPath);
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 async function init(): Promise<void> {
   const params = parseUrlParams();
   const isAdminPage = params.page === 'admin';
+
+  // Try to hand off to existing editor tab (non-blocking)
+  tryHandoffToExistingTab(params);
 
   // Check auth
   const authed = await checkAuth();
@@ -520,6 +603,9 @@ async function init(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   await loadFileList();
+
+  // Listen for file-open requests from other tabs
+  listenForTabHandoff();
 
   // SSE
   connectSSE(sseState, handleFileChanged, handleOpenFile);

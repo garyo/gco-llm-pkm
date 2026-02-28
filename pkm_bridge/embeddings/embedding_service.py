@@ -363,10 +363,10 @@ def embed_gmail_messages(
         log(f"Error initializing Gmail client for embedding: {e}")
         return stats
 
-    # Search for recent emails
+    # Search for recent important emails only (Gmail's yellow flag)
     from datetime import datetime, timedelta
     date_str = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y/%m/%d')
-    query = f"after:{date_str}"
+    query = f"is:important after:{date_str}"
 
     chunker = NoteChunker()
 

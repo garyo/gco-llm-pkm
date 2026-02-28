@@ -133,19 +133,22 @@ function openOrgLinkTarget(
 /** Create a click handler for org links. Requires shared state for navigation. */
 export function createOrgLinkClickHandler(state: EditorState) {
   return EditorView.domEventHandlers({
-    click(event: MouseEvent, view: EditorView) {
-      const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      if (!isTouch && !event.metaKey && !event.ctrlKey) return false;
-
-      // Check folded link widgets
+    mousedown(event: MouseEvent, view: EditorView) {
+      // Folded link widgets: click directly (no modifier needed) since
+      // the widget is already styled as a link. We use mousedown to
+      // intercept before CodeMirror places the cursor and unfolds the link.
       const widgetEl = (event.target as HTMLElement).closest('.org-link-folded') as HTMLElement;
       if (widgetEl) {
         const target = widgetEl.title;
         if (target) {
           const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-          return openOrgLinkTarget(target, view, pos ?? 0, event, state);
+          if (openOrgLinkTarget(target, view, pos ?? 0, event, state)) return true;
         }
       }
+
+      // Expanded (raw) links: require Cmd/Ctrl click (or touch)
+      const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      if (!isTouch && !event.metaKey && !event.ctrlKey) return false;
 
       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos === null) return false;

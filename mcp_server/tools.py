@@ -387,16 +387,53 @@ def register_all_tools(mcp: FastMCP):
     # --- TickTick ---
 
     @mcp.tool()
-    def ticktick(action: str, **kwargs) -> str:
+    def ticktick(
+        action: str,
+        task_id: str | None = None,
+        project_id: str | None = None,
+        title: str | None = None,
+        content: str | None = None,
+        due_date: str | None = None,
+        priority: int | None = None,
+        query: str | None = None,
+        reminders: str | None = None,
+    ) -> str:
         """Query and manage TickTick tasks.
 
         Actions: 'list_today', 'list_all', 'search', 'create', 'update', 'complete'.
 
         Args:
             action: The action to perform
-            **kwargs: Additional parameters depending on action (e.g., title, due_date, task_id)
+            task_id: Task ID (for update, complete)
+            project_id: Project/list ID
+            title: Task title (for create, or to find task for complete)
+            content: Task description/notes
+            due_date: Due date in ISO format (e.g., '2026-03-01' or '2026-03-01T14:00:00')
+            priority: Priority level (0=none, 1=low, 3=medium, 5=high)
+            query: Search query (for search action)
+            reminders: JSON array of reminder trigger strings
         """
-        params = {"action": action, **kwargs}
+        params: dict = {"action": action}
+        if task_id is not None:
+            params["task_id"] = task_id
+        if project_id is not None:
+            params["project_id"] = project_id
+        if title is not None:
+            params["title"] = title
+        if content is not None:
+            params["content"] = content
+        if due_date is not None:
+            params["due_date"] = due_date
+        if priority is not None:
+            params["priority"] = priority
+        if query is not None:
+            params["query"] = query
+        if reminders is not None:
+            import json as _json
+            try:
+                params["reminders"] = _json.loads(reminders)
+            except (ValueError, TypeError):
+                params["reminders"] = reminders
         return _execute_tool("ticktick_query", params)
 
     # --- Skill tools ---

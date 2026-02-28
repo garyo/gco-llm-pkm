@@ -325,7 +325,8 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
 
                     task_id = tasks[0]['id']
 
-                task = client.complete_task(task_id)
+                project_id = params.get('project_id')
+                task = client.complete_task(task_id, project_id=project_id)
                 return f"✓ Completed task: {task.get('title', task_id)}"
 
             elif action == "search":

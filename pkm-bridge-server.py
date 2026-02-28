@@ -1948,9 +1948,12 @@ def ticktick_status():
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
+            has_refresh = bool(token.refresh_token)
             return jsonify({
                 "connected": True,
                 "expired": is_expired,
+                "has_refresh_token": has_refresh,
+                "auto_refreshable": has_refresh and is_expired,
                 "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
             })
         else:
@@ -2089,9 +2092,12 @@ def google_calendar_status():
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
+            has_refresh = bool(token.refresh_token)
             return jsonify({
                 "connected": True,
                 "expired": is_expired,
+                "has_refresh_token": has_refresh,
+                "auto_refreshable": has_refresh and is_expired,
                 "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
             })
         else:
@@ -2226,9 +2232,12 @@ def google_gmail_status():
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
+            has_refresh = bool(token.refresh_token)
             return jsonify({
                 "connected": True,
                 "expired": is_expired,
+                "has_refresh_token": has_refresh,
+                "auto_refreshable": has_refresh and is_expired,
                 "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
             })
         else:

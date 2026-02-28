@@ -52,6 +52,8 @@ export const SSE_GLOBAL_KEY = '__sse_editor_connection__';
 export interface OAuthStatus {
   connected: boolean;
   expired?: boolean;
+  has_refresh_token?: boolean;
+  auto_refreshable?: boolean;
   expires_at?: string | null;
 }
 

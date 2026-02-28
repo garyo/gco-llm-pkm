@@ -80,15 +80,28 @@ function createCard(service: ServiceConfig): HTMLElement {
     try {
       const status = await getOAuthStatus(service.key);
       if (status.connected) {
-        badge.textContent = status.expired ? 'Expired' : 'Connected';
-        badge.className = `status-badge px-2 py-0.5 rounded text-xs font-medium ${
-          status.expired ? 'bg-yellow-900 text-yellow-300' : 'bg-green-900 text-green-300'
-        }`;
-        if (status.expires_at) {
-          expiresText.textContent = `Expires: ${new Date(status.expires_at).toLocaleString()}`;
+        // If token expired but has refresh token, it will auto-refresh on next use
+        const needsReconnect = status.expired && !status.has_refresh_token;
+        const isHealthy = !status.expired || status.has_refresh_token;
+
+        if (needsReconnect) {
+          badge.textContent = 'Needs Reconnect';
+          badge.className = 'status-badge px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300';
+        } else {
+          badge.textContent = 'Connected';
+          badge.className = 'status-badge px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300';
         }
+
+        if (status.has_refresh_token) {
+          expiresText.textContent = 'Token refreshes automatically';
+        } else if (status.expires_at) {
+          expiresText.textContent = `Expires: ${new Date(status.expires_at).toLocaleString()}`;
+        } else {
+          expiresText.textContent = '';
+        }
+
         connectBtn.classList.add('hidden');
-        refreshBtn.classList.toggle('hidden', !status.expired);
+        refreshBtn.classList.toggle('hidden', isHealthy);
         disconnectBtn.classList.remove('hidden');
       } else {
         badge.textContent = 'Disconnected';

@@ -1,8 +1,9 @@
 """TickTick API client for task management."""
 
 import os
+import time
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from zoneinfo import ZoneInfo
 import requests
 
@@ -11,6 +12,7 @@ class TickTickClient:
     """Client for TickTick Open API."""
 
     BASE_URL = "https://api.ticktick.com/open/v1"
+    _cache_ttl = 10.0  # seconds
 
     def __init__(self, access_token: str):
         """Initialize TickTick client.
@@ -24,10 +26,17 @@ class TickTickClient:
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
         })
+        self._projects_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
+        self._tasks_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
+
+    def _invalidate_cache(self) -> None:
+        """Invalidate all caches."""
+        self._projects_cache = None
+        self._tasks_cache = None
 
 
     def list_projects(self) -> List[Dict[str, Any]]:
-        """Get all projects.
+        """Get all projects (cached for _cache_ttl seconds).
 
         Returns:
             List of project dictionaries with id, name, etc.
@@ -35,17 +44,25 @@ class TickTickClient:
         Raises:
             Exception: If fetching projects fails
         """
+        now = time.monotonic()
+        if self._projects_cache is not None:
+            ts, data = self._projects_cache
+            if now - ts < self._cache_ttl:
+                return data
+
         try:
             response = self.session.get(f"{self.BASE_URL}/project")
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            self._projects_cache = (now, result)
+            return result
         except requests.exceptions.HTTPError as e:
             raise Exception(f"Failed to list projects: {e.response.status_code} - {e.response.text}")
         except Exception as e:
             raise Exception(f"Failed to list projects: {str(e)}")
 
     def list_tasks(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get all tasks, optionally filtered by project.
+        """Get all tasks, optionally filtered by project (cached for _cache_ttl seconds).
 
         Args:
             project_id: Optional project ID to filter tasks
@@ -55,6 +72,13 @@ class TickTickClient:
         """
         try:
             if not project_id:
+                # Check cache for all-tasks fetch
+                now = time.monotonic()
+                if self._tasks_cache is not None:
+                    ts, data = self._tasks_cache
+                    if now - ts < self._cache_ttl:
+                        return data
+
                 # Get all tasks from all projects
                 projects = self.list_projects()
                 all_tasks = []
@@ -86,9 +110,10 @@ class TickTickClient:
                             # Skip projects that fail to load
                             continue
 
+                self._tasks_cache = (time.monotonic(), all_tasks)
                 return all_tasks
             else:
-                # Get tasks for specific project
+                # Get tasks for specific project (not cached — specific project fetch is cheap)
                 response = self.session.get(f"{self.BASE_URL}/project/{project_id}/data")
                 response.raise_for_status()
                 data = response.json()
@@ -165,6 +190,7 @@ class TickTickClient:
         Raises:
             Exception: If task creation fails
         """
+        self._invalidate_cache()
         try:
             task_data = {
                 'title': title
@@ -263,6 +289,7 @@ class TickTickClient:
         Raises:
             Exception: If completion fails
         """
+        self._invalidate_cache()
         try:
             # If project_id not provided, find it by searching all projects
             if not project_id:
@@ -329,6 +356,7 @@ class TickTickClient:
         Raises:
             Exception: If the update fails
         """
+        self._invalidate_cache()
         try:
             # TickTick API requires the full task object for updates
             # First, fetch the existing task
@@ -374,6 +402,7 @@ class TickTickClient:
         Raises:
             Exception: If the deletion fails
         """
+        self._invalidate_cache()
         try:
             response = self.session.delete(f"{self.BASE_URL}/task/{task_id}")
             response.raise_for_status()
@@ -432,6 +461,7 @@ class TickTickClient:
         Raises:
             Exception: If the move fails
         """
+        self._invalidate_cache()
         try:
             endpoint = f"{self.BASE_URL}/project/{from_project_id}/task/{task_id}/move"
             data = {'taskId': task_id, 'projectId': to_project_id}
@@ -467,6 +497,7 @@ class TickTickClient:
         Raises:
             Exception: If creating subtask relationship fails
         """
+        self._invalidate_cache()
         try:
             # If project_id not provided, find it from the parent task
             if not project_id:
@@ -517,12 +548,18 @@ class TickTickClient:
 
         return matching_tasks
 
-    def format_task_summary(self, task: Dict[str, Any], include_id: bool = False) -> str:
+    def format_task_summary(
+        self,
+        task: Dict[str, Any],
+        include_id: bool = False,
+        project_name: Optional[str] = None,
+    ) -> str:
         """Format a task into a human-readable summary.
 
         Args:
             task: Task dictionary
             include_id: Whether to include task ID in output (default: False)
+            project_name: Optional project name to show as [ProjectName] prefix
 
         Returns:
             Formatted task summary string
@@ -545,7 +582,10 @@ class TickTickClient:
             except (ValueError, AttributeError):
                 pass
 
+        # Project prefix
+        proj_str = f"[{project_name}] " if project_name else ''
+
         # Include ID as ticktick marker for interactive checkboxes
         id_str = f" {{ticktick:{task_id}}}" if include_id and task_id else ''
 
-        return f"{title} {priority_str}{due_str}{id_str}".strip()
+        return f"{proj_str}{title} {priority_str}{due_str}{id_str}".strip()

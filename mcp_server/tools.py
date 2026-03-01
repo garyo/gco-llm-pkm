@@ -424,21 +424,21 @@ def register_all_tools(mcp: FastMCP):
         priority: int | None = None,
         query: str | None = None,
         reminders: str | None = None,
+        project: str | None = None,
+        due_before: str | None = None,
+        due_after: str | None = None,
+        priority_min: int | None = None,
+        include_completed: bool | None = None,
+        days: int | None = None,
     ) -> str:
         """Query and manage TickTick tasks.
 
-        Actions: 'list_today', 'list_all', 'search', 'create', 'update', 'complete'.
+        Actions: 'list_today', 'list_all', 'search', 'create', 'update', 'complete',
+                 'list_projects', 'list_upcoming', 'list_overdue'.
 
         Args:
             action: The action to perform
-            task_id: Task ID (for update, complete)
-            project_id: Project/list ID
-            title: Task title (for create, or to find task for complete)
-            content: Task description/notes
-            due_date: Due date in ISO format (e.g., '2026-03-01' or '2026-03-01T14:00:00')
-            priority: Priority level (0=none, 1=low, 3=medium, 5=high)
-            query: Search query (for search action)
-            reminders: JSON array of reminder trigger strings
+            **kwargs: Additional parameters depending on action (e.g., title, due_date, task_id)
         """
         params: dict = {"action": action}
         if task_id is not None:
@@ -461,6 +461,18 @@ def register_all_tools(mcp: FastMCP):
                 params["reminders"] = _json.loads(reminders)
             except (ValueError, TypeError):
                 params["reminders"] = reminders
+        if project is not None:
+            params["project"] = project
+        if due_before is not None:
+            params["due_before"] = due_before
+        if due_after is not None:
+            params["due_after"] = due_after
+        if priority_min is not None:
+            params["priority_min"] = priority_min
+        if include_completed is not None:
+            params["include_completed"] = include_completed
+        if days is not None:
+            params["days"] = days
         return _execute_tool("ticktick_query", params)
 
     # --- Skill tools ---

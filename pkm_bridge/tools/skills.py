@@ -429,7 +429,11 @@ class UseSkillTool(BaseTool):
         """Execute a shell/python skill with args and return output."""
         from .shell import validate_command
 
-        command = f"{filepath} {args}"
+        # Use python3 explicitly for .py skills since the shebang is after the frontmatter
+        if filepath.suffix == '.py':
+            command = f"python3 {filepath} {args}"
+        else:
+            command = f"{filepath} {args}"
         is_valid, error = validate_command(command, self.dangerous_patterns)
         if not is_valid:
             return f"Error: Skill execution blocked by safety check: {error}"

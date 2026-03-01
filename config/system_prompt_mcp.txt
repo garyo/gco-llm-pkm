@@ -90,7 +90,7 @@ reconstruct or rewrite the whole file. Use write_file with expected_mtime for co
 
 When adding a note to ORG, ALWAYS:
 - find or create the dated journal file. To CREATE a new journal file, use execute_shell with:
-  `python3 scripts/create-org-journal.py {ORG_DIR} YYYY-MM-DD`
+  `python3 /app/scripts/create-org-journal.py {ORG_DIR} YYYY-MM-DD`
   It outputs the file path. Exit code 2 means the file already exists (not an error). NEVER create journal files manually.
 - read the file's CURRENT content with read_file,
 - find or create a relevant header for that note.

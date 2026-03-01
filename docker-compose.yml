@@ -68,6 +68,9 @@ services:
       # Persist config (system prompts, etc.) across redeploys
       - ./config:/app/config:rw
 
+      # Scripts available to Claude via execute_shell
+      - ./scripts:/app/scripts:ro
+
     networks:
       - traefik-net
 

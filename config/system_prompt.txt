@@ -99,7 +99,7 @@ rewrite the whole file. Violating this rule risks silent data loss.
 
 When adding a note to ORG, ALWAYS:
 - find or create the dated journal file. To CREATE a new journal file, ALWAYS use:
-  `python3 scripts/create-org-journal.py {ORG_DIR} YYYY-MM-DD`
+  `python3 /app/scripts/create-org-journal.py {ORG_DIR} YYYY-MM-DD`
   This script generates a proper UUID and org-mode structure. It outputs the file path.
   Exit code 2 means the file already exists (not an error). NEVER create journal files manually.
 - read the file's CURRENT content (it may have changed since you last saw it),

@@ -6,6 +6,8 @@ and to maintain per-session working memory (note_to_self).
 
 import re
 import stat
+import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -115,7 +117,7 @@ def _parse_skill_file(filepath: Path) -> Optional[dict]:
         return None
 
     ext = filepath.suffix
-    if ext == '.sh':
+    if ext in ('.sh', '.py'):
         metadata, body = _parse_shell_frontmatter(content)
     elif ext == '.md':
         metadata, body = _parse_md_frontmatter(content)
@@ -123,7 +125,7 @@ def _parse_skill_file(filepath: Path) -> Optional[dict]:
         return None
 
     metadata['_file'] = filepath.name
-    metadata['_type'] = 'shell' if ext == '.sh' else 'recipe'
+    metadata['_type'] = {'.sh': 'shell', '.py': 'python', '.md': 'recipe'}[ext]
     metadata['_body'] = body.strip()
     return metadata
 
@@ -159,8 +161,8 @@ class SaveSkillTool(BaseTool):
                 },
                 "skill_type": {
                     "type": "string",
-                    "enum": ["shell", "recipe"],
-                    "description": "Type: 'shell' for executable .sh scripts, 'recipe' for .md procedure descriptions."
+                    "enum": ["shell", "python", "recipe"],
+                    "description": "Type: 'shell' for .sh scripts, 'python' for .py scripts, 'recipe' for .md procedure descriptions."
                 },
                 "description": {
                     "type": "string",
@@ -195,15 +197,15 @@ class SaveSkillTool(BaseTool):
         if not SKILL_NAME_RE.match(skill_name):
             return "Error: skill_name must be 2-50 chars, kebab-case [a-z0-9-]."
 
-        # For shell skills, check dangerous patterns
-        if skill_type == 'shell':
+        # For shell/python skills, check dangerous patterns
+        if skill_type in ('shell', 'python'):
             from .shell import validate_command
             is_valid, error = validate_command(content, self.dangerous_patterns)
             if not is_valid:
-                return f"Error: Shell content blocked by safety check: {error}"
+                return f"Error: Skill content blocked by safety check: {error}"
 
         skills_dir = _get_skills_dir(self.org_dir)
-        ext = '.sh' if skill_type == 'shell' else '.md'
+        ext = {'.sh': '.sh', 'shell': '.sh', 'python': '.py', 'recipe': '.md'}[skill_type]
         filepath = skills_dir / f'{skill_name}{ext}'
 
         # Check if updating existing skill
@@ -228,14 +230,17 @@ class SaveSkillTool(BaseTool):
         if skill_type == 'shell':
             fm = _build_shell_frontmatter(metadata)
             file_content = fm + '\n#!/bin/bash\nset -euo pipefail\n\n' + content.strip() + '\n'
+        elif skill_type == 'python':
+            fm = _build_shell_frontmatter(metadata)
+            file_content = fm + '\n#!/usr/bin/env python3\n\n' + content.strip() + '\n'
         else:
             fm = _build_md_frontmatter(metadata)
             file_content = fm + '\n\n' + content.strip() + '\n'
 
         filepath.write_text(file_content, encoding='utf-8')
 
-        # Make shell scripts executable
-        if skill_type == 'shell':
+        # Make shell/python scripts executable
+        if skill_type in ('shell', 'python'):
             filepath.chmod(filepath.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
 
         action = 'Updated' if existing_metadata else 'Created'
@@ -285,7 +290,7 @@ class ListSkillsTool(BaseTool):
         skills = []
 
         for filepath in sorted(skills_dir.iterdir()):
-            if filepath.suffix not in ('.sh', '.md'):
+            if filepath.suffix not in ('.sh', '.py', '.md'):
                 continue
             parsed = _parse_skill_file(filepath)
             if not parsed:
@@ -323,11 +328,12 @@ class ListSkillsTool(BaseTool):
 
 
 class UseSkillTool(BaseTool):
-    """Load a skill's content and bump its usage counter."""
+    """Load and optionally execute a saved skill."""
 
-    def __init__(self, logger, org_dir: Path):
+    def __init__(self, logger, org_dir: Path, dangerous_patterns: list[str] | None = None):
         super().__init__(logger)
         self.org_dir = org_dir
+        self.dangerous_patterns = dangerous_patterns or []
 
     @property
     def name(self) -> str:
@@ -336,9 +342,10 @@ class UseSkillTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Load a saved skill's content for execution or following. "
-            "For shell skills, you can pass the content to execute_shell. "
-            "For recipe skills, follow the described procedure steps. "
+            "Load and optionally execute a saved skill.\n"
+            "- For shell/python skills: pass `args` to execute directly and get output. "
+            "Without `args`, returns the script content for inspection.\n"
+            "- For recipe skills: returns the procedure to follow (args ignored).\n"
             "Automatically tracks usage count."
         )
 
@@ -350,6 +357,11 @@ class UseSkillTool(BaseTool):
                 "skill_name": {
                     "type": "string",
                     "description": "Name of the skill to load."
+                },
+                "args": {
+                    "type": "string",
+                    "description": "Arguments to pass when executing a shell/python skill. "
+                    "When provided, the skill is executed and output returned."
                 }
             },
             "required": ["skill_name"]
@@ -357,11 +369,12 @@ class UseSkillTool(BaseTool):
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         skill_name = params['skill_name']
+        args = params.get('args')
         skills_dir = _get_skills_dir(self.org_dir)
 
-        # Try both extensions
+        # Try all extensions
         filepath = None
-        for ext in ('.sh', '.md'):
+        for ext in ('.sh', '.py', '.md'):
             candidate = skills_dir / f'{skill_name}{ext}'
             if candidate.exists():
                 filepath = candidate
@@ -378,12 +391,11 @@ class UseSkillTool(BaseTool):
         now = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
         content = filepath.read_text(encoding='utf-8')
 
-        if filepath.suffix == '.sh':
+        if filepath.suffix in ('.sh', '.py'):
             metadata, body = _parse_shell_frontmatter(content)
             metadata['use_count'] = metadata.get('use_count', 0) + 1
             metadata['last_used'] = now
             fm = _build_shell_frontmatter(metadata)
-            # Reconstruct: frontmatter + body (body includes #!/bin/bash etc.)
             updated = fm + '\n' + body.lstrip('\n')
         else:
             metadata, body = _parse_md_frontmatter(content)
@@ -399,11 +411,61 @@ class UseSkillTool(BaseTool):
         desc = parsed.get('description', '')
 
         self.logger.info(f"Skill loaded: {skill_name} (use_count now {metadata['use_count']})")
+
+        # Auto-execute if args provided and skill is executable
+        if args is not None and filepath.suffix in ('.sh', '.py'):
+            return self._execute_skill(filepath, args, skill_name, stype, desc)
+
+        # Return content for inspection / recipe following
         return (
             f"**Skill: {skill_name}** ({stype})\n"
             f"{desc}\n\n"
             f"```\n{body_content}\n```"
         )
+
+    def _execute_skill(
+        self, filepath: Path, args: str, skill_name: str, stype: str, desc: str
+    ) -> str:
+        """Execute a shell/python skill with args and return output."""
+        from .shell import validate_command
+
+        command = f"{filepath} {args}"
+        is_valid, error = validate_command(command, self.dangerous_patterns)
+        if not is_valid:
+            return f"Error: Skill execution blocked by safety check: {error}"
+
+        try:
+            start_time = time.time()
+            result = subprocess.run(
+                command,
+                shell=True,
+                executable='/bin/bash',
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(self.org_dir),
+            )
+            elapsed = int((time.time() - start_time) * 1000)
+
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout.rstrip())
+            if result.stderr:
+                output_parts.append(f"[stderr]\n{result.stderr.rstrip()}")
+            output = '\n'.join(output_parts) or "(no output)"
+
+            status = "OK" if result.returncode == 0 else f"exit code {result.returncode}"
+            self.logger.info(
+                f"Skill executed: {skill_name} ({status}, {elapsed}ms)"
+            )
+            return (
+                f"**Executed skill: {skill_name}** ({stype}) — {status}\n"
+                f"{desc}\n\n{output}"
+            )
+        except subprocess.TimeoutExpired:
+            return f"Error: Skill '{skill_name}' timed out after 60 seconds."
+        except Exception as e:
+            return f"Error executing skill '{skill_name}': {e}"
 
 
 class NoteToSelfTool(BaseTool):

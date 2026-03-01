@@ -69,7 +69,7 @@ def _get_tool_registry():
     # Skills tools
     registry.register(SaveSkillTool(tool_logger, config.org_dir, config.dangerous_patterns))
     registry.register(ListSkillsTool(tool_logger, config.org_dir))
-    registry.register(UseSkillTool(tool_logger, config.org_dir))
+    registry.register(UseSkillTool(tool_logger, config.org_dir, config.dangerous_patterns))
     registry.register(NoteToSelfTool(tool_logger))
     registry.register(ScheduleTaskTool(tool_logger))
 
@@ -474,11 +474,11 @@ def register_all_tools(mcp: FastMCP):
         trigger: str = "",
         tags: list[str] | None = None,
     ) -> str:
-        """Save a reusable skill (shell script or recipe).
+        """Save a reusable skill (shell script, Python script, or recipe).
 
         Args:
             skill_name: Kebab-case name (e.g., 'weekly-review'). Max 50 chars, [a-z0-9-].
-            skill_type: 'shell' for executable scripts, 'recipe' for procedure descriptions
+            skill_type: 'shell' for .sh scripts, 'python' for .py scripts, 'recipe' for .md procedures
             description: Brief description of what the skill does
             content: Shell script code or markdown procedure steps
             trigger: When to use this skill (e.g., 'user asks for weekly review')
@@ -504,14 +504,22 @@ def register_all_tools(mcp: FastMCP):
         return _execute_tool("list_skills", {"tag": tag, "search": search})
 
     @mcp.tool()
-    def use_skill(skill_name: str) -> str:
-        """Load a saved skill's content. For shell skills, pass to execute_shell.
-        For recipe skills, follow the procedure. Tracks usage count.
+    def use_skill(skill_name: str, args: str | None = None) -> str:
+        """Load and optionally execute a saved skill.
+
+        - For shell/python skills: pass `args` to execute directly and get output.
+          Without `args`, returns the script content for inspection.
+        - For recipe skills: returns the procedure to follow (args ignored).
+        Tracks usage count.
 
         Args:
             skill_name: Name of the skill to load
+            args: Arguments to pass when executing a shell/python skill
         """
-        return _execute_tool("use_skill", {"skill_name": skill_name})
+        params: dict[str, Any] = {"skill_name": skill_name}
+        if args is not None:
+            params["args"] = args
+        return _execute_tool("use_skill", params)
 
     # --- Working memory ---
 

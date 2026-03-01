@@ -205,7 +205,8 @@ class TestInspectSkillsTool:
         assert parsed["description"] == "My skill desc"
 
     def test_empty(self, logger, tmp_path: Path):
-        ensure_pkm_structure(tmp_path)
+        # Create skills dir directly (not via ensure_pkm_structure, which seeds built-in skills)
+        (tmp_path / ".pkm" / "skills").mkdir(parents=True, exist_ok=True)
         tool = InspectSkillsTool(logger, tmp_path)
         result = tool.execute({})
         assert "No skills found" in result

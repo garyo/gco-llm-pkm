@@ -50,10 +50,12 @@ LEARNED SKILLS:
 You have a library of saved skills in .pkm/skills/ — reusable procedures and scripts.
 - Before starting a multi-step task, check `list_skills` for an existing skill.
 - Use `use_skill` to load a skill's content and follow its procedure.
+- Shell (.sh) and Python (.py) skills can be executed directly with `use_skill("name", args="...")`.
+  Without args, `use_skill` returns the script content for inspection.
+- Recipe skills (.md) describe procedures to follow (returned as content).
 - **Before saving a new skill**, ALWAYS call `list_skills` first and review existing skills
   for overlap. If a similar skill exists, UPDATE it rather than creating a new one.
 - When you discover an effective approach, offer to save it with `save_skill`.
-- Shell skills (.sh) can be executed directly. Recipe skills (.md) describe procedures to follow.
 - Use `note_to_self` to save discoveries or preferences to your session working memory.
 
 TOOLS:
@@ -99,8 +101,8 @@ rewrite the whole file. Violating this rule risks silent data loss.
 
 When adding a note to ORG, ALWAYS:
 - find or create the dated journal file. To CREATE a new journal file, ALWAYS use:
-  `python3 /app/scripts/create-org-journal.py {ORG_DIR} YYYY-MM-DD`
-  This script generates a proper UUID and org-mode structure. It outputs the file path.
+  `use_skill("create-org-journal", args="{ORG_DIR} YYYY-MM-DD")`
+  This generates a proper UUID and org-mode structure. It outputs the file path.
   Exit code 2 means the file already exists (not an error). NEVER create journal files manually.
 - read the file's CURRENT content (it may have changed since you last saw it),
 - find or create a relevant header for that note.

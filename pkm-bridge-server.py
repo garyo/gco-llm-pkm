@@ -373,7 +373,7 @@ if context_retriever:
 # Register skill tools
 tool_registry.register(SaveSkillTool(logger, config.org_dir, config.dangerous_patterns))
 tool_registry.register(ListSkillsTool(logger, config.org_dir))
-tool_registry.register(UseSkillTool(logger, config.org_dir))
+tool_registry.register(UseSkillTool(logger, config.org_dir, config.dangerous_patterns))
 tool_registry.register(NoteToSelfTool(logger))
 tool_registry.register(ScheduleTaskTool(logger))
 logger.info("Skill, note_to_self, and schedule_task tools registered")

@@ -37,9 +37,12 @@ function renderSkillCard(skill: Skill, onRefresh: () => void): HTMLElement {
   card.className = 'bg-gray-800 rounded-lg border border-gray-700 overflow-hidden';
 
   const tags = (skill.tags || []).map(t => `<span class="px-1.5 py-0.5 bg-gray-700 text-gray-300 rounded text-xs">${esc(t)}</span>`).join(' ');
-  const typeBadge = skill.type === 'shell'
-    ? '<span class="px-1.5 py-0.5 bg-blue-900 text-blue-300 rounded text-xs font-medium">shell</span>'
-    : '<span class="px-1.5 py-0.5 bg-purple-900 text-purple-300 rounded text-xs font-medium">recipe</span>';
+  const typeBadgeMap: Record<string, string> = {
+    shell: '<span class="px-1.5 py-0.5 bg-blue-900 text-blue-300 rounded text-xs font-medium">shell</span>',
+    python: '<span class="px-1.5 py-0.5 bg-green-900 text-green-300 rounded text-xs font-medium">python</span>',
+    recipe: '<span class="px-1.5 py-0.5 bg-purple-900 text-purple-300 rounded text-xs font-medium">recipe</span>',
+  };
+  const typeBadge = typeBadgeMap[skill.type] || typeBadgeMap.recipe;
 
   card.innerHTML = `
     <div class="p-4">

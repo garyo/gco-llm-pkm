@@ -68,7 +68,7 @@ class InspectSkillsTool(BaseTool):
 
         if skill_name:
             # Read a specific skill
-            for ext in (".sh", ".md"):
+            for ext in (".sh", ".py", ".md"):
                 filepath = skills_dir / f"{skill_name}{ext}"
                 if filepath.exists():
                     parsed = _parse_skill_file(filepath)
@@ -79,7 +79,7 @@ class InspectSkillsTool(BaseTool):
         # List all skills
         skills = []
         for filepath in sorted(skills_dir.iterdir()):
-            if filepath.suffix not in (".sh", ".md"):
+            if filepath.suffix not in (".sh", ".py", ".md"):
                 continue
             parsed = _parse_skill_file(filepath)
             if parsed:
@@ -523,8 +523,8 @@ class WriteSkillTool(BaseTool):
                 },
                 "skill_type": {
                     "type": "string",
-                    "enum": ["shell", "recipe"],
-                    "description": "Type: 'shell' for .sh, 'recipe' for .md.",
+                    "enum": ["shell", "python", "recipe"],
+                    "description": "Type: 'shell' for .sh, 'python' for .py, 'recipe' for .md.",
                 },
                 "description": {"type": "string", "description": "What the skill does."},
                 "content": {"type": "string", "description": "Skill content."},
@@ -552,7 +552,7 @@ class WriteSkillTool(BaseTool):
             return "Error: skill_name must be 2-50 chars, kebab-case [a-z0-9-]."
 
         skills_dir = get_skills_dir(self.org_dir)
-        ext = ".sh" if skill_type == "shell" else ".md"
+        ext = {"shell": ".sh", "python": ".py", "recipe": ".md"}[skill_type]
         filepath = skills_dir / f"{skill_name}{ext}"
 
         # Check existing for preserving metadata
@@ -576,13 +576,16 @@ class WriteSkillTool(BaseTool):
         if skill_type == "shell":
             fm = _build_shell_frontmatter(metadata)
             file_content = fm + "\n#!/bin/bash\nset -euo pipefail\n\n" + content.strip() + "\n"
+        elif skill_type == "python":
+            fm = _build_shell_frontmatter(metadata)
+            file_content = fm + "\n#!/usr/bin/env python3\n\n" + content.strip() + "\n"
         else:
             fm = _build_md_frontmatter(metadata)
             file_content = fm + "\n\n" + content.strip() + "\n"
 
         filepath.write_text(file_content, encoding="utf-8")
 
-        if skill_type == "shell":
+        if skill_type in ("shell", "python"):
             filepath.chmod(filepath.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
 
         action = "Updated" if existing_metadata else "Created"
@@ -624,7 +627,7 @@ class DeleteSkillTool(BaseTool):
         skills_dir = get_skills_dir(self.org_dir)
 
         deleted = False
-        for ext in (".sh", ".md"):
+        for ext in (".sh", ".py", ".md"):
             filepath = skills_dir / f"{skill_name}{ext}"
             if filepath.exists():
                 filepath.unlink()

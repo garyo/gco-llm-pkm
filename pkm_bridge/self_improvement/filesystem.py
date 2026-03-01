@@ -6,6 +6,7 @@ the old .pkm-skills/ location.
 
 import os
 import shutil
+import stat
 from pathlib import Path
 
 
@@ -64,7 +65,63 @@ def ensure_pkm_structure(org_dir: str | Path | None = None) -> Path:
             # Create symlink: .pkm-skills -> .pkm/skills
             old_skills_dir.symlink_to(new_skills_dir)
 
+    # Seed built-in skills (e.g. create-org-journal.py)
+    seed_builtin_skills(pkm_dir.parent, pkm_dir / "skills")
+
     return pkm_dir
+
+
+def seed_builtin_skills(org_dir: Path, skills_dir: Path) -> None:
+    """Copy built-in scripts into .pkm/skills/ as seeded skills (only if missing).
+
+    Currently seeds:
+    - create-org-journal.py from scripts/create-org-journal.py
+    """
+    from ..tools.skills import _build_shell_frontmatter
+
+    skill_name = "create-org-journal"
+    target = skills_dir / f"{skill_name}.py"
+
+    if target.exists():
+        return
+
+    # Look for the source script in common locations
+    source = None
+    for candidate in [
+        Path("/app/scripts/create-org-journal.py"),  # Docker
+        Path(__file__).parent.parent.parent / "scripts" / "create-org-journal.py",  # Dev
+    ]:
+        if candidate.exists():
+            source = candidate
+            break
+
+    if source is None:
+        return
+
+    # Read the original script content (skip shebang if present)
+    script_content = source.read_text(encoding="utf-8")
+    lines = script_content.split("\n")
+    if lines and lines[0].startswith("#!"):
+        body = "\n".join(lines[1:])
+    else:
+        body = script_content
+
+    metadata = {
+        "name": skill_name,
+        "description": "Create an org-mode journal file with proper UUID and structure.",
+        "trigger": "user asks to add a note and no journal file exists for that date",
+        "tags": ["org", "journal", "builtin"],
+        "created": "2026-03-01T00:00:00Z",
+        "last_used": "2026-03-01T00:00:00Z",
+        "use_count": 0,
+    }
+
+    fm = _build_shell_frontmatter(metadata)
+    file_content = fm + "\n#!/usr/bin/env python3\n" + body
+
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    target.write_text(file_content, encoding="utf-8")
+    target.chmod(target.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
 
 
 def get_skills_dir(org_dir: str | Path | None = None) -> Path:

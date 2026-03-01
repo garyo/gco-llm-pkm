@@ -388,6 +388,19 @@ class DailyTokenUsage(Base):
         return f"<DailyTokenUsage(date='{self.date}', runs={self.task_runs})>"
 
 
+class McpClientRegistration(Base):
+    """Persist MCP OAuth client registrations across container restarts."""
+    __tablename__ = 'mcp_client_registrations'
+
+    client_id = Column(String(255), primary_key=True)
+    client_info_json = Column(Text, nullable=False)  # Serialized OAuthClientInformationFull
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<McpClientRegistration(client_id='{self.client_id}')>"
+
+
 class AgentRunLog(Base):
     """Lightweight log of self-improvement agent runs (for admin API)."""
     __tablename__ = 'agent_run_log'

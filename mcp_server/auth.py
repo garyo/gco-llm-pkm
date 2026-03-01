@@ -2,7 +2,10 @@
 
 Implements a minimal OAuth authorization server so Claude.ai desktop
 can authenticate via its standard OAuth flow. Uses a simple password
-check (from MCP_AUTH_PASSWORD env var) and in-memory token storage.
+check (from MCP_AUTH_PASSWORD env var).
+
+Tokens are signed JWTs (survive container restarts). Client registrations
+are persisted to PostgreSQL. Auth codes remain in-memory (short-lived).
 
 The server is behind Traefik with HTTPS at oberbrunner.com.
 """
@@ -12,7 +15,9 @@ import logging
 import os
 import secrets
 import time
+import uuid
 
+import jwt
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -35,26 +40,130 @@ ACCESS_TOKEN_TTL = 24 * 3600  # 24 hours
 REFRESH_TOKEN_TTL = 90 * 24 * 3600  # 90 days
 AUTH_CODE_TTL = 300  # 5 minutes
 
+JWT_ALGORITHM = "HS256"
+
+
+def _get_jwt_secret() -> str:
+    """Get JWT secret from environment."""
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        raise RuntimeError("JWT_SECRET environment variable is required for MCP OAuth")
+    return secret
+
 
 class PKMOAuthProvider(
     OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]
 ):
     """OAuth 2.1 provider for PKM MCP server.
 
-    Uses a simple password for authentication. Stores clients, codes,
-    and tokens in memory (fine for a single-user personal server).
+    Uses a simple password for authentication. Tokens are signed JWTs.
+    Client registrations are persisted to PostgreSQL.
+    Auth codes are in-memory (short-lived, consumed during same flow).
     """
 
     def __init__(self, server_url: str, password: str):
         self.server_url = server_url
         self.password = password
+        self.jwt_secret = _get_jwt_secret()
         # In-memory stores
         self.clients: dict[str, OAuthClientInformationFull] = {}
         self.auth_codes: dict[str, AuthorizationCode] = {}
-        self.access_tokens: dict[str, AccessToken] = {}
-        self.refresh_tokens: dict[str, RefreshToken] = {}
+        self.revoked_jtis: set[str] = set()  # Best-effort revocation (in-memory)
         # Maps state → authorization params for the login callback
         self.pending_auth: dict[str, dict[str, str | None]] = {}
+        # Load persisted client registrations from DB
+        self._load_clients_from_db()
+
+    def _load_clients_from_db(self) -> None:
+        """Load persisted client registrations from PostgreSQL."""
+        try:
+            from pkm_bridge.database import McpClientRegistration, get_db, init_db
+            init_db()
+            db = get_db()
+            try:
+                rows = db.query(McpClientRegistration).all()
+                for row in rows:
+                    client_info = OAuthClientInformationFull.model_validate_json(
+                        row.client_info_json
+                    )
+                    if client_info.client_id:
+                        self.clients[client_info.client_id] = client_info
+                if rows:
+                    logger.info(f"Loaded {len(rows)} client registrations from DB")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not load client registrations from DB: {e}")
+
+    def _save_client_to_db(self, client_info: OAuthClientInformationFull) -> None:
+        """Persist a client registration to PostgreSQL (upsert)."""
+        try:
+            from pkm_bridge.database import McpClientRegistration, get_db
+            db = get_db()
+            try:
+                existing = db.query(McpClientRegistration).filter_by(
+                    client_id=client_info.client_id
+                ).first()
+                json_data = client_info.model_dump_json()
+                if existing:
+                    existing.client_info_json = json_data
+                else:
+                    db.add(McpClientRegistration(
+                        client_id=client_info.client_id,
+                        client_info_json=json_data,
+                    ))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not persist client registration to DB: {e}")
+
+    def _encode_token(
+        self,
+        token_type: str,
+        client_id: str,
+        scopes: list[str],
+        ttl: int,
+        resource: str | None = None,
+    ) -> tuple[str, str]:
+        """Encode a JWT token. Returns (token_string, jti)."""
+        jti = str(uuid.uuid4())
+        now = int(time.time())
+        payload: dict = {
+            "type": token_type,
+            "sub": client_id,
+            "scopes": scopes,
+            "iat": now,
+            "exp": now + ttl,
+            "jti": jti,
+        }
+        if resource is not None:
+            payload["resource"] = resource
+        token_str = jwt.encode(payload, self.jwt_secret, algorithm=JWT_ALGORITHM)
+        return token_str, jti
+
+    def _decode_token(self, token_str: str, expected_type: str) -> dict | None:
+        """Decode and verify a JWT token. Returns payload or None."""
+        try:
+            payload = jwt.decode(
+                token_str, self.jwt_secret, algorithms=[JWT_ALGORITHM]
+            )
+        except jwt.ExpiredSignatureError:
+            logger.debug(f"Token expired ({expected_type})")
+            return None
+        except jwt.InvalidTokenError as e:
+            logger.debug(f"Invalid token ({expected_type}): {e}")
+            return None
+
+        if payload.get("type") != expected_type:
+            logger.debug(f"Token type mismatch: expected {expected_type}, got {payload.get('type')}")
+            return None
+
+        if payload.get("jti") in self.revoked_jtis:
+            logger.debug("Token has been revoked")
+            return None
+
+        return payload
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self.clients.get(client_id)
@@ -63,6 +172,7 @@ class PKMOAuthProvider(
         if not client_info.client_id:
             raise ValueError("No client_id provided")
         self.clients[client_info.client_id] = client_info
+        self._save_client_to_db(client_info)
         logger.info(f"Registered OAuth client: {client_info.client_id}")
 
     async def authorize(
@@ -173,26 +283,22 @@ class PKMOAuthProvider(
         # Remove used code (one-time use)
         self.auth_codes.pop(authorization_code.code, None)
 
-        # Generate tokens
-        access_token_str = secrets.token_urlsafe(48)
-        refresh_token_str = secrets.token_urlsafe(48)
-
-        self.access_tokens[access_token_str] = AccessToken(
-            token=access_token_str,
-            client_id=client.client_id or "",
-            scopes=authorization_code.scopes,
-            expires_at=int(time.time()) + ACCESS_TOKEN_TTL,
+        # Generate JWT tokens
+        access_token_str, _ = self._encode_token(
+            "access",
+            client.client_id or "",
+            authorization_code.scopes,
+            ACCESS_TOKEN_TTL,
             resource=authorization_code.resource,
         )
-
-        self.refresh_tokens[refresh_token_str] = RefreshToken(
-            token=refresh_token_str,
-            client_id=client.client_id or "",
-            scopes=authorization_code.scopes,
-            expires_at=int(time.time()) + REFRESH_TOKEN_TTL,
+        refresh_token_str, _ = self._encode_token(
+            "refresh",
+            client.client_id or "",
+            authorization_code.scopes,
+            REFRESH_TOKEN_TTL,
         )
 
-        logger.info(f"Issued access token for client {client.client_id}")
+        logger.info(f"Issued JWT access token for client {client.client_id}")
         return OAuthToken(
             access_token=access_token_str,
             token_type="Bearer",
@@ -202,20 +308,29 @@ class PKMOAuthProvider(
         )
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        access_token = self.access_tokens.get(token)
-        if access_token and access_token.expires_at and access_token.expires_at < time.time():
-            del self.access_tokens[token]
+        payload = self._decode_token(token, "access")
+        if payload is None:
             return None
-        return access_token
+        return AccessToken(
+            token=token,
+            client_id=payload["sub"],
+            scopes=payload.get("scopes", []),
+            expires_at=payload["exp"],
+            resource=payload.get("resource"),
+        )
 
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str
     ) -> RefreshToken | None:
-        rt = self.refresh_tokens.get(refresh_token)
-        if rt and rt.expires_at and rt.expires_at < time.time():
-            del self.refresh_tokens[refresh_token]
+        payload = self._decode_token(refresh_token, "refresh")
+        if payload is None:
             return None
-        return rt
+        return RefreshToken(
+            token=refresh_token,
+            client_id=payload["sub"],
+            scopes=payload.get("scopes", []),
+            expires_at=payload["exp"],
+        )
 
     async def exchange_refresh_token(
         self,
@@ -223,28 +338,27 @@ class PKMOAuthProvider(
         refresh_token: RefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        # Remove old refresh token
-        self.refresh_tokens.pop(refresh_token.token, None)
+        # Revoke old refresh token's JTI
+        old_payload = self._decode_token(refresh_token.token, "refresh")
+        if old_payload and old_payload.get("jti"):
+            self.revoked_jtis.add(old_payload["jti"])
 
         # Issue new tokens
-        new_access = secrets.token_urlsafe(48)
-        new_refresh = secrets.token_urlsafe(48)
         effective_scopes = scopes or refresh_token.scopes
-
-        self.access_tokens[new_access] = AccessToken(
-            token=new_access,
-            client_id=client.client_id or "",
-            scopes=effective_scopes,
-            expires_at=int(time.time()) + ACCESS_TOKEN_TTL,
+        new_access, _ = self._encode_token(
+            "access",
+            client.client_id or "",
+            effective_scopes,
+            ACCESS_TOKEN_TTL,
         )
-        self.refresh_tokens[new_refresh] = RefreshToken(
-            token=new_refresh,
-            client_id=client.client_id or "",
-            scopes=effective_scopes,
-            expires_at=int(time.time()) + REFRESH_TOKEN_TTL,
+        new_refresh, _ = self._encode_token(
+            "refresh",
+            client.client_id or "",
+            effective_scopes,
+            REFRESH_TOKEN_TTL,
         )
 
-        logger.info(f"Refreshed token for client {client.client_id}")
+        logger.info(f"Refreshed JWT token for client {client.client_id}")
         return OAuthToken(
             access_token=new_access,
             token_type="Bearer",
@@ -254,11 +368,15 @@ class PKMOAuthProvider(
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
-        if isinstance(token, AccessToken):
-            self.access_tokens.pop(token.token, None)
-        elif isinstance(token, RefreshToken):
-            self.refresh_tokens.pop(token.token, None)
-        logger.info("Token revoked")
+        # Extract JTI from the token string and add to revoked set
+        token_str = token.token
+        for token_type in ("access", "refresh"):
+            payload = self._decode_token(token_str, token_type)
+            if payload and payload.get("jti"):
+                self.revoked_jtis.add(payload["jti"])
+                logger.info(f"Revoked {token_type} token (jti={payload['jti']})")
+                return
+        logger.info("Token revoked (could not extract JTI)")
 
 
 def get_oauth_provider() -> PKMOAuthProvider | None:

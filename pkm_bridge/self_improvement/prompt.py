@@ -8,12 +8,13 @@ Builds the agent's system prompt from:
 5. Budget information
 """
 
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
 
 from .budget import Budget
-from .filesystem import MEMORY_CATEGORIES, read_memory_file
+from .filesystem import MEMORY_CATEGORIES, get_memory_dir, read_memory_file
 
 AGENT_SYSTEM_PROMPT = """\
 You are the self-improvement agent for a Personal Knowledge Management (PKM) system.
@@ -62,6 +63,10 @@ Inspect the system's recent activity and look for:
 4. **Always write_memory** with your observations before finishing, even if you take no actions.
    This is how you maintain continuity across runs.
 5. **Write rules_snapshot** at the end of each run for human visibility.
+6. **Manage memory size** — Each memory file should stay under 50KB. When the
+   run context shows a file approaching that limit, consolidate: summarize
+   older dated sections into a brief "## Historical Summary" at the top,
+   keeping the last ~7 days verbatim. Use `write_memory` with mode=replace.
 
 ## Budget
 
@@ -72,13 +77,76 @@ over minor tweaks. Quality over quantity.
 """
 
 
+_DATED_SECTION_RE = re.compile(r"^(## (\d{4}-\d{2}-\d{2}).*)", re.MULTILINE)
+
+
+def _truncate_dated_sections(content: str, keep_days: int = 7) -> str:
+    """Truncate old dated sections to heading-only for prompt injection.
+
+    Sections headed with ``## YYYY-MM-DD ...`` older than *keep_days* are
+    collapsed to just the heading line.  Recent sections and any preamble
+    (content before the first dated heading) are kept verbatim.
+
+    Returns the (possibly shortened) content string.
+    """
+    cutoff = datetime.utcnow().date() - timedelta(days=keep_days)
+
+    # Split into (preamble, [(heading_line, date_str, body), ...])
+    parts = _DATED_SECTION_RE.split(content)
+    # parts layout: [preamble, heading1, date1, rest_until_next_heading, heading2, date2, ...]
+    preamble = parts[0]
+    chunks: list[tuple[str, str, str]] = []
+    i = 1
+    while i < len(parts):
+        heading_line = parts[i]
+        date_str = parts[i + 1]
+        body = parts[i + 2] if i + 2 < len(parts) else ""
+        chunks.append((heading_line, date_str, body))
+        i += 3
+
+    if not chunks:
+        return content  # no dated sections, return as-is
+
+    collapsed_any = False
+    result_parts = [preamble.rstrip("\n")]
+    for heading_line, date_str, body in chunks:
+        try:
+            section_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            # Unparseable date — keep verbatim
+            result_parts.append(heading_line + body)
+            continue
+
+        if section_date >= cutoff:
+            result_parts.append(heading_line + body)
+        else:
+            # Collapse: heading only, no body
+            result_parts.append(heading_line)
+            collapsed_any = True
+
+    text = "\n\n".join(part for part in result_parts if part)
+
+    if collapsed_any:
+        text = (
+            "*Older entries collapsed to headings only. "
+            "Use `read_memory` to see full details.*\n\n" + text
+        )
+
+    return text
+
+
 def build_memory_section(org_dir: str | Path) -> str:
-    """Read all memory files and format them for the prompt."""
+    """Read all memory files and format them for the prompt.
+
+    Large files with dated ``## YYYY-MM-DD`` sections are truncated so only
+    the last 7 days appear in full; older sections are collapsed to headings.
+    """
     sections = []
     for category in MEMORY_CATEGORIES:
         content = read_memory_file(category, org_dir)
         if content:
-            sections.append(f"### {category}\n\n{content}")
+            truncated = _truncate_dated_sections(content)
+            sections.append(f"### {category}\n\n{truncated}")
 
     if not sections:
         return (
@@ -109,6 +177,12 @@ def build_run_context(stats: Dict[str, Any]) -> str:
     lines.append(f"- Active rules: {stats.get('active_rules', 0)}")
     lines.append(f"- Total skills: {stats.get('total_skills', 0)}")
     lines.append(f"- Current time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+
+    # Memory file sizes
+    mem_sizes = stats.get("memory_sizes")
+    if mem_sizes:
+        parts = [f"{cat}={sz}KB" for cat, sz in mem_sizes.items()]
+        lines.append(f"- Memory sizes: {', '.join(parts)} (target: <50KB each)")
 
     return "\n".join(lines)
 
@@ -196,6 +270,16 @@ def gather_run_stats(org_dir: str | Path) -> Dict[str, Any]:
         skills_dir = get_skills_dir(org_dir)
         skill_count = sum(1 for f in skills_dir.iterdir() if f.suffix in (".sh", ".md"))
         stats["total_skills"] = skill_count
+
+        # Memory file sizes (KB)
+        mem_dir = get_memory_dir(org_dir)
+        mem_sizes: Dict[str, int] = {}
+        for category in MEMORY_CATEGORIES:
+            fp = mem_dir / f"{category}.md"
+            if fp.exists():
+                mem_sizes[category] = fp.stat().st_size // 1024
+        if mem_sizes:
+            stats["memory_sizes"] = mem_sizes
 
     except Exception:
         # Don't fail the agent if stats gathering hits an error

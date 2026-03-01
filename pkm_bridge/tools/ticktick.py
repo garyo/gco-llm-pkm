@@ -94,7 +94,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 },
                 "due_date": {
                     "type": "string",
-                    "description": "Due date/time in ISO format. YYYY-MM-DD for all-day, YYYY-MM-DDTHH:MM:SS for timed"
+                    "description": "Due date/time in ISO format. YYYY-MM-DD for all-day, YYYY-MM-DDTHH:MM:SS for timed. Use 'none' to clear the due date."
                 },
                 "priority": {
                     "type": "integer",
@@ -532,8 +532,13 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 if 'due_date' in params:
                     due_date_str = params['due_date']
 
+                    # Clear due date if sentinel value
+                    if not due_date_str or due_date_str.lower() == 'none':
+                        updates['dueDate'] = None
+                        updates['startDate'] = None
+                        updates['isAllDay'] = False
                     # Determine if it's a timed task or all-day task
-                    if 'T' not in due_date_str:
+                    elif 'T' not in due_date_str:
                         due_date_obj = datetime.fromisoformat(due_date_str)
                         if user_timezone:
                             try:

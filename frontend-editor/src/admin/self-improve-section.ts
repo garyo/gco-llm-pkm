@@ -79,10 +79,20 @@ export function initSelfImproveSection(container: HTMLElement): void {
       const data = await getSelfImproveLog() as Record<string, unknown>;
       const parts: string[] = [];
 
-      // Last run result (from si_agent.last_run_result, may be a dict or null)
-      if (data.last_run && typeof data.last_run === 'object') {
+      // Most recent run: prefer first entry from recent_runs (from DB, always current)
+      // over last_run (in-memory, stale after server restart)
+      const recentRuns = (data.recent_runs && Array.isArray(data.recent_runs))
+        ? data.recent_runs as Array<Record<string, unknown>>
+        : [];
+      const latestRun = recentRuns.length > 0
+        ? recentRuns[0]
+        : (data.last_run && typeof data.last_run === 'object')
+          ? data.last_run as Record<string, unknown>
+          : null;
+
+      if (latestRun) {
         parts.push('=== Last Run ===');
-        parts.push(formatRunEntry(data.last_run as Record<string, unknown>));
+        parts.push(formatRunEntry(latestRun));
       }
 
       // Feedback stats
@@ -97,10 +107,10 @@ export function initSelfImproveSection(container: HTMLElement): void {
         }
       }
 
-      // Recent runs history
-      if (data.recent_runs && Array.isArray(data.recent_runs) && data.recent_runs.length > 0) {
+      // Recent runs history (skip first since it's already shown above)
+      if (recentRuns.length > 1) {
         parts.push('\n=== Recent Runs ===');
-        for (const run of data.recent_runs as Array<Record<string, unknown>>) {
+        for (const run of recentRuns.slice(1)) {
           const time = run.started_at || '?';
           const trigger = run.trigger ? ` (${run.trigger})` : '';
           const turns = run.turns_used != null ? `, ${run.turns_used} turns` : '';
@@ -116,6 +126,17 @@ export function initSelfImproveSection(container: HTMLElement): void {
     }
   }
 
+  /** Reverse dated ## sections so newest appears first. */
+  function reverseDateSections(text: string): string {
+    // Split on ## headings that start with a date (e.g. "## 2026-02-15 ...")
+    const parts = text.split(/(?=^## \d{4}-\d{2}-\d{2})/m);
+    if (parts.length <= 2) return text; // 0-1 dated sections, nothing to reverse
+    // parts[0] is the preamble (e.g. "# Title\n\n"), rest are dated sections
+    const preamble = parts[0];
+    const sections = parts.slice(1);
+    return preamble + sections.reverse().join('');
+  }
+
   async function loadMemory() {
     try {
       const data = await getSelfImproveMemory() as Record<string, unknown>;
@@ -129,7 +150,10 @@ export function initSelfImproveSection(container: HTMLElement): void {
       } else {
         memoryEl.textContent = entries
           .map(([name, content]) => {
-            const text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+            let text = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+            if (typeof content === 'string') {
+              text = reverseDateSections(text);
+            }
             return `=== ${name} ===\n${text}`;
           })
           .join('\n\n');

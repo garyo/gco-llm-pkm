@@ -39,7 +39,7 @@ class ListFilesTool(BaseTool):
             "properties": {
                 "pattern": {"type": "string", "description": "Glob pattern ('*.org', '**/*.org')"},
                 "show_stats": {"type": "boolean", "description": "Show sizes & mtimes", "default": False},
-                "directory": {"type": "string", "description": "org-mode (default), logseq, or both", "default": "org-mode"},
+                "directory": {"type": "string", "description": "Which directory: 'both' (default), 'org-mode', or 'logseq'", "default": "both"},
             }
         }
 
@@ -54,7 +54,7 @@ class ListFilesTool(BaseTool):
         """
         pattern = params.get("pattern", "*")
         show_stats = params.get("show_stats", False)
-        directory = params.get("directory", "org-mode")
+        directory = params.get("directory", "both")
 
         try:
             def list_from_dir(base_dir: Path, dir_label: str):

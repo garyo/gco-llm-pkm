@@ -217,7 +217,7 @@ def register_all_tools(mcp: FastMCP):
         context: int = 3,
         limit: int = 200000,
     ) -> str:
-        """Search PKM notes for a regex pattern. Returns matches from journals (newest first).
+        """Search PKM notes for a regex pattern. Returns matches from journals and pages (newest first).
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
@@ -288,14 +288,14 @@ def register_all_tools(mcp: FastMCP):
     def list_files(
         pattern: str = "*",
         show_stats: bool = False,
-        directory: str = "org-mode",
+        directory: str = "both",
     ) -> str:
         """List files in PKM directories.
 
         Args:
             pattern: Glob pattern (e.g., '*.org', '**/*.org')
             show_stats: Show file sizes and modification times
-            directory: Which directory: 'org-mode' (default), 'logseq', or 'both'
+            directory: Which directory: 'both' (default), 'org-mode', or 'logseq'
         """
         return _execute_tool("list_files", {
             "pattern": pattern,

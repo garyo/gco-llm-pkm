@@ -79,10 +79,25 @@ Directories:
             output_parts = []
             total_size = 0
 
-            journal_dirs = [f"{logseq_dir}/Personal/journals", f"{logseq_dir}/DSS/journals", f"{org_dir}/journals"]
-            # Search all journals (newest first via --sortr path on date-named files)
-            cmd = ["rg", "-i", "--sortr", "path", f"-C{context}", pattern, *journal_dirs]
-            self.logger.debug(f"Searching all journals: {cmd}")
+            # Build search dirs: org journals + all Logseq workspace journals & pages
+            search_dirs = [f"{org_dir}/journals"]
+            if logseq_dir:
+                logseq_path = Path(logseq_dir)
+                for workspace in sorted(logseq_path.iterdir()):
+                    if workspace.is_dir() and not workspace.name.startswith('.'):
+                        journals = workspace / "journals"
+                        pages = workspace / "pages"
+                        if journals.is_dir():
+                            search_dirs.append(str(journals))
+                        if pages.is_dir():
+                            search_dirs.append(str(pages))
+
+            # Filter to dirs that actually exist
+            search_dirs = [d for d in search_dirs if Path(d).is_dir()]
+
+            # Search all dirs (newest first via --sortr path on date-named files)
+            cmd = ["rg", "-i", "--sortr", "path", f"-C{context}", pattern, *search_dirs]
+            self.logger.debug(f"Searching {len(search_dirs)} dirs: {cmd}")
 
             stdout, stderr, returncode = run_command_with_error_handling(
                 cmd,

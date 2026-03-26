@@ -43,14 +43,15 @@ export function initCalendar(
   onDateClick: (dateKey: string, entry: { path: string; dir: string } | undefined) => void,
 ): void {
   const toggleBtn = document.getElementById('calendar-toggle-btn');
+  const toggleBtnMobile = document.getElementById('calendar-toggle-btn-mobile');
   const popup = document.getElementById('calendar-popup');
   const prevBtn = document.getElementById('cal-prev-month');
   const nextBtn = document.getElementById('cal-next-month');
   const grid = document.getElementById('cal-days-grid');
 
-  if (!toggleBtn || !popup) return;
+  if (!popup) return;
 
-  toggleBtn.addEventListener('click', (e) => {
+  const handleToggle = (e: Event) => {
     e.stopPropagation();
     const isHidden = popup.classList.contains('hidden');
     if (isHidden) {
@@ -60,7 +61,10 @@ export function initCalendar(
     } else {
       popup.classList.add('hidden');
     }
-  });
+  };
+
+  toggleBtn?.addEventListener('click', handleToggle);
+  toggleBtnMobile?.addEventListener('click', handleToggle);
 
   prevBtn?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -88,7 +92,10 @@ export function initCalendar(
     if (
       !popup.classList.contains('hidden') &&
       !popup.contains(e.target as Node) &&
-      e.target !== toggleBtn
+      e.target !== toggleBtn &&
+      e.target !== toggleBtnMobile &&
+      !toggleBtnMobile?.contains(e.target as Node) &&
+      !toggleBtn?.contains(e.target as Node)
     ) {
       popup.classList.add('hidden');
     }

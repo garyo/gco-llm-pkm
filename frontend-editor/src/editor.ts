@@ -58,11 +58,45 @@ export function createEditor(
     );
   }
 
-  return new EditorView({
+  const view = new EditorView({
     extensions,
     parent: container,
     doc: '',
   });
+
+  // On mobile, scroll the cursor into view when the editor gains focus
+  // (slight delay lets the keyboard animation finish)
+  view.contentDOM.addEventListener('focus', () => {
+    if (window.innerWidth < 768) {
+      setTimeout(() => {
+        const head = view.state.selection.main.head;
+        view.dispatch({
+          effects: EditorView.scrollIntoView(head, { y: 'center' }),
+        });
+      }, 300);
+    }
+  });
+
+  // On mobile, scroll the cursor into view when the virtual keyboard opens/closes
+  if (window.visualViewport) {
+    let prevHeight = window.visualViewport.height;
+    window.visualViewport.addEventListener('resize', () => {
+      const vv = window.visualViewport!;
+      // Keyboard opened (viewport shrank) — scroll cursor into view
+      if (vv.height < prevHeight && view.hasFocus) {
+        // Small delay to let the viewport settle
+        requestAnimationFrame(() => {
+          const head = view.state.selection.main.head;
+          view.dispatch({
+            effects: EditorView.scrollIntoView(head, { y: 'center' }),
+          });
+        });
+      }
+      prevHeight = vv.height;
+    });
+  }
+
+  return view;
 }
 
 /** Set editor content and optionally fold property drawers / scroll to line. */

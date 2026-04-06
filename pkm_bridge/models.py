@@ -38,7 +38,6 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
     # OpenAI (direct)
     {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "tier": "balanced"},
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "tier": "fast"},
-    {"id": "o3-mini", "name": "o3-mini", "provider": "openai", "tier": "reasoning"},
     # Google (direct)
     {
         "id": "gemini/gemini-2.5-flash", "name": "Gemini 2.5 Flash",
@@ -50,29 +49,12 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
     },
     # OpenRouter (many models behind one key)
     {
+        "id": "openrouter/deepseek/deepseek-r1", "name": "DeepSeek R1",
+        "provider": "openrouter", "tier": "reasoning",
+    },
+    {
         "id": "openrouter/deepseek/deepseek-chat-v3", "name": "DeepSeek V3",
-        "provider": "openrouter", "tier": "balanced",
-    },
-    {
-        "id": "openrouter/meta-llama/llama-3.1-70b-instruct",
-        "name": "Llama 3.1 70B", "provider": "openrouter", "tier": "balanced",
-    },
-    {
-        "id": "openrouter/mistralai/mistral-large-latest",
-        "name": "Mistral Large", "provider": "openrouter", "tier": "balanced",
-    },
-    # Ollama (local)
-    {
-        "id": "ollama/llama3.1:8b", "name": "Llama 3.1 8B (Local)",
-        "provider": "ollama", "tier": "fast",
-    },
-    {
-        "id": "ollama/qwen3:8b", "name": "Qwen 3 8B (Local)",
-        "provider": "ollama", "tier": "fast",
-    },
-    {
-        "id": "ollama/mistral:7b", "name": "Mistral 7B (Local)",
-        "provider": "ollama", "tier": "fast",
+        "provider": "openrouter", "tier": "fast",
     },
 ]
 

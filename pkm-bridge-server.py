@@ -730,8 +730,12 @@ def query():
         had_rag_context = False
         rag_context_chars = 0
 
-        # NEW: Auto-retrieve relevant note context for RAG
-        if context_retriever:
+        # Auto-retrieve relevant note context for RAG
+        # Skip for non-Anthropic models — their smaller context windows can't handle
+        # the base system prompt + tools + RAG together
+        if context_retriever and not is_anthropic(model):
+            logger.info("Skipping auto-RAG injection for non-Anthropic model (context window)")
+        if context_retriever and is_anthropic(model):
             try:
                 # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
                 # This provides temporal context for "what I did yesterday" queries
@@ -894,6 +898,13 @@ def query():
                     if not result or (isinstance(result, str) and not result.strip()):
                         result = "[Empty result]"
                         logger.warning(f"Tool {block.name} returned empty result")
+
+                    # Truncate large tool results for non-Anthropic models
+                    # to avoid blowing context windows (Anthropic has 200K+)
+                    if not is_anthropic(model) and len(result) > 20000:
+                        truncated_len = len(result)
+                        result = result[:20000] + f"\n\n[... truncated {truncated_len - 20000:,} chars — result too large for model context]"
+                        logger.warning(f"Truncated {block.name} result from {truncated_len:,} to 20,000 chars")
 
                     # Log if tool result contains an error
                     if result.startswith("❌"):

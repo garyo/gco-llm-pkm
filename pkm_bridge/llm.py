@@ -346,10 +346,13 @@ class LLMClient:
         # Translate messages (includes system prompt injection)
         openai_messages = _anthropic_messages_to_openai(messages, system=system)
 
+        # Cap output tokens for non-Anthropic models to leave room for context
+        capped_max_tokens = min(max_tokens, 4096)
+
         params: dict[str, Any] = {
             "model": model,
             "messages": openai_messages,
-            "max_tokens": max_tokens,
+            "max_tokens": capped_max_tokens,
         }
 
         # Translate and add tools if model supports them
@@ -358,7 +361,17 @@ class LLMClient:
         elif tools:
             logger.info(f"Model {model} may not support tools — skipping tool params")
 
-        logger.info(f"LiteLLM call to {model}")
+        # Dump full request to /tmp for debugging
+        try:
+            import datetime
+            dump_path = f"/tmp/litellm-request-{datetime.datetime.now():%Y%m%d-%H%M%S}.json"
+            with open(dump_path, "w") as f:
+                json.dump(params, f, indent=2, default=str)
+            logger.info(f"LiteLLM request dumped to {dump_path}")
+        except Exception as e:
+            logger.warning(f"Failed to dump LiteLLM request: {e}")
+
+        logger.info(f"LiteLLM call to {model} (max_tokens={capped_max_tokens})")
         response = litellm.completion(**params)
         return _openai_response_to_llm_response(response)
 

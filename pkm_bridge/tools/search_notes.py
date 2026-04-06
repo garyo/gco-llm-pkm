@@ -22,7 +22,8 @@ class SearchNotesTool(BaseTool):
         self.org_dir = org_dir
         self.logseq_dir = logseq_dir
         self.context = 3
-        self.limit = 200000  # Increased from 100k to 200k
+        self.default_limit = 10000
+        self.max_limit = 200000
 
     @property
     def name(self) -> str:
@@ -50,7 +51,7 @@ Directories:
             "properties": {
                 "pattern": {"type": "string", "description": "Regex pattern to search for"},
                 "context": {"type": "number", "default": 3, "description": "Lines of context to return on each side of each match"},
-                "limit": {"type": "number", "default": "10000", "description": "Approx length limit of returned strign"},
+                "limit": {"type": "number", "default": 10000, "description": "Approx character limit of returned results (max 200000)"},
             },
             "required": ["pattern"]
         }
@@ -66,9 +67,8 @@ Directories:
         """
         pattern = params["pattern"]
         context = params.get("context", self.context)
-        limit = params.get("limit", self.limit)
-        if limit < self.limit:
-            limit = self.limit  # Allow client to add more, but not less.
+        limit = params.get("limit", self.default_limit)
+        limit = min(max(int(limit), 100), self.max_limit)  # Clamp to [100, 200000]
         org_dir = params.get("org_dir", self.org_dir)
         logseq_dir = params.get("logseq_dir", self.logseq_dir)
 

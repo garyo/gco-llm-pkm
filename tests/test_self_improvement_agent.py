@@ -433,7 +433,7 @@ class TestAgentLoop:
     def test_single_turn_run(self, tmp_path: Path):
         """Agent makes one API call and gets a text response."""
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = self._make_mock_response("All looks good.")
+        mock_client.complete.return_value = self._make_mock_response("All looks good.")
 
         mock_config = MagicMock()
         mock_config.org_dir = str(tmp_path)
@@ -451,14 +451,14 @@ class TestAgentLoop:
         assert result["error"] is None
         assert result["trigger"] == "manual"
         assert "All looks good" in result["summary"]
-        assert mock_client.messages.create.call_count == 1
+        assert mock_client.complete.call_count == 1
 
     def test_tool_loop(self, tmp_path: Path):
         """Agent calls a tool, gets a result, then finishes."""
         mock_client = MagicMock()
         # First call: agent wants to read memory
         # Second call: agent finishes
-        mock_client.messages.create.side_effect = [
+        mock_client.complete.side_effect = [
             self._make_tool_response("read_memory", {}),
             self._make_mock_response("Reviewed memory, nothing to do."),
         ]
@@ -477,13 +477,13 @@ class TestAgentLoop:
             result = agent.run()
 
         assert result["error"] is None
-        assert mock_client.messages.create.call_count == 2
+        assert mock_client.complete.call_count == 2
 
     def test_budget_stops_agent(self, tmp_path: Path):
         """Agent stops when turns budget is exhausted."""
         mock_client = MagicMock()
         # Always return tool calls — agent should stop after max_turns
-        mock_client.messages.create.return_value = self._make_tool_response("read_memory", {})
+        mock_client.complete.return_value = self._make_tool_response("read_memory", {})
 
         mock_config = MagicMock()
         mock_config.org_dir = str(tmp_path)
@@ -504,7 +504,7 @@ class TestAgentLoop:
     def test_run_file_written(self, tmp_path: Path):
         """Agent writes a run log file to .pkm/runs/."""
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = self._make_mock_response("Done.")
+        mock_client.complete.return_value = self._make_mock_response("Done.")
 
         mock_config = MagicMock()
         mock_config.org_dir = str(tmp_path)
@@ -528,7 +528,7 @@ class TestAgentLoop:
         """Action tools are blocked when action budget is exhausted."""
         mock_client = MagicMock()
         # Agent tries write_memory (an action tool) twice, then finishes
-        mock_client.messages.create.side_effect = [
+        mock_client.complete.side_effect = [
             self._make_tool_response("write_memory", {"category": "observations", "content": "test"}, "t1"),
             self._make_tool_response("write_memory", {"category": "plans", "content": "test2"}, "t2"),
             self._make_mock_response("Done."),

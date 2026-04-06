@@ -22,6 +22,7 @@
 #   "voyageai>=0.2.0",
 #   "apscheduler>=3.10.0",
 #   "croniter>=1.3.0",
+#   "litellm>=1.50.0",
 # ]
 # ///
 """
@@ -38,6 +39,10 @@ from typing import Dict, Any
 
 from anthropic import Anthropic
 from flask import Flask, request, jsonify, render_template, send_from_directory
+from pkm_bridge.llm import LLMClient
+from pkm_bridge.models import (
+    get_anthropic_cost, get_available_models, get_role_model, is_anthropic,
+)
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import os
@@ -135,11 +140,12 @@ config = Config()
 # Setup logging
 logger = setup_logging(config.log_level)
 
-# Initialize Anthropic client
+# Initialize Anthropic client and multi-LLM adapter
 client = Anthropic(api_key=config.anthropic_api_key)
+llm_client = LLMClient(anthropic_client=client, config=config)
 
 # Initialize voice preprocessor
-voice_preprocessor = VoicePreprocessor(client)
+voice_preprocessor = VoicePreprocessor(llm_client)
 
 # Initialize STT client (optional - only if configured)
 stt_client = None
@@ -188,8 +194,8 @@ else:
     logger.warning("VOYAGE_API_KEY not set - RAG auto-injection disabled")
 
 # Initialize self-improvement agent (daily at 3 AM, replaces old retrospective)
-retrospective = SessionRetrospective(client, logger)  # kept for backward compat
-si_agent = SelfImprovementAgent(client, logger, config)
+retrospective = SessionRetrospective(llm_client, logger)
+si_agent = SelfImprovementAgent(llm_client, logger, config)
 
 # Master switch for scheduled task execution
 cron_enabled = os.environ.get('CRON_ENABLED', 'true').lower() in ('true', '1', 'yes')
@@ -381,7 +387,7 @@ logger.info("Skill, note_to_self, and schedule_task tools registered")
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
 # Initialize scheduled task executor and dispatcher
-task_executor = TaskExecutor(client, tool_registry, logger)
+task_executor = TaskExecutor(llm_client, tool_registry, logger)
 task_dispatcher = TaskDispatcher(task_executor, logger, org_dir=str(config.org_dir))
 
 # Ensure heartbeat task exists in DB
@@ -809,42 +815,35 @@ def query():
     validate_history(history)
 
     try:
-        # Build beta headers - include prompt caching for cost optimization
-        beta_features = ["prompt-caching-2024-07-31"]
-        if thinking:
-            beta_features.append("interleaved-thinking-2025-05-14")
-
-        # Get tools with caching enabled
+        # Get tools in Anthropic format (adapter translates for non-Anthropic)
         tools = tool_registry.get_anthropic_tools()
 
-        # Mark the last tool for caching (tools are relatively static)
-        if tools:
-            tools[-1]["cache_control"] = {"type": "ephemeral"}
-
-        # Build API call parameters
-        # System prompt is structured as blocks for optimal caching:
-        # - Block 1: Static instructions (cached)
-        # - Block 2: User context (cached)
-        # - Block 3: Today's date (NOT cached - changes daily)
-        # Tools are also cached as they rarely change
-        api_params = {
+        # Build API call parameters (LLMClient handles provider-specific details)
+        api_params: Dict[str, Any] = {
             "model": model,
             "max_tokens": 8192,
             "system": system_prompt_blocks,
             "messages": history,
             "tools": tools,
-            "extra_headers": {
-                "anthropic-beta": ",".join(beta_features)
-            }
         }
 
-        # Add thinking parameter if enabled
-        if thinking:
-            api_params["thinking"] = thinking
+        # Anthropic-specific: prompt caching and beta headers
+        if is_anthropic(model):
+            beta_features = ["prompt-caching-2024-07-31"]
+            if thinking:
+                beta_features.append("interleaved-thinking-2025-05-14")
+            api_params["extra_headers"] = {
+                "anthropic-beta": ",".join(beta_features)
+            }
+            # Mark the last tool for caching (tools are relatively static)
+            if tools:
+                tools[-1]["cache_control"] = {"type": "ephemeral"}
+            if thinking:
+                api_params["thinking"] = thinking
 
         # Initial call
-        with timer(f"Claude API call (initial, {model})"):
-            response = client.messages.create(**api_params)
+        with timer(f"LLM API call (initial, {model})"):
+            response = llm_client.complete(**api_params)
 
         api_call_count = 1
         tool_call_count = 0
@@ -947,8 +946,8 @@ def query():
             api_params["messages"] = history
 
             api_call_count += 1
-            with timer(f"Claude API call #{api_call_count} ({model})"):
-                response = client.messages.create(**api_params)
+            with timer(f"LLM API call #{api_call_count} ({model})"):
+                response = llm_client.complete(**api_params)
             accumulate_usage(response)
 
         # Final text
@@ -1018,34 +1017,18 @@ def query():
             logger=logger,
         )
 
-        # Calculate cost using accumulated totals and appropriate model rates
-        if model == 'claude-haiku-4-5':
-            # Haiku 4.5: $0.80/M input, $0.08/M cached, $4/M output
-            cost_input = (total_input_tokens * 0.80) / 1_000_000
-            cost_cache_write = (total_cache_write_tokens * 1.00) / 1_000_000
-            cost_cache_read = (total_cache_read_tokens * 0.08) / 1_000_000
-            cost_output = (total_output_tokens * 4.00) / 1_000_000
-        elif model in ('claude-sonnet-4-5', 'claude-sonnet-4-6'):
-            # Sonnet 4.5/4.6: $3/M input, $0.30/M cached, $15/M output
-            cost_input = (total_input_tokens * 3.00) / 1_000_000
-            cost_cache_write = (total_cache_write_tokens * 3.75) / 1_000_000
-            cost_cache_read = (total_cache_read_tokens * 0.30) / 1_000_000
-            cost_output = (total_output_tokens * 15.00) / 1_000_000
-        elif model in ('claude-opus-4-5', 'claude-opus-4-6'):
-            # Opus 4.5/4.6: $5/M input, $0.50/M cached, $25/M output
-            cost_input = (total_input_tokens * 5.00) / 1_000_000
-            cost_cache_write = (total_cache_write_tokens * 6.25) / 1_000_000
-            cost_cache_read = (total_cache_read_tokens * 0.50) / 1_000_000
-            cost_output = (total_output_tokens * 25.00) / 1_000_000
+        # Calculate cost — Anthropic models use our detailed rates (with cache tokens),
+        # non-Anthropic models use LiteLLM's built-in cost database
+        if is_anthropic(model):
+            request_cost = get_anthropic_cost(
+                model, total_input_tokens, total_output_tokens,
+                total_cache_write_tokens, total_cache_read_tokens,
+            )
         else:
-            # Unknown model, use Haiku rates as fallback
-            cost_input = (total_input_tokens * 0.80) / 1_000_000
-            cost_cache_write = (total_cache_write_tokens * 1.00) / 1_000_000
-            cost_cache_read = (total_cache_read_tokens * 0.08) / 1_000_000
-            cost_output = (total_output_tokens * 4.00) / 1_000_000
+            # For non-Anthropic, try LiteLLM cost; cache tokens are always 0
+            request_cost = llm_client.get_completion_cost(response, model) or 0.0
 
-        request_cost = cost_input + cost_cache_write + cost_cache_read + cost_output
-        logger.info(f"  Estimated cost: ${request_cost:.4f} (${cost_input:.4f} input + ${cost_cache_write:.4f} cache write + ${cost_cache_read:.4f} cached + ${cost_output:.4f} output)")
+        logger.info(f"  Estimated cost: ${request_cost:.4f} ({total_input_tokens} in, {total_output_tokens} out)")
 
         # Update session totals in database
         db = get_db()
@@ -1456,6 +1439,14 @@ def resolve_org_id(uuid_str):
 # -------------------------
 # User Settings Endpoints
 # -------------------------
+
+@app.route('/api/models', methods=['GET'])
+@auth_manager.require_auth
+@limiter.limit("30 per minute")
+def get_models():
+    """Return available LLM models (filtered by configured API keys)."""
+    return jsonify({"models": get_available_models()})
+
 
 @app.route('/api/user-context', methods=['GET'])
 @auth_manager.require_auth

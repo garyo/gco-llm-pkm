@@ -4,13 +4,18 @@ Cleans up voice transcriptions by removing disfluencies, false starts,
 and self-corrections to improve LLM comprehension.
 """
 
-from anthropic import Anthropic
-from typing import Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
 import logging
+
+from .models import get_role_model
+
+if TYPE_CHECKING:
+    from .llm import LLMClient
 
 # Configuration
 ENABLE_VOICE_PREPROCESSING = True  # Enable/disable voice preprocessing
-PREPROCESSING_MODEL = "claude-haiku-4-5"  # Fast and cheap model
 PREPROCESSING_MAX_TOKENS = 500  # Max tokens for cleaned output
 
 logger = logging.getLogger(__name__)
@@ -19,13 +24,13 @@ logger = logging.getLogger(__name__)
 class VoicePreprocessor:
     """Preprocesses voice transcriptions to clean up disfluencies."""
 
-    def __init__(self, anthropic_client: Anthropic):
+    def __init__(self, llm_client: LLMClient):
         """Initialize the preprocessor.
 
         Args:
-            anthropic_client: Initialized Anthropic client
+            llm_client: Initialized LLMClient
         """
-        self.client = anthropic_client
+        self.client = llm_client
 
     def preprocess(self, transcription: str) -> str:
         """Clean up a voice transcription.
@@ -64,14 +69,14 @@ Transcription:
 
 Cleaned version:"""
 
-            response = self.client.messages.create(
-                model=PREPROCESSING_MODEL,
+            response = self.client.complete(
+                model=get_role_model("voice"),
                 max_tokens=PREPROCESSING_MAX_TOKENS,
                 system=system_prompt,
                 messages=[{
                     "role": "user",
                     "content": user_prompt
-                }]
+                }],
             )
 
             cleaned = response.content[0].text.strip()

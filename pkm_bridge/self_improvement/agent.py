@@ -16,7 +16,7 @@ from .filesystem import ensure_pkm_structure, get_runs_dir
 from .meta_tools import create_action_tools, create_inspection_tools
 from .prompt import build_system_prompt, gather_run_stats
 
-AGENT_MODEL = "claude-sonnet-4-6"
+from ..models import get_role_model
 
 # Action tool names that consume the write budget
 ACTION_TOOL_NAMES = frozenset({
@@ -34,7 +34,7 @@ class SelfImprovementAgent:
 
     def __init__(
         self,
-        anthropic_client,
+        llm_client,
         logger: logging.Logger,
         config,
         *,
@@ -43,7 +43,7 @@ class SelfImprovementAgent:
         max_input_tokens: int = 500_000,
         max_output_tokens: int = 20_000,
     ):
-        self.client = anthropic_client
+        self.client = llm_client
         self.logger = logger
         self.config = config
         self.org_dir = Path(config.org_dir).expanduser()
@@ -205,14 +205,14 @@ class SelfImprovementAgent:
             # Agent loop
             while budget.can_continue:
                 api_params = {
-                    "model": AGENT_MODEL,
+                    "model": get_role_model("self_improvement"),
                     "max_tokens": 4096,
                     "system": system_prompt,
                     "messages": messages,
                     "tools": tools,
                 }
 
-                response = self.client.messages.create(**api_params)
+                response = self.client.complete(**api_params)
 
                 # Track token usage
                 input_tokens = getattr(response.usage, "input_tokens", 0)

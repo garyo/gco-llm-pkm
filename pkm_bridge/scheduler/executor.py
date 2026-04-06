@@ -7,22 +7,21 @@ by the ScheduledTask row (prompt, budget, allowed tools).
 import logging
 from typing import Any, Dict, List, Optional
 
+from ..models import get_role_model
 from ..self_improvement.budget import Budget
-
-EXECUTOR_MODEL = "claude-sonnet-4-6"
 
 
 class TaskExecutor:
-    """Run a scheduled task by sending its prompt to Claude with tools."""
+    """Run a scheduled task by sending its prompt to an LLM with tools."""
 
     def __init__(
         self,
-        anthropic_client,
+        llm_client,
         tool_registry,
         logger: logging.Logger,
         system_prompt: str = "",
     ):
-        self.client = anthropic_client
+        self.client = llm_client
         self.tool_registry = tool_registry
         self.logger = logger
         self.system_prompt = system_prompt
@@ -74,7 +73,7 @@ class TaskExecutor:
         try:
             while budget.can_continue:
                 api_params: Dict[str, Any] = {
-                    "model": EXECUTOR_MODEL,
+                    "model": get_role_model("scheduler"),
                     "max_tokens": 4096,
                     "messages": messages,
                 }
@@ -83,7 +82,7 @@ class TaskExecutor:
                 if tools:
                     api_params["tools"] = tools
 
-                response = self.client.messages.create(**api_params)
+                response = self.client.complete(**api_params)
 
                 input_tokens = getattr(response.usage, "input_tokens", 0)
                 output_tokens = getattr(response.usage, "output_tokens", 0)

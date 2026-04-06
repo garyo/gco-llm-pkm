@@ -517,6 +517,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     modelSelect.value = selectedModel;
     thinkingToggle.checked = thinkingEnabled;
     updateModelButtonHighlight();
+    loadAvailableModels(); // Fetch models from backend and populate dropdown
 
     // Always start on chat tab
     switchTab('chat');
@@ -601,26 +602,77 @@ import EditorInterface from '../components/EditorInterface.astro';
     localStorage.setItem('pkm-currentTab', tab);
   }
 
+  // Provider-based button color for model settings
+  const providerColors: Record<string, string[]> = {
+    anthropic: ['bg-green-400', 'hover:bg-green-500', 'text-green-900'],
+    openai: ['bg-blue-400', 'hover:bg-blue-500', 'text-blue-900'],
+    google: ['bg-yellow-400', 'hover:bg-yellow-500', 'text-yellow-900'],
+    openrouter: ['bg-purple-400', 'hover:bg-purple-500', 'text-purple-900'],
+    ollama: ['bg-gray-400', 'hover:bg-gray-500', 'text-gray-900'],
+  };
+  const allColorClasses = Object.values(providerColors).flat();
+
   // Update model button styling based on selected model
   function updateModelButtonHighlight() {
     const modelBtn = document.getElementById('model-settings-btn');
     if (!modelBtn) return;
 
-    // Remove all model color classes
-    const allClasses = [
-      'bg-gray-100', 'hover:bg-gray-200', 'text-gray-700',
-      'bg-green-400', 'hover:bg-green-500', 'text-green-900',
-      'bg-yellow-400', 'hover:bg-yellow-500', 'text-yellow-900',
-      'bg-red-400', 'hover:bg-red-500', 'text-red-900',
-    ];
-    modelBtn.classList.remove(...allClasses);
+    modelBtn.classList.remove(...allColorClasses);
 
-    if (selectedModel.includes('opus')) {
-      modelBtn.classList.add('bg-red-400', 'hover:bg-red-500', 'text-red-900');
-    } else if (selectedModel.includes('sonnet')) {
-      modelBtn.classList.add('bg-yellow-400', 'hover:bg-yellow-500', 'text-yellow-900');
-    } else {
-      modelBtn.classList.add('bg-green-400', 'hover:bg-green-500', 'text-green-900');
+    // Determine provider from the model ID or cached model list
+    let colors = providerColors.anthropic; // default
+    if (selectedModel.startsWith('claude-')) colors = providerColors.anthropic;
+    else if (selectedModel.startsWith('gpt-') || selectedModel.startsWith('o1') || selectedModel.startsWith('o3')) colors = providerColors.openai;
+    else if (selectedModel.startsWith('gemini/')) colors = providerColors.google;
+    else if (selectedModel.startsWith('openrouter/')) colors = providerColors.openrouter;
+    else if (selectedModel.startsWith('ollama/')) colors = providerColors.ollama;
+
+    modelBtn.classList.add(...colors);
+  }
+
+  // Fetch available models from backend and populate dropdown
+  async function loadAvailableModels() {
+    try {
+      const resp = await fetch('/api/models', {
+        headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {},
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const models = data.models as Array<{id: string; name: string; provider: string; tier: string}>;
+      if (!models || models.length === 0) return;
+
+      // Group by provider
+      const grouped: Record<string, typeof models> = {};
+      for (const m of models) {
+        if (!grouped[m.provider]) grouped[m.provider] = [];
+        grouped[m.provider].push(m);
+      }
+
+      // Rebuild dropdown
+      modelSelect.innerHTML = '';
+      for (const [provider, providerModels] of Object.entries(grouped)) {
+        const group = document.createElement('optgroup');
+        group.label = provider.charAt(0).toUpperCase() + provider.slice(1);
+        for (const m of providerModels) {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = m.name;
+          group.appendChild(opt);
+        }
+        modelSelect.appendChild(group);
+      }
+
+      // Restore saved selection (fall back to first option if saved model not available)
+      if (modelSelect.querySelector(`option[value="${selectedModel}"]`)) {
+        modelSelect.value = selectedModel;
+      } else {
+        modelSelect.value = models[0].id;
+        selectedModel = models[0].id;
+        localStorage.setItem('pkm-model', selectedModel);
+      }
+      updateModelButtonHighlight();
+    } catch (e) {
+      console.warn('Failed to load available models:', e);
     }
   }
 

@@ -15,7 +15,7 @@ from .db_repository import (
     LearnedRuleRepository, ToolExecutionLogExtendedRepository,
 )
 
-RETROSPECTIVE_MODEL = "claude-opus-4-6"
+from .models import get_role_model
 
 RETROSPECTIVE_PROMPT = """\
 You are a system analyst for a Personal Knowledge Management (PKM) assistant.
@@ -222,8 +222,8 @@ def _format_existing_rules(rules) -> str:
 class SessionRetrospective:
     """Runs daily retrospective analysis on query feedback and sessions."""
 
-    def __init__(self, anthropic_client, logger):
-        self.client = anthropic_client
+    def __init__(self, llm_client, logger):
+        self.client = llm_client
         self.logger = logger
         self.last_run_result: Optional[Dict[str, Any]] = None
 
@@ -288,8 +288,8 @@ class SessionRetrospective:
                 journal_context=journal_context,
             )
 
-            response = self.client.messages.create(
-                model=RETROSPECTIVE_MODEL,
+            response = self.client.complete(
+                model=get_role_model("retrospective"),
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
             )

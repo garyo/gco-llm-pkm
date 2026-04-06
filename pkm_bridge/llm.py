@@ -361,16 +361,6 @@ class LLMClient:
         elif tools:
             logger.info(f"Model {model} may not support tools — skipping tool params")
 
-        # Dump full request to /tmp for debugging
-        try:
-            import datetime
-            dump_path = f"/tmp/litellm-request-{datetime.datetime.now():%Y%m%d-%H%M%S}.json"
-            with open(dump_path, "w") as f:
-                json.dump(params, f, indent=2, default=str)
-            logger.info(f"LiteLLM request dumped to {dump_path}")
-        except Exception as e:
-            logger.warning(f"Failed to dump LiteLLM request: {e}")
-
         logger.info(f"LiteLLM call to {model} (max_tokens={capped_max_tokens})")
         response = litellm.completion(**params)
         return _openai_response_to_llm_response(response)

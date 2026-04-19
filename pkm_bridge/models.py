@@ -15,7 +15,7 @@ from typing import Any
 MODEL_ROLES: dict[str, str] = {
     "chat": os.getenv("MODEL_CHAT", os.getenv("MODEL", "claude-haiku-4-5")),
     "voice": os.getenv("MODEL_VOICE", "claude-haiku-4-5"),
-    "retrospective": os.getenv("MODEL_RETROSPECTIVE", "claude-opus-4-6"),
+    "retrospective": os.getenv("MODEL_RETROSPECTIVE", "claude-sonnet-4-6"),
     "scheduler": os.getenv("MODEL_SCHEDULER", "claude-sonnet-4-6"),
     "self_improvement": os.getenv("MODEL_SELF_IMPROVEMENT", "claude-sonnet-4-6"),
 }
@@ -34,7 +34,7 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
     # Anthropic (direct)
     {"id": "claude-haiku-4-5", "name": "Haiku 4.5", "provider": "anthropic", "tier": "fast"},
     {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "provider": "anthropic", "tier": "balanced"},
-    {"id": "claude-opus-4-6", "name": "Opus 4.6", "provider": "anthropic", "tier": "best"},
+    {"id": "claude-opus-4-7", "name": "Opus 4.7", "provider": "anthropic", "tier": "best"},
     # OpenAI (direct)
     {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "tier": "balanced"},
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "tier": "fast"},
@@ -122,6 +122,9 @@ ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
         "input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00,
     },
     "claude-opus-4-6": {
+        "input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00,
+    },
+    "claude-opus-4-7": {
         "input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00,
     },
 }

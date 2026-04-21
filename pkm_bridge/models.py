@@ -56,6 +56,18 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
         "id": "openrouter/deepseek/deepseek-chat-v3", "name": "DeepSeek V3",
         "provider": "openrouter", "tier": "fast",
     },
+    {
+        "id": "openrouter/qwen/qwen3.6-max-preview", "name": "Qwen3.6 Max (preview)",
+        "provider": "openrouter", "tier": "best",
+    },
+    {
+        "id": "openrouter/qwen/qwen3.6-plus", "name": "Qwen3.6 Plus",
+        "provider": "openrouter", "tier": "balanced",
+    },
+    {
+        "id": "openrouter/z-ai/glm-5.1", "name": "GLM 5.1",
+        "provider": "openrouter", "tier": "balanced",
+    },
 ]
 
 

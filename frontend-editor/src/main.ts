@@ -5,7 +5,7 @@ import { debounce, fetchWithTimeout, getAuthHeaders } from './utils';
 import { checkAuth, handleLogin, showLogin, showEditor, showAdmin } from './auth';
 import { initAdmin } from './admin/admin-page';
 import * as api from './api';
-import { createEditor, setEditorContent } from './editor';
+import { createEditor, setEditorContent } from '@pkm/editor/createEditor';
 import {
   filterAndPopulateFiles,
   buildJournalDates,

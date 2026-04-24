@@ -8,9 +8,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Packages that shared/editor imports. Aliased to this app's node_modules so
 // Vite can resolve them when bundling files outside frontend-editor/.
 const SHARED_EDITOR_DEPS = [
+  'codemirror',
   '@codemirror/view',
   '@codemirror/state',
   '@codemirror/language',
+  '@codemirror/lang-markdown',
+  '@codemirror/theme-one-dark',
+  '@replit/codemirror-emacs',
   '@lezer/highlight',
 ];
 

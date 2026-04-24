@@ -10,6 +10,7 @@ RUN npm install -g bun
 COPY frontend/package.json frontend/bun.lockb ./
 RUN bun install
 
+COPY shared/ /app/shared/
 COPY frontend/ ./
 COPY config/ ../config/
 
@@ -27,6 +28,7 @@ RUN npm install -g bun
 COPY frontend-editor/package.json frontend-editor/bun.lockb* ./
 RUN bun install
 
+COPY shared/ /app/shared/
 COPY frontend-editor/ ./
 RUN bun run build
 

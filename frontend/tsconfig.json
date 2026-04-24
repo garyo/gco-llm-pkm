@@ -1,5 +1,15 @@
 {
   "extends": "astro/tsconfigs/strict",
-  "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist"]
+  "include": [".astro/types.d.ts", "**/*", "../shared/editor/**/*.ts"],
+  "exclude": ["dist"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@pkm/editor/*": ["../shared/editor/*"],
+      "@codemirror/*": ["./node_modules/@codemirror/*"],
+      "@lezer/*": ["./node_modules/@lezer/*"],
+      "@replit/*": ["./node_modules/@replit/*"],
+      "codemirror": ["./node_modules/codemirror"]
+    }
+  }
 }

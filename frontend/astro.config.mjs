@@ -3,6 +3,23 @@ import { defineConfig } from 'astro/config';
 
 import tailwindcss from '@tailwindcss/vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Packages that shared/editor imports. Aliased to this app's node_modules so
+// Vite can resolve them when bundling files from outside the frontend/ root.
+const SHARED_EDITOR_DEPS = [
+  'codemirror',
+  '@codemirror/view',
+  '@codemirror/state',
+  '@codemirror/language',
+  '@codemirror/lang-markdown',
+  '@codemirror/theme-one-dark',
+  '@replit/codemirror-emacs',
+  '@lezer/highlight',
+];
 
 // https://astro.build/config
 export default defineConfig({
@@ -20,6 +37,14 @@ export default defineConfig({
   },
 
   vite: {
+    resolve: {
+      alias: {
+        '@pkm/editor': path.resolve(__dirname, '../shared/editor'),
+        ...Object.fromEntries(
+          SHARED_EDITOR_DEPS.map((p) => [p, path.resolve(__dirname, 'node_modules', p)]),
+        ),
+      },
+    },
     plugins: [
       tailwindcss(),
       viteStaticCopy({

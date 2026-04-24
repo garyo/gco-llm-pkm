@@ -784,6 +784,12 @@
   const MAX_RECONNECT_DELAY = 30000;  // Cap reconnect delay at 30 seconds
   let lastResumeRefresh: number = 0;  // Debounce visibility+focus double-fire
 
+  function keyboardOverlap(): number {
+    if (!window.visualViewport) return 0;
+    const vv = window.visualViewport;
+    return Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+  }
+
   // State
   let editorView: EditorView | null = null;
   let currentFile: string | null = null;
@@ -981,7 +987,9 @@
       // Add bottom padding and font size for easier mobile editing
       EditorView.theme({
         ".cm-scroller": {
-          paddingBottom: "10vh",
+          // Leaves room to scroll the cursor above the on-screen keyboard
+          // even when the cursor is near the end of the document.
+          paddingBottom: "50vh",
           fontSize: "16px"
         },
         // Larger font on mobile
@@ -991,6 +999,9 @@
           }
         }
       }),
+      // Dynamic scroll margin reflecting the on-screen keyboard, so
+      // scrollIntoView keeps the cursor out of the keyboard-obscured region.
+      EditorView.scrollMargins.of(() => ({ bottom: keyboardOverlap() + 20 })),
       // Enable auto-capitalization on mobile keyboards
       EditorView.contentAttributes.of({
         autocapitalize: 'on',
@@ -1023,7 +1034,7 @@
           if (!editorView) return;
           const head = editorView.state.selection.main.head;
           editorView.dispatch({
-            effects: EditorView.scrollIntoView(head, { y: 'center' }),
+            effects: EditorView.scrollIntoView(head, { y: 'nearest' }),
           });
         }, 300);
       }
@@ -1039,7 +1050,7 @@
             if (!editorView) return;
             const head = editorView.state.selection.main.head;
             editorView.dispatch({
-              effects: EditorView.scrollIntoView(head, { y: 'center' }),
+              effects: EditorView.scrollIntoView(head, { y: 'nearest' }),
             });
           });
         }

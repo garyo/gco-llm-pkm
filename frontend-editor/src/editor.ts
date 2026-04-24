@@ -32,7 +32,9 @@ export function createEditor(
     }),
     EditorView.theme({
       '.cm-scroller': {
-        paddingBottom: '10vh',
+        // Leaves room to scroll the cursor above the on-screen keyboard even
+        // when the cursor is near the end of the document.
+        paddingBottom: '50vh',
         fontSize: '16px',
       },
       '@media (max-width: 768px)': {
@@ -41,6 +43,10 @@ export function createEditor(
         },
       },
     }),
+    // Dynamic scroll margin reflecting the on-screen keyboard. CodeMirror uses
+    // this to keep the cursor out of the keyboard-obscured region when
+    // scrollIntoView runs.
+    EditorView.scrollMargins.of(() => ({ bottom: keyboardOverlap() + 20 })),
     EditorView.contentAttributes.of({
       autocapitalize: 'on',
       autocorrect: 'on',
@@ -64,31 +70,32 @@ export function createEditor(
     doc: '',
   });
 
-  // On mobile, scroll the cursor into view when the editor gains focus
-  // (slight delay lets the keyboard animation finish)
+  // On mobile, scroll the cursor into view when the editor gains focus.
+  // 'nearest' + the dynamic bottom scroll margin above keeps the tapped line
+  // where it was unless it would be hidden by the keyboard.
   view.contentDOM.addEventListener('focus', () => {
     if (window.innerWidth < 768) {
       setTimeout(() => {
         const head = view.state.selection.main.head;
         view.dispatch({
-          effects: EditorView.scrollIntoView(head, { y: 'center' }),
+          effects: EditorView.scrollIntoView(head, { y: 'nearest' }),
         });
       }, 300);
     }
   });
 
-  // On mobile, scroll the cursor into view when the virtual keyboard opens/closes
+  // When the virtual keyboard opens (visualViewport shrinks), re-scroll so
+  // the cursor is not under the keyboard. The scroll margin above reserves
+  // keyboard-sized space at the bottom, so 'nearest' does the right thing.
   if (window.visualViewport) {
     let prevHeight = window.visualViewport.height;
     window.visualViewport.addEventListener('resize', () => {
       const vv = window.visualViewport!;
-      // Keyboard opened (viewport shrank) — scroll cursor into view
       if (vv.height < prevHeight && view.hasFocus) {
-        // Small delay to let the viewport settle
         requestAnimationFrame(() => {
           const head = view.state.selection.main.head;
           view.dispatch({
-            effects: EditorView.scrollIntoView(head, { y: 'center' }),
+            effects: EditorView.scrollIntoView(head, { y: 'nearest' }),
           });
         });
       }
@@ -97,6 +104,12 @@ export function createEditor(
   }
 
   return view;
+}
+
+function keyboardOverlap(): number {
+  if (!window.visualViewport) return 0;
+  const vv = window.visualViewport;
+  return Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
 }
 
 /** Set editor content and optionally fold property drawers / scroll to line. */

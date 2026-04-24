@@ -145,7 +145,7 @@ async function loadFile(filepath: string): Promise<void> {
     const data = await api.loadFile(filepath);
 
     if (state.editorView) state.editorView.destroy();
-    state.editorView = createEditor(editorContainer, filepath, state, onDocChanged);
+    state.editorView = createEditor(editorContainer, filepath, onDocChanged);
     setEditorContent(state.editorView, data.content, filepath, state.pendingScrollLine);
     state.pendingScrollLine = null;
 

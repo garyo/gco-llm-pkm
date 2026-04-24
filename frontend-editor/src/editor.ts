@@ -3,17 +3,15 @@ import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { emacs } from '@replit/codemirror-emacs';
 import { syntaxHighlighting } from '@codemirror/language';
-import type { EditorState } from './types';
-import { orgMode, orgHighlightStyle } from './org-mode';
-import { orgFoldService, autoFoldPropertyDrawers } from './org-fold';
-import { orgImageField } from './org-images';
-import { orgLinkField, createOrgLinkClickHandler } from './org-links';
+import { orgMode, orgHighlightStyle } from '@pkm/editor/org-mode';
+import { orgFoldService, autoFoldPropertyDrawers } from '@pkm/editor/org-fold';
+import { orgImageField } from '@pkm/editor/org-images';
+import { orgLinkField, createOrgLinkClickHandler } from '@pkm/editor/org-links';
 
 /** Create and mount a CodeMirror editor for the given file. */
 export function createEditor(
   container: HTMLElement,
   filepath: string,
-  state: EditorState,
   onDocChanged: () => void,
 ): EditorView {
   const isOrg = filepath.endsWith('.org');
@@ -60,7 +58,7 @@ export function createEditor(
       orgFoldService,
       orgImageField,
       orgLinkField,
-      createOrgLinkClickHandler(state),
+      createOrgLinkClickHandler(),
     );
   }
 

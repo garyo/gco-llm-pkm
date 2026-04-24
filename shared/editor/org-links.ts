@@ -4,7 +4,6 @@ import { StateField } from '@codemirror/state';
 import type { EditorState as CMEditorState, Text, Range } from '@codemirror/state';
 import { findHeadingId } from './org-images';
 import { STORAGE_KEYS } from './types';
-import type { EditorState } from './types';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']);
 
@@ -90,7 +89,6 @@ function openOrgLinkTarget(
   view: EditorView,
   pos: number,
   event: MouseEvent,
-  _state: EditorState,
 ): boolean {
   // External URLs
   if (target.startsWith('http://') || target.startsWith('https://')) {
@@ -138,8 +136,11 @@ function openOrgLinkTarget(
   return false;
 }
 
-/** Create a click handler for org links. Requires shared state for navigation. */
-export function createOrgLinkClickHandler(state: EditorState) {
+/**
+ * Click handler for org links. Navigation is emitted as a window CustomEvent
+ * ('editor:navigate'); each consumer app listens and routes.
+ */
+export function createOrgLinkClickHandler() {
   return EditorView.domEventHandlers({
     mousedown(event: MouseEvent, view: EditorView) {
       // Folded link widgets: click directly (no modifier needed) since
@@ -150,7 +151,7 @@ export function createOrgLinkClickHandler(state: EditorState) {
         const target = widgetEl.title;
         if (target) {
           const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-          if (openOrgLinkTarget(target, view, pos ?? 0, event, state)) return true;
+          if (openOrgLinkTarget(target, view, pos ?? 0, event)) return true;
         }
       }
 
@@ -171,7 +172,7 @@ export function createOrgLinkClickHandler(state: EditorState) {
         const linkStart = match.index;
         const linkEnd = linkStart + match[0].length;
         if (lineOffset >= linkStart && lineOffset <= linkEnd) {
-          if (openOrgLinkTarget(match[1], view, pos, event, state)) return true;
+          if (openOrgLinkTarget(match[1], view, pos, event)) return true;
         }
       }
       return false;

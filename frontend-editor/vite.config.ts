@@ -1,9 +1,30 @@
 import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Packages that shared/editor imports. Aliased to this app's node_modules so
+// Vite can resolve them when bundling files outside frontend-editor/.
+const SHARED_EDITOR_DEPS = [
+  '@codemirror/view',
+  '@codemirror/state',
+  '@codemirror/language',
+  '@lezer/highlight',
+];
 
 export default defineConfig({
   base: '/editor/',
   plugins: [tailwindcss()],
+  resolve: {
+    alias: {
+      '@pkm/editor': path.resolve(__dirname, '../shared/editor'),
+      ...Object.fromEntries(
+        SHARED_EDITOR_DEPS.map((p) => [p, path.resolve(__dirname, 'node_modules', p)]),
+      ),
+    },
+  },
   build: {
     outDir: '../editor-dist',
     emptyOutDir: true,

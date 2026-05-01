@@ -169,7 +169,11 @@ if voyage_api_key:
     try:
         voyage_client = VoyageClient(api_key=voyage_api_key)
         context_retriever = ContextRetriever(voyage_client)
-        logger.info("RAG auto-injection enabled (Voyage AI)")
+        logger.info(
+            f"Voyage AI client initialized "
+            f"(RAG auto-injection: {'on' if rag_auto_inject else 'off'}, "
+            f"semantic_search tool: on)"
+        )
 
         # Initialize background scheduler for periodic embedding
         # Guard against Flask debug reloader: in debug mode, Werkzeug forks a child

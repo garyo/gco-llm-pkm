@@ -157,6 +157,10 @@ except ValueError as e:
 # Initialize RAG components (if Voyage API key available)
 voyage_api_key = os.getenv('VOYAGE_API_KEY')
 rag_recent_days = int(os.getenv('RAG_RECENT_DAYS', '3'))  # Number of recent days to include
+# Auto-inject RAG context (semantic + recent journals) into the system prompt on every /query.
+# Off by default — semantic_search is still available as an explicit tool. False-similarity matches
+# tend to mislead more than help, and the context is uncached so it adds tokens to every turn.
+rag_auto_inject = os.getenv('RAG_AUTO_INJECT', 'false').lower() in ('true', '1', 'yes')
 voyage_client = None
 context_retriever = None
 embedding_scheduler = None
@@ -221,13 +225,14 @@ if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
             func=si_agent.run,
             trigger="cron",
             hour=3,
+            day='*/2',
             timezone=config.timezone,
             id='self_improvement',
-            name='Daily self-improvement agent',
+            name='Self-improvement agent (every other day)',
             replace_existing=True,
             misfire_grace_time=7200  # Allow 2 hour grace
         )
-        logger.info(f"Self-improvement agent scheduled (daily at 3 AM {config.timezone})")
+        logger.info(f"Self-improvement agent scheduled (every other day at 3 AM {config.timezone})")
     else:
         logger.info("Self-improvement cron skipped in debug mode (runs only in production)")
 
@@ -735,7 +740,7 @@ def query():
         # the base system prompt + tools + RAG together
         if context_retriever and not is_anthropic(model):
             logger.info("Skipping auto-RAG injection for non-Anthropic model (context window)")
-        if context_retriever and is_anthropic(model):
+        if context_retriever and is_anthropic(model) and rag_auto_inject:
             try:
                 # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
                 # This provides temporal context for "what I did yesterday" queries

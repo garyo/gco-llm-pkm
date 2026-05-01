@@ -16,7 +16,7 @@ from .filesystem import ensure_pkm_structure, get_runs_dir
 from .meta_tools import create_action_tools, create_inspection_tools
 from .prompt import build_system_prompt, gather_run_stats
 
-from ..models import get_role_model
+from ..models import get_role_model, supports_caching
 
 # Action tool names that consume the write budget
 ACTION_TOOL_NAMES = frozenset({
@@ -201,16 +201,36 @@ class SelfImprovementAgent:
         tools = registry.get_anthropic_tools()
         agent_summary = ""
 
+        model = get_role_model("self_improvement")
+        # Cache the static parts (system prompt + tools) so re-sending them
+        # each turn costs ~10% of the full input rate.
+        if supports_caching(model):
+            system_blocks = [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+            if tools:
+                tools[-1]["cache_control"] = {"type": "ephemeral"}
+            extra_headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
+        else:
+            system_blocks = system_prompt
+            extra_headers = None
+
         try:
             # Agent loop
             while budget.can_continue:
                 api_params = {
-                    "model": get_role_model("self_improvement"),
+                    "model": model,
                     "max_tokens": 4096,
-                    "system": system_prompt,
+                    "system": system_blocks,
                     "messages": messages,
                     "tools": tools,
                 }
+                if extra_headers:
+                    api_params["extra_headers"] = extra_headers
 
                 response = self.client.complete(**api_params)
 

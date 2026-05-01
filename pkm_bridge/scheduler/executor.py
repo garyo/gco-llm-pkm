@@ -7,7 +7,7 @@ by the ScheduledTask row (prompt, budget, allowed tools).
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..models import get_role_model
+from ..models import get_role_model, supports_caching
 from ..self_improvement.budget import Budget
 
 
@@ -70,17 +70,38 @@ class TaskExecutor:
 
         agent_summary = ""
 
+        model = get_role_model("scheduler")
+        # Cache the static parts (system prompt + tools) so multi-turn loops
+        # only pay full price for the system/tools on the first call.
+        cache_enabled = supports_caching(model)
+        if cache_enabled and self.system_prompt:
+            system_param: Any = [
+                {
+                    "type": "text",
+                    "text": self.system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        else:
+            system_param = self.system_prompt
+        if cache_enabled and tools:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
+
         try:
             while budget.can_continue:
                 api_params: Dict[str, Any] = {
-                    "model": get_role_model("scheduler"),
+                    "model": model,
                     "max_tokens": 4096,
                     "messages": messages,
                 }
-                if self.system_prompt:
-                    api_params["system"] = self.system_prompt
+                if system_param:
+                    api_params["system"] = system_param
                 if tools:
                     api_params["tools"] = tools
+                if cache_enabled:
+                    api_params["extra_headers"] = {
+                        "anthropic-beta": "prompt-caching-2024-07-31"
+                    }
 
                 response = self.client.complete(**api_params)
 

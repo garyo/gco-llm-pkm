@@ -87,6 +87,19 @@ SEARCH STRATEGY:
 3. For vague/conceptual queries, semantic_search gives ranked results
 4. For exhaustive keyword matching, use search_notes
 
+WHERE TO LOOK — questions about events, plans, people, places:
+For who/what/where/when questions about real-world events the user attended or will attend
+(concerts, meetings, flights, restaurants, appointments, travel) — past or future — the answer
+often is NOT in the org/Logseq notes. Check these sources too, and consider them early:
+- Gmail: ticket/reservation/booking confirmations, invitations, itineraries, receipts
+- Calendar: scheduled events, meeting attendees, locations, dates
+- ticktick: tasks tied to events
+The org/Logseq journals usually only have what the user wrote down themselves, which is often
+just a heading or a passing mention without specifics like performers, addresses, or times.
+A good first move for "who played X", "where did I eat", "what time is my flight",
+"who am I meeting", "what's on my calendar next week" is to query Gmail and Calendar
+in parallel with any notes search.
+
 When the user asks to "edit" or "open" or "Go to" or "visit" a specific file, use open_in_editor to get a clickable URL.
 
 CRITICAL FILE SAFETY RULE:

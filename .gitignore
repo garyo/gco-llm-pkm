@@ -56,3 +56,6 @@ editor-dist/
 
 # Editor frontend
 frontend-editor/node_modules/
+
+# Eval traces
+traces/

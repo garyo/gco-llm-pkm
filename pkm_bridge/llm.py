@@ -98,6 +98,11 @@ def _anthropic_messages_to_openai(
     - Text content blocks → plain string content
     - tool_use blocks → tool_calls on assistant message
     - tool_result blocks → tool role messages
+
+    Reasoning content (DeepSeek-style) is replayed only on the most recent
+    assistant message — that's the one the model is "continuing" from. Older
+    assistant turns are completed thoughts and don't need their reasoning
+    preserved, which keeps the request small in long tool loops.
     """
     openai_msgs: list[dict] = []
 
@@ -115,12 +120,20 @@ def _anthropic_messages_to_openai(
             sys_text = str(system)
         openai_msgs.append({"role": "system", "content": sys_text})
 
-    for msg in messages:
+    # Find the last assistant message — only its reasoning gets replayed
+    last_assistant_idx = -1
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "assistant":
+            last_assistant_idx = i
+
+    for i, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content")
 
         if role == "assistant":
-            openai_msg = _translate_assistant_message(content)
+            openai_msg = _translate_assistant_message(
+                content, include_reasoning=(i == last_assistant_idx)
+            )
             openai_msgs.append(openai_msg)
 
         elif role == "user":
@@ -164,8 +177,13 @@ def _anthropic_messages_to_openai(
     return openai_msgs
 
 
-def _translate_assistant_message(content: Any) -> dict:
-    """Translate an assistant message's content to OpenAI format."""
+def _translate_assistant_message(content: Any, *, include_reasoning: bool = True) -> dict:
+    """Translate an assistant message's content to OpenAI format.
+
+    `include_reasoning=False` drops any reasoning content blocks — used for
+    older assistant messages in a multi-turn history (only the most recent
+    one needs its reasoning replayed for SiliconFlow et al.).
+    """
     if isinstance(content, str):
         return {"role": "assistant", "content": content}
 
@@ -174,6 +192,7 @@ def _translate_assistant_message(content: Any) -> dict:
 
     text_parts = []
     tool_calls = []
+    reasoning_parts = []
 
     for block in content:
         if not isinstance(block, dict):
@@ -191,11 +210,21 @@ def _translate_assistant_message(content: Any) -> dict:
                     "arguments": json.dumps(block.get("input", {})),
                 },
             })
-        # Skip thinking blocks
+        elif btype == "reasoning":
+            reasoning_parts.append(block.get("text", ""))
+        # Skip Anthropic-native 'thinking' blocks (different on-wire format)
 
     msg: dict[str, Any] = {"role": "assistant", "content": "\n".join(text_parts) or None}
     if tool_calls:
         msg["tool_calls"] = tool_calls
+    if reasoning_parts and include_reasoning:
+        # Reasoning models (DeepSeek R1/V4, etc.) require any reasoning content
+        # the model emitted to be echoed back on the next turn. OpenRouter
+        # normalizes the field to `reasoning`; some providers want `reasoning_content`.
+        reasoning = "\n".join(p for p in reasoning_parts if p)
+        if reasoning:
+            msg["reasoning"] = reasoning
+            msg["reasoning_content"] = reasoning
     return msg
 
 
@@ -205,6 +234,17 @@ def _openai_response_to_llm_response(response: Any) -> LLMResponse:
     message = choice.message
 
     content_blocks: list[ContentBlock] = []
+
+    # Reasoning content from reasoning models (DeepSeek V4 Pro / R1, etc.).
+    # OpenRouter normalizes the field to `reasoning`; some providers expose
+    # `reasoning_content` directly. Some providers (SiliconFlow) require this
+    # to be echoed back on the next turn — see `_translate_assistant_message`.
+    reasoning_text = (
+        getattr(message, "reasoning_content", None)
+        or getattr(message, "reasoning", None)
+    )
+    if reasoning_text:
+        content_blocks.append(ContentBlock(type="reasoning", text=reasoning_text))
 
     # Text content
     if message.content:
@@ -354,18 +394,6 @@ class LLMClient:
             "messages": openai_messages,
             "max_tokens": capped_max_tokens,
         }
-
-        # OpenRouter: tell the upstream provider not to return reasoning tokens,
-        # and route around SiliconFlow specifically. SiliconFlow ignores the
-        # reasoning.exclude hint and still demands that any reasoning_content
-        # it emitted be echoed back on the next turn — which our adapter
-        # doesn't preserve. Other providers (DeepInfra, Novita, etc.) honor
-        # the exclude hint and work fine.
-        if model.startswith("openrouter/"):
-            params["extra_body"] = {
-                "reasoning": {"exclude": True},
-                "provider": {"ignore": ["SiliconFlow"]},
-            }
 
         # Translate and add tools if model supports them
         if tools and supports_tools(model):

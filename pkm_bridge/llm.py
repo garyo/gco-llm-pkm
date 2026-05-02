@@ -355,13 +355,17 @@ class LLMClient:
             "max_tokens": capped_max_tokens,
         }
 
-        # OpenRouter: tell the upstream provider not to return reasoning tokens.
-        # Some providers (e.g. SiliconFlow for DeepSeek reasoning models) require
-        # any reasoning_content they emit to be echoed back on the next turn,
-        # which our adapter doesn't preserve. Excluding reasoning from the
-        # response keeps the model's internal CoT but spares us the replay.
+        # OpenRouter: tell the upstream provider not to return reasoning tokens,
+        # and route around SiliconFlow specifically. SiliconFlow ignores the
+        # reasoning.exclude hint and still demands that any reasoning_content
+        # it emitted be echoed back on the next turn — which our adapter
+        # doesn't preserve. Other providers (DeepInfra, Novita, etc.) honor
+        # the exclude hint and work fine.
         if model.startswith("openrouter/"):
-            params["extra_body"] = {"reasoning": {"exclude": True}}
+            params["extra_body"] = {
+                "reasoning": {"exclude": True},
+                "provider": {"ignore": ["SiliconFlow"]},
+            }
 
         # Translate and add tools if model supports them
         if tools and supports_tools(model):

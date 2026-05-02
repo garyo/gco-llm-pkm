@@ -31,6 +31,7 @@ gco-pkm-llm Bridge Server
 A modular server providing Claude API access to Personal Knowledge Management files.
 """
 
+import json
 import re
 import time
 import uuid
@@ -38,7 +39,7 @@ from contextlib import contextmanager
 from typing import Dict, Any
 
 from anthropic import Anthropic
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, Response, request, jsonify, render_template, send_from_directory, stream_with_context
 from pkm_bridge.llm import LLMClient
 from pkm_bridge.models import (
     get_anthropic_cost, get_available_models, get_role_model, is_anthropic,
@@ -663,11 +664,26 @@ def transcribe():
         return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
 
 
+def _ndjson(obj: dict) -> str:
+    """Serialize a dict as a single NDJSON line (one JSON object + newline)."""
+    return json.dumps(obj) + "\n"
+
+
 @app.route('/query', methods=['POST'])
 @limiter.limit("60 per minute")  # Reasonable limit for queries
 def query():
-    """Main query endpoint with tool-use loop."""
-    # Check auth if enabled
+    """Main query endpoint with tool-use loop.
+
+    Streams NDJSON events. The tool loop can take 60-120s for slow models like
+    DeepSeek V4 Pro, which exceeds the default `proxy_read_timeout` on most
+    reverse proxies. Periodic keepalive lines reset that idle timer.
+
+    Event shapes:
+      {"type": "keepalive", "ts": <unix>}       — heartbeat during work
+      {"type": "done", "response": ..., ...}    — final result (one per request)
+      {"type": "error", "error": ..., ...}      — failure (one per request)
+    """
+    # Auth checks are synchronous — return regular JSON on failure
     if config.auth_enabled:
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
@@ -678,415 +694,436 @@ def query():
             logger.warning(f"Unauthorized query attempt from {request.remote_addr}: invalid token")
             return jsonify({"error": "Invalid or expired token"}), 401
 
-    request_start = time.time()
-    query_id = str(uuid.uuid4())  # Unique ID for this query
+    def _stream():
+        request_start = time.time()
+        query_id = str(uuid.uuid4())  # Unique ID for this query
+        session_id = "default"  # may be overwritten before any error event
 
-    data = request.json
-    session_id = data.get('session_id', 'default')
-    user_message = data['message']
-    model = data.get('model', config.model)
-    thinking = data.get('thinking')
-    user_timezone = data.get('timezone')  # Optional timezone from client
-    is_voice = data.get('is_voice', False)  # Flag indicating voice transcription
+        try:
+            data = request.json
+            session_id = data.get('session_id', 'default')
+            user_message = data['message']
+            model = data.get('model', config.model)
+            thinking = data.get('thinking')
+            user_timezone = data.get('timezone')  # Optional timezone from client
+            is_voice = data.get('is_voice', False)  # Flag indicating voice transcription
 
-    # Preprocess voice transcriptions to clean up disfluencies
-    if is_voice and voice_preprocessor.should_preprocess(user_message, is_voice):
-        original_message = user_message
-        user_message = voice_preprocessor.preprocess(user_message)
-        if user_message != original_message:
-            logger.info(f"🎤 Voice preprocessing applied")
+            # Preprocess voice transcriptions to clean up disfluencies
+            if is_voice and voice_preprocessor.should_preprocess(user_message, is_voice):
+                original_message = user_message
+                user_message = voice_preprocessor.preprocess(user_message)
+                if user_message != original_message:
+                    logger.info(f"🎤 Voice preprocessing applied")
 
-    # Check if this message is a correction of the previous query in this session
-    check_previous_correction(session_id, user_message, logger)
+            # Check if this message is a correction of the previous query in this session
+            check_previous_correction(session_id, user_message, logger)
 
-    # Log user query at the start
-    logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
+            # Log user query at the start
+            logger.info(f"=== User: {user_message[:100]}{'...' if len(user_message) > 100 else ''}")
 
-    # Get or create session from database
-    db = get_db()
-    try:
-        # Load user context from database for system prompt
-        user_context = UserSettingsRepository.get_user_context(db, user_id='default')
-
-        # Load active learned rules for prompt injection
-        learned_rules = LearnedRuleRepository.get_active(db)
-
-        # Get system prompt blocks for optimal caching
-        # Block 1: Static instructions (cached)
-        # Block 2: User context (cached - separate so edits don't invalidate base)
-        # Block 3: Learned rules (cached - changes at most daily)
-        # Block N: Date (NOT cached - appended dynamically, changes daily)
-        system_prompt_blocks = config.get_system_prompt_blocks(
-            user_context=user_context,
-            user_timezone=user_timezone,
-            learned_rules=learned_rules if learned_rules else None,
-        )
-
-        # Load session notes (working memory) and inject into system prompt
-        session_notes = SessionNoteRepository.get_for_session(db, session_id)
-        if session_notes:
-            notes_lines = [f"- [{n.category}] {n.note}" for n in session_notes]
-            notes_block = {
-                "type": "text",
-                "text": "\n\n# SESSION NOTES (your working memory)\n" + "\n".join(notes_lines),
-                # Not cached — changes per-request
-            }
-            # Insert before the last block (date block)
-            system_prompt_blocks.insert(-1, notes_block)
-            logger.debug(f"Injected {len(session_notes)} session notes into prompt")
-
-        # Track RAG context for feedback capture
-        had_rag_context = False
-        rag_context_chars = 0
-
-        # Auto-retrieve relevant note context for RAG
-        # Skip for non-Anthropic models — their smaller context windows can't handle
-        # the base system prompt + tools + RAG together
-        if context_retriever and not is_anthropic(model):
-            logger.info("Skipping auto-RAG injection for non-Anthropic model (context window)")
-        if context_retriever and is_anthropic(model) and rag_auto_inject:
+            # Get or create session from database
+            db = get_db()
             try:
-                # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
-                # This provides temporal context for "what I did yesterday" queries
-                # NOTE: Not cached since it changes daily
-                recent_journals_text = context_retriever.retrieve_and_format_recent(days=rag_recent_days)
-                if recent_journals_text:
-                    recent_block = {
-                        "type": "text",
-                        "text": recent_journals_text
-                        # No cache_control - changes daily, not worth caching
-                    }
-                    system_prompt_blocks.insert(-1, recent_block)
-                    logger.info(f"📅 Added recent journals context ({len(recent_journals_text)} chars)")
+                # Load user context from database for system prompt
+                user_context = UserSettingsRepository.get_user_context(db, user_id='default')
 
-                # 2. Expand query using vocabulary rules before semantic search
-                expanded_query = query_enhancer.expand_query(user_message)
+                # Load active learned rules for prompt injection
+                learned_rules = LearnedRuleRepository.get_active(db)
 
-                # 3. Retrieve semantically relevant chunks
-                context_block_text = context_retriever.retrieve_and_format(
-                    query=expanded_query,
-                    limit=12,
-                    min_similarity=0.60
+                # Get system prompt blocks for optimal caching
+                # Block 1: Static instructions (cached)
+                # Block 2: User context (cached - separate so edits don't invalidate base)
+                # Block 3: Learned rules (cached - changes at most daily)
+                # Block N: Date (NOT cached - appended dynamically, changes daily)
+                system_prompt_blocks = config.get_system_prompt_blocks(
+                    user_context=user_context,
+                    user_timezone=user_timezone,
+                    learned_rules=learned_rules if learned_rules else None,
                 )
 
-                if context_block_text:
-                    # Insert context block before the last block (current date)
-                    # This allows retrieved context to be cached separately
-                    context_block = {
+                # Load session notes (working memory) and inject into system prompt
+                session_notes = SessionNoteRepository.get_for_session(db, session_id)
+                if session_notes:
+                    notes_lines = [f"- [{n.category}] {n.note}" for n in session_notes]
+                    notes_block = {
                         "type": "text",
-                        "text": context_block_text,
-                        # Note: no cache_control here - RAG context changes per query
-                        # and the API limits cache_control to 4 blocks total
+                        "text": "\n\n# SESSION NOTES (your working memory)\n" + "\n".join(notes_lines),
+                        # Not cached — changes per-request
                     }
-                    system_prompt_blocks.insert(-1, context_block)
-                    had_rag_context = True
-                    rag_context_chars = len(context_block_text)
-                    logger.info(f"🔍 Auto-retrieved semantic context ({rag_context_chars} chars)")
-            except Exception as e:
-                logger.warning(f"Context retrieval failed: {e}")
+                    # Insert before the last block (date block)
+                    system_prompt_blocks.insert(-1, notes_block)
+                    logger.debug(f"Injected {len(session_notes)} session notes into prompt")
 
-        # Debug: log system block structure
-        if logger.level <= 10:  # DEBUG level
-            for i, block in enumerate(system_prompt_blocks, 1):
-                cached = "✓ CACHED" if "cache_control" in block else "✗ not cached"
-                logger.debug(f"  System block {i}: {len(block['text'])} chars, {cached}")
+                # Track RAG context for feedback capture
+                had_rag_context = False
+                rag_context_chars = 0
 
-        # Also get flat version for session storage
-        system_prompt_flat = config.get_system_prompt(
-            user_context=user_context,
-            user_timezone=user_timezone
-        )
-
-        db_session = SessionRepository.get_or_create_session(
-            db, session_id, system_prompt=system_prompt_flat
-        )
-        history = db_session.history if db_session.history else []
-    finally:
-        db.close()
-
-    # Append user message
-    history.append({
-        "role": "user",
-        "content": user_message
-    })
-
-    # Truncate history to stay within budget before sending to API
-    # Log history stats before truncation
-    stats_before = history_manager.get_history_stats(history)
-    if stats_before['total_tokens'] > 50000:  # Only log if potentially concerning
-        logger.info(f"History before truncation: {stats_before['budget_usage']}")
-
-    history = history_manager.truncate_history(history)
-
-    # Log if we truncated
-    stats_after = history_manager.get_history_stats(history)
-    if stats_after['total_tokens'] < stats_before['total_tokens']:
-        saved = stats_before['total_tokens'] - stats_after['total_tokens']
-        logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
-
-    # Validate all messages have non-empty content (API requirement)
-    validate_history(history)
-
-    try:
-        # Get tools in Anthropic format (adapter translates for non-Anthropic)
-        tools = tool_registry.get_anthropic_tools()
-
-        # Build API call parameters (LLMClient handles provider-specific details)
-        api_params: Dict[str, Any] = {
-            "model": model,
-            "max_tokens": 8192,
-            "system": system_prompt_blocks,
-            "messages": history,
-            "tools": tools,
-        }
-
-        # Anthropic-specific: prompt caching and beta headers
-        if is_anthropic(model):
-            beta_features = ["prompt-caching-2024-07-31"]
-            if thinking:
-                beta_features.append("interleaved-thinking-2025-05-14")
-            api_params["extra_headers"] = {
-                "anthropic-beta": ",".join(beta_features)
-            }
-            # Mark the last tool for caching (tools are relatively static)
-            if tools:
-                tools[-1]["cache_control"] = {"type": "ephemeral"}
-            if thinking:
-                api_params["thinking"] = thinking
-
-        # Initial call
-        with timer(f"LLM API call (initial, {model})"):
-            response = llm_client.complete(**api_params)
-
-        api_call_count = 1
-        tool_call_count = 0
-        tool_names_used = []  # Track tool names for feedback capture
-        tool_error_count = 0  # Track tool errors for feedback capture
-
-        # Accumulate token usage across all API calls in the tool loop
-        total_input_tokens = 0
-        total_output_tokens = 0
-        total_cache_write_tokens = 0
-        total_cache_read_tokens = 0
-
-        def accumulate_usage(resp):
-            nonlocal total_input_tokens, total_output_tokens, total_cache_write_tokens, total_cache_read_tokens
-            usage = resp.usage
-            total_input_tokens += getattr(usage, 'input_tokens', 0)
-            total_output_tokens += getattr(usage, 'output_tokens', 0)
-            total_cache_write_tokens += getattr(usage, 'cache_creation_input_tokens', 0)
-            total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0)
-
-        accumulate_usage(response)
-
-        # Tool loop
-        while response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if getattr(block, "type", None) == "tool_use":
-                    tool_call_count += 1
-                    tool_names_used.append(block.name)
-                    logger.info(f">>> Tool call: {block.name} with params: {block.input}")
-
-                    # Capture start time for tool execution logging
-                    start_time = time.time()
-
-                    with timer(f"<<< Tool execution: {block.name}"):
-                        # Pass session_id and user_timezone in context for tools that need it
-                        context = {
-                            "session_id": session_id,
-                            "user_timezone": user_timezone
-                        }
-                        result = tool_registry.execute_tool(block.name, block.input, context=context)
-
-                    # Calculate execution time
-                    end_time = time.time()
-                    execution_time_ms = int((end_time - start_time) * 1000)
-
-                    # Ensure result is never empty (API requirement)
-                    if not result or (isinstance(result, str) and not result.strip()):
-                        result = "[Empty result]"
-                        logger.warning(f"Tool {block.name} returned empty result")
-
-                    # Truncate large tool results for non-Anthropic models
-                    # to avoid blowing context windows (Anthropic has 200K+)
-                    if not is_anthropic(model) and len(result) > 20000:
-                        truncated_len = len(result)
-                        result = result[:20000] + f"\n\n[... truncated {truncated_len - 20000:,} chars — result too large for model context]"
-                        logger.warning(f"Truncated {block.name} result from {truncated_len:,} to 20,000 chars")
-
-                    # Log if tool result contains an error
-                    if result.startswith("❌"):
-                        tool_error_count += 1
-                        logger.error(f"Tool {block.name} returned error: {result[:200]}")
-
-                    # Extract result summary (first 500 chars)
-                    result_summary = result[:500] if result else ""
-
-                    # Extract exit code if shell command
-                    exit_code = None
-                    if block.name == "execute_shell" and "Exit code:" in result:
-                        try:
-                            # Parse exit code from result (format: "Exit code: N")
-                            exit_code = int(result.split("Exit code:")[1].split()[0])
-                        except (IndexError, ValueError):
-                            pass
-
-                    # Store tool execution log in database
+                # Auto-retrieve relevant note context for RAG
+                # Skip for non-Anthropic models — their smaller context windows can't handle
+                # the base system prompt + tools + RAG together
+                if context_retriever and not is_anthropic(model):
+                    logger.info("Skipping auto-RAG injection for non-Anthropic model (context window)")
+                if context_retriever and is_anthropic(model) and rag_auto_inject:
                     try:
-                        log_db = get_db()
-                        try:
-                            ToolExecutionLogRepository.create_log(
-                                db=log_db,
-                                session_id=session_id,
-                                query_id=query_id,
-                                user_message=user_message,
-                                tool_name=block.name,
-                                tool_params=block.input,
-                                result_summary=result_summary,
-                                exit_code=exit_code,
-                                execution_time_ms=execution_time_ms
-                            )
-                        finally:
-                            log_db.close()
-                    except Exception as log_error:
-                        # Don't fail the query if logging fails
-                        logger.warning(f"Failed to log tool execution: {log_error}")
+                        # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
+                        # This provides temporal context for "what I did yesterday" queries
+                        # NOTE: Not cached since it changes daily
+                        recent_journals_text = context_retriever.retrieve_and_format_recent(days=rag_recent_days)
+                        if recent_journals_text:
+                            recent_block = {
+                                "type": "text",
+                                "text": recent_journals_text
+                                # No cache_control - changes daily, not worth caching
+                            }
+                            system_prompt_blocks.insert(-1, recent_block)
+                            logger.info(f"📅 Added recent journals context ({len(recent_journals_text)} chars)")
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result
-                    })
+                        # 2. Expand query using vocabulary rules before semantic search
+                        expanded_query = query_enhancer.expand_query(user_message)
 
-            history.append({"role": "assistant", "content": serialize_message_content(response.content)})
-            history.append({"role": "user", "content": tool_results})
+                        # 3. Retrieve semantically relevant chunks
+                        context_block_text = context_retriever.retrieve_and_format(
+                            query=expanded_query,
+                            limit=12,
+                            min_similarity=0.60
+                        )
 
-            # Update API params with new history
-            api_params["messages"] = history
+                        if context_block_text:
+                            # Insert context block before the last block (current date)
+                            # This allows retrieved context to be cached separately
+                            context_block = {
+                                "type": "text",
+                                "text": context_block_text,
+                                # Note: no cache_control here - RAG context changes per query
+                                # and the API limits cache_control to 4 blocks total
+                            }
+                            system_prompt_blocks.insert(-1, context_block)
+                            had_rag_context = True
+                            rag_context_chars = len(context_block_text)
+                            logger.info(f"🔍 Auto-retrieved semantic context ({rag_context_chars} chars)")
+                    except Exception as e:
+                        logger.warning(f"Context retrieval failed: {e}")
 
-            api_call_count += 1
-            with timer(f"LLM API call #{api_call_count} ({model})"):
+                # Debug: log system block structure
+                if logger.level <= 10:  # DEBUG level
+                    for i, block in enumerate(system_prompt_blocks, 1):
+                        cached = "✓ CACHED" if "cache_control" in block else "✗ not cached"
+                        logger.debug(f"  System block {i}: {len(block['text'])} chars, {cached}")
+
+                # Also get flat version for session storage
+                system_prompt_flat = config.get_system_prompt(
+                    user_context=user_context,
+                    user_timezone=user_timezone
+                )
+
+                db_session = SessionRepository.get_or_create_session(
+                    db, session_id, system_prompt=system_prompt_flat
+                )
+                history = db_session.history if db_session.history else []
+            finally:
+                db.close()
+
+            # Append user message
+            history.append({
+                "role": "user",
+                "content": user_message
+            })
+
+            # Truncate history to stay within budget before sending to API
+            # Log history stats before truncation
+            stats_before = history_manager.get_history_stats(history)
+            if stats_before['total_tokens'] > 50000:  # Only log if potentially concerning
+                logger.info(f"History before truncation: {stats_before['budget_usage']}")
+
+            history = history_manager.truncate_history(history)
+
+            # Log if we truncated
+            stats_after = history_manager.get_history_stats(history)
+            if stats_after['total_tokens'] < stats_before['total_tokens']:
+                saved = stats_before['total_tokens'] - stats_after['total_tokens']
+                logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
+
+            # Validate all messages have non-empty content (API requirement)
+            validate_history(history)
+
+            # Get tools in Anthropic format (adapter translates for non-Anthropic)
+            tools = tool_registry.get_anthropic_tools()
+
+            # Build API call parameters (LLMClient handles provider-specific details)
+            api_params: Dict[str, Any] = {
+                "model": model,
+                "max_tokens": 8192,
+                "system": system_prompt_blocks,
+                "messages": history,
+                "tools": tools,
+            }
+
+            # Anthropic-specific: prompt caching and beta headers
+            if is_anthropic(model):
+                beta_features = ["prompt-caching-2024-07-31"]
+                if thinking:
+                    beta_features.append("interleaved-thinking-2025-05-14")
+                api_params["extra_headers"] = {
+                    "anthropic-beta": ",".join(beta_features)
+                }
+                # Mark the last tool for caching (tools are relatively static)
+                if tools:
+                    tools[-1]["cache_control"] = {"type": "ephemeral"}
+                if thinking:
+                    api_params["thinking"] = thinking
+
+            # Initial keepalive — gets bytes flowing through the proxy immediately
+            yield _ndjson({"type": "keepalive", "ts": time.time()})
+
+            # Initial call
+            with timer(f"LLM API call (initial, {model})"):
                 response = llm_client.complete(**api_params)
+
+            api_call_count = 1
+            tool_call_count = 0
+            tool_names_used = []  # Track tool names for feedback capture
+            tool_error_count = 0  # Track tool errors for feedback capture
+
+            # Accumulate token usage across all API calls in the tool loop
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cache_write_tokens = 0
+            total_cache_read_tokens = 0
+
+            def accumulate_usage(resp):
+                nonlocal total_input_tokens, total_output_tokens, total_cache_write_tokens, total_cache_read_tokens
+                usage = resp.usage
+                total_input_tokens += getattr(usage, 'input_tokens', 0)
+                total_output_tokens += getattr(usage, 'output_tokens', 0)
+                total_cache_write_tokens += getattr(usage, 'cache_creation_input_tokens', 0)
+                total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0)
+
             accumulate_usage(response)
 
-        # Final text
-        assistant_text = ""
-        for block in response.content:
-            if getattr(block, "type", "") == "text":
-                assistant_text += block.text
+            # Tool loop
+            while response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if getattr(block, "type", None) == "tool_use":
+                        tool_call_count += 1
+                        tool_names_used.append(block.name)
+                        logger.info(f">>> Tool call: {block.name} with params: {block.input}")
 
-        history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+                        # Capture start time for tool execution logging
+                        start_time = time.time()
 
-        # Save updated history to database
-        db = get_db()
-        try:
-            SessionRepository.update_history(db, session_id, history)
-        finally:
-            db.close()
+                        with timer(f"<<< Tool execution: {block.name}"):
+                            # Pass session_id and user_timezone in context for tools that need it
+                            context = {
+                                "session_id": session_id,
+                                "user_timezone": user_timezone
+                            }
+                            result = tool_registry.execute_tool(block.name, block.input, context=context)
 
-        total_elapsed = time.time() - request_start
-        logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
+                        # Calculate execution time
+                        end_time = time.time()
+                        execution_time_ms = int((end_time - start_time) * 1000)
 
-        # Log token usage (accumulated across all API calls in the tool loop)
-        history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
-        system_blocks = len(system_prompt_blocks)
+                        # Ensure result is never empty (API requirement)
+                        if not result or (isinstance(result, str) and not result.strip()):
+                            result = "[Empty result]"
+                            logger.warning(f"Tool {block.name} returned empty result")
 
-        logger.info(f"Token usage ({api_call_count} API calls): {total_input_tokens} input, {total_cache_write_tokens} cache write, {total_cache_read_tokens} cache read, {total_output_tokens} output")
-        logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
+                        # Truncate large tool results for non-Anthropic models
+                        # to avoid blowing context windows (Anthropic has 200K+)
+                        if not is_anthropic(model) and len(result) > 20000:
+                            truncated_len = len(result)
+                            result = result[:20000] + f"\n\n[... truncated {truncated_len - 20000:,} chars — result too large for model context]"
+                            logger.warning(f"Truncated {block.name} result from {truncated_len:,} to 20,000 chars")
 
-        # Warn if conversation is getting large
-        uncached_input = total_input_tokens - total_cache_read_tokens
-        if uncached_input > 20000:
-            logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
+                        # Log if tool result contains an error
+                        if result.startswith("❌"):
+                            tool_error_count += 1
+                            logger.error(f"Tool {block.name} returned error: {result[:200]}")
 
-        logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
+                        # Extract result summary (first 500 chars)
+                        result_summary = result[:500] if result else ""
 
-        # Log query summary (always, even if no tools were used)
-        try:
-            log_db = get_db()
+                        # Extract exit code if shell command
+                        exit_code = None
+                        if block.name == "execute_shell" and "Exit code:" in result:
+                            try:
+                                # Parse exit code from result (format: "Exit code: N")
+                                exit_code = int(result.split("Exit code:")[1].split()[0])
+                            except (IndexError, ValueError):
+                                pass
+
+                        # Store tool execution log in database
+                        try:
+                            log_db = get_db()
+                            try:
+                                ToolExecutionLogRepository.create_log(
+                                    db=log_db,
+                                    session_id=session_id,
+                                    query_id=query_id,
+                                    user_message=user_message,
+                                    tool_name=block.name,
+                                    tool_params=block.input,
+                                    result_summary=result_summary,
+                                    exit_code=exit_code,
+                                    execution_time_ms=execution_time_ms
+                                )
+                            finally:
+                                log_db.close()
+                        except Exception as log_error:
+                            # Don't fail the query if logging fails
+                            logger.warning(f"Failed to log tool execution: {log_error}")
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result
+                        })
+
+                history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+                history.append({"role": "user", "content": tool_results})
+
+                # Update API params with new history
+                api_params["messages"] = history
+
+                api_call_count += 1
+                # Keepalive before each follow-up LLM call (the slow part)
+                yield _ndjson({"type": "keepalive", "ts": time.time()})
+                with timer(f"LLM API call #{api_call_count} ({model})"):
+                    response = llm_client.complete(**api_params)
+                accumulate_usage(response)
+
+            # Final text
+            assistant_text = ""
+            for block in response.content:
+                if getattr(block, "type", "") == "text":
+                    assistant_text += block.text
+
+            history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+
+            # Save updated history to database
+            db = get_db()
             try:
-                ToolExecutionLogRepository.create_log(
-                    db=log_db,
-                    session_id=session_id,
-                    query_id=query_id,
-                    user_message=user_message,
-                    tool_name="__query_summary__",  # Special marker for query summary
-                    tool_params={"model": model, "api_calls": api_call_count, "tool_calls": tool_call_count},
-                    result_summary=assistant_text[:200] if assistant_text else "",
-                    exit_code=None,
-                    execution_time_ms=int(total_elapsed * 1000)
-                )
+                SessionRepository.update_history(db, session_id, history)
             finally:
-                log_db.close()
-        except Exception as log_error:
-            # Don't fail the query if logging fails
-            logger.warning(f"Failed to log query summary: {log_error}")
+                db.close()
 
-        # Capture feedback signals for self-improvement retrospective
-        capture_feedback(
-            session_id=session_id,
-            query_id=query_id,
-            user_message=user_message,
-            had_rag_context=had_rag_context,
-            rag_context_chars=rag_context_chars,
-            tool_names_used=tool_names_used,
-            tool_error_count=tool_error_count,
-            total_tool_calls=tool_call_count,
-            api_call_count=api_call_count,
-            logger=logger,
-        )
+            total_elapsed = time.time() - request_start
+            logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
 
-        # Calculate cost — Anthropic models use our detailed rates (with cache tokens),
-        # non-Anthropic models use LiteLLM's built-in cost database
-        if is_anthropic(model):
-            request_cost = get_anthropic_cost(
-                model, total_input_tokens, total_output_tokens,
-                total_cache_write_tokens, total_cache_read_tokens,
+            # Log token usage (accumulated across all API calls in the tool loop)
+            history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
+            system_blocks = len(system_prompt_blocks)
+
+            logger.info(f"Token usage ({api_call_count} API calls): {total_input_tokens} input, {total_cache_write_tokens} cache write, {total_cache_read_tokens} cache read, {total_output_tokens} output")
+            logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
+
+            # Warn if conversation is getting large
+            uncached_input = total_input_tokens - total_cache_read_tokens
+            if uncached_input > 20000:
+                logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
+
+            logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
+
+            # Log query summary (always, even if no tools were used)
+            try:
+                log_db = get_db()
+                try:
+                    ToolExecutionLogRepository.create_log(
+                        db=log_db,
+                        session_id=session_id,
+                        query_id=query_id,
+                        user_message=user_message,
+                        tool_name="__query_summary__",  # Special marker for query summary
+                        tool_params={"model": model, "api_calls": api_call_count, "tool_calls": tool_call_count},
+                        result_summary=assistant_text[:200] if assistant_text else "",
+                        exit_code=None,
+                        execution_time_ms=int(total_elapsed * 1000)
+                    )
+                finally:
+                    log_db.close()
+            except Exception as log_error:
+                # Don't fail the query if logging fails
+                logger.warning(f"Failed to log query summary: {log_error}")
+
+            # Capture feedback signals for self-improvement retrospective
+            capture_feedback(
+                session_id=session_id,
+                query_id=query_id,
+                user_message=user_message,
+                had_rag_context=had_rag_context,
+                rag_context_chars=rag_context_chars,
+                tool_names_used=tool_names_used,
+                tool_error_count=tool_error_count,
+                total_tool_calls=tool_call_count,
+                api_call_count=api_call_count,
+                logger=logger,
             )
-        else:
-            # For non-Anthropic, try LiteLLM cost; cache tokens are always 0
-            request_cost = llm_client.get_completion_cost(response, model) or 0.0
 
-        logger.info(f"  Estimated cost: ${request_cost:.4f} ({total_input_tokens} in, {total_output_tokens} out)")
+            # Calculate cost — Anthropic models use our detailed rates (with cache tokens),
+            # non-Anthropic models use LiteLLM's built-in cost database
+            if is_anthropic(model):
+                request_cost = get_anthropic_cost(
+                    model, total_input_tokens, total_output_tokens,
+                    total_cache_write_tokens, total_cache_read_tokens,
+                )
+            else:
+                # For non-Anthropic, try LiteLLM cost; cache tokens are always 0
+                request_cost = llm_client.get_completion_cost(response, model) or 0.0
 
-        # Update session totals in database
-        db = get_db()
-        try:
-            SessionRepository.update_session_cost(
-                db,
-                session_id,
-                total_input_tokens,
-                total_output_tokens,
-                request_cost,
-                cache_write_tokens=total_cache_write_tokens,
-                cache_read_tokens=total_cache_read_tokens,
-            )
+            logger.info(f"  Estimated cost: ${request_cost:.4f} ({total_input_tokens} in, {total_output_tokens} out)")
 
-            # Get updated totals
-            db_session_obj = SessionRepository.get_session(db, session_id)
-            total_session_cost = db_session_obj.total_cost if db_session_obj else request_cost
-        finally:
-            db.close()
+            # Update session totals in database
+            db = get_db()
+            try:
+                SessionRepository.update_session_cost(
+                    db,
+                    session_id,
+                    total_input_tokens,
+                    total_output_tokens,
+                    request_cost,
+                    cache_write_tokens=total_cache_write_tokens,
+                    cache_read_tokens=total_cache_read_tokens,
+                )
 
-        return jsonify({
-            "response": assistant_text,
-            "session_id": session_id,
-            "session_cost": total_session_cost,
-            "query_id": query_id,
-            "usage": {
-                "input_tokens": total_input_tokens,
-                "output_tokens": total_output_tokens,
-                "cache_read_tokens": total_cache_read_tokens,
-                "cache_write_tokens": total_cache_write_tokens,
-                "tool_calls": tool_call_count,
-                "cost": round(request_cost, 6),
-            },
-        })
+                # Get updated totals
+                db_session_obj = SessionRepository.get_session(db, session_id)
+                total_session_cost = db_session_obj.total_cost if db_session_obj else request_cost
+            finally:
+                db.close()
 
-    except Exception as e:
-        logger.error(f"Query error: {str(e)}", exc_info=True)
-        return jsonify({"response": f"❌ Error: {str(e)}", "session_id": session_id}), 500
+            yield _ndjson({
+                "type": "done",
+                "response": assistant_text,
+                "session_id": session_id,
+                "session_cost": total_session_cost,
+                "query_id": query_id,
+                "usage": {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "cache_read_tokens": total_cache_read_tokens,
+                    "cache_write_tokens": total_cache_write_tokens,
+                    "tool_calls": tool_call_count,
+                    "cost": round(request_cost, 6),
+                },
+            })
+
+        except Exception as e:
+            logger.error(f"Query error: {str(e)}", exc_info=True)
+            yield _ndjson({
+                "type": "error",
+                "error": f"❌ Error: {str(e)}",
+                "session_id": session_id,
+            })
+
+    return Response(
+        stream_with_context(_stream()),
+        mimetype='application/x-ndjson',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',  # disable nginx buffering on streaming responses
+        },
+    )
 
 
 @app.route('/sessions/<session_id>/history', methods=['GET'])

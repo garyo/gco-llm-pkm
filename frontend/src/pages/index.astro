@@ -790,18 +790,53 @@ import EditorInterface from '../components/EditorInterface.astro';
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(requestBody)
-      }, 180000); // 3min timeout for complex/extended-thinking queries
+      }, 600000); // 10min safety net — server emits keepalives so the proxy stays alive
 
       if (res.status === 401) {
         handle401();
         return;
       }
 
-      const data = await res.json();
+      // /query streams NDJSON: keepalive events while work proceeds, then either
+      // a 'done' event with the final payload or an 'error' event. Read line-by-line.
+      if (!res.body) throw new Error('No response body from /query');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finalEvent: any = null;
+      let errorEvent: any = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let event: any;
+          try { event = JSON.parse(line); }
+          catch { console.warn('Bad NDJSON line:', line); continue; }
+          if (event.type === 'done') finalEvent = event;
+          else if (event.type === 'error') errorEvent = event;
+          // 'keepalive' events: ignored — they exist to flush bytes through proxies
+        }
+      }
 
       loading.classList.add('hidden');
       loading.classList.remove('flex');
 
+      if (errorEvent) {
+        appendMessage('assistant', errorEvent.error || '❌ Query failed');
+        return;
+      }
+      if (!finalEvent) {
+        appendMessage('assistant', '❌ Query ended without a result');
+        return;
+      }
+
+      const data = finalEvent;
       appendMessage('assistant', data.response, data.query_id, data.usage);
 
       // Auto-update Activity panel if it's open

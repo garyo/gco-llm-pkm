@@ -669,6 +669,21 @@ def _ndjson(obj: dict) -> str:
     return json.dumps(obj) + "\n"
 
 
+# When a tool returns "...visit /auth/<provider>/authorize..." (the standard
+# pattern in our integration tools' get_client() failure paths), we know the
+# server-side OAuth grant for <provider> is unusable — surface that to the
+# UI so the user sees a "reconnect" banner instead of a vague tool failure.
+_AUTH_REAUTH_RE = re.compile(r"/auth/(?P<provider>[a-z0-9_-]+)/authorize")
+
+
+def _detect_auth_required(result: str) -> str | None:
+    """Return the provider key if a tool result hints we need re-auth."""
+    if not isinstance(result, str):
+        return None
+    match = _AUTH_REAUTH_RE.search(result)
+    return match.group("provider") if match else None
+
+
 @app.route('/query', methods=['POST'])
 @limiter.limit("60 per minute")  # Reasonable limit for queries
 def query():
@@ -909,6 +924,16 @@ def query():
                         tool_names_used.append(block.name)
                         logger.info(f">>> Tool call: {block.name} with params: {block.input}")
 
+                        # Surface the call to the UI before we run it — for slow
+                        # tools (network, LLM-driven scripts) the user sees what
+                        # the model is doing instead of a silent spinner.
+                        yield _ndjson({
+                            "type": "tool_call",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        })
+
                         # Capture start time for tool execution logging
                         start_time = time.time()
 
@@ -943,6 +968,24 @@ def query():
 
                         # Extract result summary (first 500 chars)
                         result_summary = result[:500] if result else ""
+
+                        # Stream the result back to the UI; flag auth-required so
+                        # the chat shows a reconnect banner mid-conversation.
+                        is_error = isinstance(result, str) and result.startswith("❌")
+                        yield _ndjson({
+                            "type": "tool_result",
+                            "id": block.id,
+                            "name": block.name,
+                            "ok": not is_error,
+                            "preview": result_summary,
+                            "duration_ms": execution_time_ms,
+                        })
+                        auth_provider = _detect_auth_required(result)
+                        if auth_provider:
+                            yield _ndjson({
+                                "type": "auth_required",
+                                "provider": auth_provider,
+                            })
 
                         # Extract exit code if shell command
                         exit_code = None
@@ -1997,8 +2040,11 @@ def ticktick_status():
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
             has_refresh = bool(token.refresh_token)
+            # `connected` means "we have a credential we can plausibly use".
+            # Expired-with-refresh is fine (auto-refresh will run on demand);
+            # expired-without-refresh means the user must re-authorize.
             return jsonify({
-                "connected": True,
+                "connected": not is_expired or has_refresh,
                 "expired": is_expired,
                 "has_refresh_token": has_refresh,
                 "auto_refreshable": has_refresh and is_expired,
@@ -2141,8 +2187,11 @@ def google_calendar_status():
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
             has_refresh = bool(token.refresh_token)
+            # `connected` means "we have a credential we can plausibly use".
+            # Expired-with-refresh is fine (auto-refresh will run on demand);
+            # expired-without-refresh means the user must re-authorize.
             return jsonify({
-                "connected": True,
+                "connected": not is_expired or has_refresh,
                 "expired": is_expired,
                 "has_refresh_token": has_refresh,
                 "auto_refreshable": has_refresh and is_expired,
@@ -2281,8 +2330,11 @@ def google_gmail_status():
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
             has_refresh = bool(token.refresh_token)
+            # `connected` means "we have a credential we can plausibly use".
+            # Expired-with-refresh is fine (auto-refresh will run on demand);
+            # expired-without-refresh means the user must re-authorize.
             return jsonify({
-                "connected": True,
+                "connected": not is_expired or has_refresh,
                 "expired": is_expired,
                 "has_refresh_token": has_refresh,
                 "auto_refreshable": has_refresh and is_expired,
@@ -2318,6 +2370,54 @@ def google_gmail_disconnect():
     except Exception as e:
         logger.error(f"Error disconnecting Gmail: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# Map of (db_provider_key, label, authorize_url) for the aggregate status
+# endpoint. Keep in sync with the individual /auth/<provider>/status routes.
+_INTEGRATIONS = [
+    ("ticktick", "TickTick", "/auth/ticktick/authorize"),
+    ("google_calendar", "Google Calendar", "/auth/google-calendar/authorize"),
+    ("google_gmail", "Gmail", "/auth/google-gmail/authorize"),
+]
+
+
+@app.route('/api/integrations/status', methods=['GET'])
+def integrations_status():
+    """Return connection status for every OAuth integration in one call.
+
+    Used by the chat UI to render a "needs re-auth" chip without three
+    separate round-trips. Each entry mirrors the per-provider status
+    endpoint shape, plus a label and authorize_url for direct linking.
+    """
+    if auth_manager:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    integrations = []
+    db = get_db()
+    try:
+        for key, label, authorize_url in _INTEGRATIONS:
+            entry = {"key": key, "label": label, "authorize_url": authorize_url}
+            try:
+                token = OAuthRepository.get_token(db, key)
+                if token:
+                    is_expired = OAuthRepository.is_token_expired(token)
+                    has_refresh = bool(token.refresh_token)
+                    entry["connected"] = not is_expired or has_refresh
+                    entry["expired"] = is_expired
+                    entry["has_refresh_token"] = has_refresh
+                else:
+                    entry["connected"] = False
+            except Exception as e:
+                logger.warning(f"Failed to read {key} OAuth status: {e}")
+                entry["connected"] = False
+                entry["error"] = True
+            integrations.append(entry)
+    finally:
+        db.close()
+
+    return jsonify({"integrations": integrations})
 
 
 @app.route('/health', methods=['GET'])

@@ -45,6 +45,17 @@ import EditorInterface from '../components/EditorInterface.astro';
           title="Connecting..."
         ></div>
 
+        <!-- Integrations re-auth chip (hidden unless something is disconnected) -->
+        <a
+          id="integrations-warning"
+          href="/settings"
+          class="hidden items-center gap-1 px-2 py-0.5 bg-yellow-400/40 hover:bg-yellow-400/60 rounded text-xs"
+          title="One or more integrations need re-authorization"
+        >
+          <span aria-hidden="true">⚠️</span>
+          <span id="integrations-warning-text">Re-auth</span>
+        </a>
+
         <!-- Editor buttons (shown only when in editor tab) -->
         <div id="editor-header-status" class="hidden items-center gap-1 sm:gap-2">
           <button
@@ -524,6 +535,114 @@ import EditorInterface from '../components/EditorInterface.astro';
 
     loadHistory();
     initializeVoiceInput();
+    checkIntegrationsStatus();
+  }
+
+  // Fetch /api/integrations/status and show a header chip if any OAuth
+  // integration is missing or expired-and-not-refreshable. Linked to /settings.
+  async function checkIntegrationsStatus() {
+    try {
+      const res = await fetch('/api/integrations/status', {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const broken = (data.integrations || []).filter((i: any) => !i.connected);
+      const chip = document.getElementById('integrations-warning');
+      const text = document.getElementById('integrations-warning-text');
+      if (!chip || !text) return;
+      if (broken.length === 0) {
+        chip.classList.add('hidden');
+        chip.classList.remove('flex');
+        return;
+      }
+      const labels = broken.map((i: any) => i.label).join(', ');
+      text.textContent = broken.length === 1
+        ? `Re-auth ${broken[0].label}`
+        : `Re-auth (${broken.length})`;
+      chip.setAttribute('title', `Needs re-authorization: ${labels}`);
+      chip.classList.remove('hidden');
+      chip.classList.add('flex');
+    } catch (e) {
+      console.warn('Failed to check integrations status:', e);
+    }
+  }
+
+  // Append a "tool call" block to the chat. Returns the element so
+  // updateToolCallBlock() can fill in the result when it arrives.
+  function appendToolCallBlock(id: string, name: string, input: any) {
+    const div = document.createElement('div');
+    div.className = 'message tool-call text-xs sm:text-sm bg-gray-50 border border-gray-200 rounded px-3 py-2 my-1 text-gray-700 font-mono';
+    div.dataset.toolId = id;
+    const inputStr = formatToolInputPreview(input);
+    div.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="tool-spinner inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+        <span class="font-semibold text-gray-800">${escapeHtml(name)}</span>
+        <span class="text-gray-500 truncate" title="${escapeHtml(inputStr)}">${escapeHtml(inputStr)}</span>
+      </div>
+    `;
+    chat.insertBefore(div, loading);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+  }
+
+  // Fill in result/status on a previously-rendered tool block.
+  function updateToolCallBlock(id: string, ok: boolean, preview: string, durationMs?: number) {
+    const block = chat.querySelector(`.tool-call[data-tool-id="${CSS.escape(id)}"]`);
+    if (!block) return;
+    const icon = ok ? '✓' : '✗';
+    const iconColor = ok ? 'text-green-600' : 'text-red-600';
+    const dur = durationMs != null ? ` · ${durationMs}ms` : '';
+    const spinner = block.querySelector('.tool-spinner');
+    if (spinner) {
+      spinner.outerHTML = `<span class="${iconColor} font-bold">${icon}</span>`;
+    }
+    // Append the preview as a collapsed details element if non-trivial
+    const trimmed = (preview || '').trim();
+    if (trimmed.length > 0) {
+      const details = document.createElement('details');
+      details.className = 'mt-1 text-gray-600';
+      details.innerHTML = `<summary class="cursor-pointer select-none text-gray-500">result${dur}</summary><pre class="whitespace-pre-wrap break-words text-xs mt-1">${escapeHtml(trimmed.slice(0, 1500))}${trimmed.length > 1500 ? '\n…' : ''}</pre>`;
+      block.appendChild(details);
+    }
+  }
+
+  // Show a one-line preview of a tool's input dict.
+  function formatToolInputPreview(input: any): string {
+    if (!input || typeof input !== 'object') return '';
+    // Prefer the most descriptive single field if present
+    for (const key of ['command', 'query', 'pattern', 'path', 'action', 'name']) {
+      if (typeof input[key] === 'string' && input[key]) {
+        const v = input[key];
+        return `${key}=${v.length > 80 ? v.slice(0, 80) + '…' : v}`;
+      }
+    }
+    const j = JSON.stringify(input);
+    return j.length > 100 ? j.slice(0, 100) + '…' : j;
+  }
+
+  // Append a re-auth banner inline in the chat. Shown when a tool call
+  // hits an unusable OAuth grant; user can click to reconnect immediately.
+  function appendAuthBanner(provider: string) {
+    const div = document.createElement('div');
+    div.className = 'message system bg-yellow-50 border border-yellow-300 rounded p-3 my-2';
+    const label = ({
+      'ticktick': 'TickTick',
+      'google-calendar': 'Google Calendar',
+      'google_calendar': 'Google Calendar',
+      'google-gmail': 'Gmail',
+      'google_gmail': 'Gmail',
+    } as Record<string, string>)[provider] || provider;
+    const url = `/auth/${provider.replace('_', '-')}/authorize`;
+    div.innerHTML = `
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <span class="text-sm text-gray-800">⚠️ <strong>${escapeHtml(label)}</strong> needs re-authorization to continue.</span>
+        <a href="${url}" class="px-3 py-1 bg-yellow-500 hover:bg-yellow-600 text-white rounded text-sm font-medium">Reconnect</a>
+      </div>
+    `;
+    chat.insertBefore(div, loading);
+    chat.scrollTop = chat.scrollHeight;
   }
 
   // Show login (hide app)
@@ -820,6 +939,15 @@ import EditorInterface from '../components/EditorInterface.astro';
           catch { console.warn('Bad NDJSON line:', line); continue; }
           if (event.type === 'done') finalEvent = event;
           else if (event.type === 'error') errorEvent = event;
+          else if (event.type === 'tool_call') {
+            appendToolCallBlock(event.id, event.name, event.input);
+          } else if (event.type === 'tool_result') {
+            updateToolCallBlock(event.id, !!event.ok, event.preview || '', event.duration_ms);
+          } else if (event.type === 'auth_required') {
+            appendAuthBanner(event.provider);
+            // Refresh the header chip too
+            checkIntegrationsStatus();
+          }
           // 'keepalive' events: ignored — they exist to flush bytes through proxies
         }
       }

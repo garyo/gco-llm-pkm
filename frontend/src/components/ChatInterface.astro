@@ -207,6 +207,34 @@ import examples from '../../../config/examples.json';
     margin-bottom: 0;
   }
 
+  /* Tool-call blocks: dense one-liners between assistant turns. Override
+     .message's 1.5rem padding and the chat container's space-y-4. */
+  .message.tool-call {
+    padding: 0.375rem 0.75rem;
+    line-height: 1.35;
+  }
+  #chat > .message.tool-call {
+    margin-top: 0.25rem !important;
+  }
+  /* If a real assistant message follows a tool-call, keep a small gap */
+  #chat > .message.tool-call + .message:not(.tool-call) {
+    margin-top: 0.5rem !important;
+  }
+
+  /* "Thinking…" block inside a streaming assistant message — keep it tight
+     against the streaming text below it. */
+  .reasoning-block {
+    margin-top: 0;
+    margin-bottom: 0.25rem;
+  }
+  .reasoning-block > summary {
+    padding: 0.125rem 0;
+  }
+  .reasoning-block .reasoning-content {
+    margin-top: 0.125rem;
+    line-height: 1.4;
+  }
+
   .message.assistant p {
     margin: 0.5em 0;
   }

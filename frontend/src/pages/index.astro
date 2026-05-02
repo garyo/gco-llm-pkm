@@ -604,7 +604,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     const m = ensureStreamingMessage();
     if (!m.reasoningEl) {
       const details = document.createElement('details');
-      details.className = 'reasoning-block text-xs italic mb-2 text-gray-500';
+      details.className = 'reasoning-block text-xs italic text-gray-500';
       details.innerHTML = '<summary class="cursor-pointer select-none">Thinking…</summary><div class="reasoning-content whitespace-pre-wrap mt-1 text-gray-600"></div>';
       m.container.insertBefore(details, m.textEl);
       m.reasoningEl = details.querySelector('.reasoning-content') as HTMLElement;
@@ -637,7 +637,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   // updateToolCallBlock() can fill in the result when it arrives.
   function appendToolCallBlock(id: string, name: string, input: any) {
     const div = document.createElement('div');
-    div.className = 'message tool-call text-xs sm:text-sm bg-gray-50 border border-gray-200 rounded px-3 py-2 my-1 text-gray-700 font-mono';
+    div.className = 'message tool-call text-xs sm:text-sm bg-gray-50 border border-gray-200 rounded text-gray-700 font-mono';
     div.dataset.toolId = id;
     const inputStr = formatToolInputPreview(input);
     div.innerHTML = `

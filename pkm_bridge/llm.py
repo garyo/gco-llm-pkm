@@ -72,6 +72,29 @@ class LLMResponse:
 # ---------------------------------------------------------------------------
 
 
+def _strip_reasoning_blocks(messages: list[dict]) -> list[dict]:
+    """Remove `type=reasoning` content blocks from messages.
+
+    Reasoning blocks are how we round-trip `reasoning_content` across
+    non-Anthropic provider turns. Anthropic's API rejects unknown block
+    types, so they have to be stripped before sending to Anthropic — this
+    matters when a session that previously used a reasoning model (DeepSeek)
+    switches to a Claude model and the prior history is replayed.
+    """
+    cleaned: list[dict] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            new_content = [
+                b for b in content
+                if not (isinstance(b, dict) and b.get("type") == "reasoning")
+            ]
+            cleaned.append({**msg, "content": new_content})
+        else:
+            cleaned.append(msg)
+    return cleaned
+
+
 def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
     """Convert Anthropic tool format to OpenAI function-calling format."""
     openai_tools = []
@@ -360,7 +383,9 @@ class LLMClient:
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "messages": messages,
+            # Strip `reasoning` blocks left behind by prior non-Anthropic turns;
+            # Anthropic's API rejects unknown block types.
+            "messages": _strip_reasoning_blocks(messages),
         }
         if system is not None:
             params["system"] = system

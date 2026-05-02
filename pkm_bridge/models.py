@@ -40,33 +40,59 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "tier": "fast"},
     # Google (direct)
     {
-        "id": "gemini/gemini-2.5-flash", "name": "Gemini 2.5 Flash",
-        "provider": "google", "tier": "fast",
+        "id": "gemini/gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash",
+        "provider": "google",
+        "tier": "fast",
     },
     {
-        "id": "gemini/gemini-2.5-pro", "name": "Gemini 2.5 Pro",
-        "provider": "google", "tier": "balanced",
+        "id": "gemini/gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "provider": "google",
+        "tier": "balanced",
     },
     # OpenRouter (many models behind one key)
     {
-        "id": "openrouter/deepseek/deepseek-r1", "name": "DeepSeek R1",
-        "provider": "openrouter", "tier": "reasoning",
+        "id": "openrouter/deepseek/deepseek-r1",
+        "name": "DeepSeek R1",
+        "provider": "openrouter",
+        "tier": "reasoning",
     },
     {
-        "id": "openrouter/deepseek/deepseek-chat-v3", "name": "DeepSeek V3",
-        "provider": "openrouter", "tier": "fast",
+        "id": "openrouter/deepseek/deepseek-chat-v3",
+        "name": "DeepSeek V3",
+        "provider": "openrouter",
+        "tier": "fast",
     },
     {
-        "id": "openrouter/qwen/qwen3.6-max-preview", "name": "Qwen3.6 Max (preview)",
-        "provider": "openrouter", "tier": "best",
+        "id": "openrouter/deepseek/deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "provider": "openrouter",
+        "tier": "reasoning",
     },
     {
-        "id": "openrouter/qwen/qwen3.6-plus", "name": "Qwen3.6 Plus",
-        "provider": "openrouter", "tier": "balanced",
+        "id": "openrouter/deepseek/deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "provider": "openrouter",
+        "tier": "fast",
     },
     {
-        "id": "openrouter/z-ai/glm-5.1", "name": "GLM 5.1",
-        "provider": "openrouter", "tier": "balanced",
+        "id": "openrouter/qwen/qwen3.6-max-preview",
+        "name": "Qwen3.6 Max (preview)",
+        "provider": "openrouter",
+        "tier": "best",
+    },
+    {
+        "id": "openrouter/qwen/qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "provider": "openrouter",
+        "tier": "balanced",
+    },
+    {
+        "id": "openrouter/z-ai/glm-5.1",
+        "name": "GLM 5.1",
+        "provider": "openrouter",
+        "tier": "balanced",
     },
 ]
 
@@ -92,6 +118,7 @@ def get_available_models() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Capability detection
 # ---------------------------------------------------------------------------
+
 
 def is_anthropic(model: str) -> bool:
     """Check if a model ID routes to the Anthropic API."""
@@ -122,22 +149,40 @@ def supports_caching(model: str) -> bool:
 
 ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
     "claude-haiku-4-5": {
-        "input": 0.80, "cache_write": 1.00, "cache_read": 0.08, "output": 4.00,
+        "input": 0.80,
+        "cache_write": 1.00,
+        "cache_read": 0.08,
+        "output": 4.00,
     },
     "claude-sonnet-4-5": {
-        "input": 3.00, "cache_write": 3.75, "cache_read": 0.30, "output": 15.00,
+        "input": 3.00,
+        "cache_write": 3.75,
+        "cache_read": 0.30,
+        "output": 15.00,
     },
     "claude-sonnet-4-6": {
-        "input": 3.00, "cache_write": 3.75, "cache_read": 0.30, "output": 15.00,
+        "input": 3.00,
+        "cache_write": 3.75,
+        "cache_read": 0.30,
+        "output": 15.00,
     },
     "claude-opus-4-5": {
-        "input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00,
+        "input": 5.00,
+        "cache_write": 6.25,
+        "cache_read": 0.50,
+        "output": 25.00,
     },
     "claude-opus-4-6": {
-        "input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00,
+        "input": 5.00,
+        "cache_write": 6.25,
+        "cache_read": 0.50,
+        "output": 25.00,
     },
     "claude-opus-4-7": {
-        "input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00,
+        "input": 5.00,
+        "cache_write": 6.25,
+        "cache_read": 0.50,
+        "output": 25.00,
     },
 }
 

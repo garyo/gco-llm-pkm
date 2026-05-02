@@ -684,6 +684,22 @@ def _detect_auth_required(result: str) -> str | None:
     return match.group("provider") if match else None
 
 
+def _forward_llm_deltas(stream_gen):
+    """Forward delta dicts from `LLMClient.complete_stream()` as NDJSON lines.
+
+    Use as `response = yield from _forward_llm_deltas(llm_client.complete_stream(...))`
+    inside another generator — Python's `yield from` captures the inner
+    generator's return value via StopIteration.value, which gives us the
+    fully-assembled LLM response after streaming.
+    """
+    while True:
+        try:
+            delta = next(stream_gen)
+            yield _ndjson(delta)
+        except StopIteration as exc:
+            return exc.value
+
+
 @app.route('/query', methods=['POST'])
 @limiter.limit("60 per minute")  # Reasonable limit for queries
 def query():
@@ -890,9 +906,11 @@ def query():
             # Initial keepalive — gets bytes flowing through the proxy immediately
             yield _ndjson({"type": "keepalive", "ts": time.time()})
 
-            # Initial call
+            # Initial call — stream deltas (text + reasoning) to the UI as they arrive.
             with timer(f"LLM API call (initial, {model})"):
-                response = llm_client.complete(**api_params)
+                response = yield from _forward_llm_deltas(
+                    llm_client.complete_stream(**api_params)
+                )
 
             api_call_count = 1
             tool_call_count = 0
@@ -1033,7 +1051,9 @@ def query():
                 # Keepalive before each follow-up LLM call (the slow part)
                 yield _ndjson({"type": "keepalive", "ts": time.time()})
                 with timer(f"LLM API call #{api_call_count} ({model})"):
-                    response = llm_client.complete(**api_params)
+                    response = yield from _forward_llm_deltas(
+                        llm_client.complete_stream(**api_params)
+                    )
                 accumulate_usage(response)
 
             # Final text

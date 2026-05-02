@@ -430,6 +430,224 @@ class LLMClient:
         response = litellm.completion(**params)
         return _openai_response_to_llm_response(response)
 
+    def complete_stream(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        system: str | list | None = None,
+        tools: list[dict] | None = None,
+        max_tokens: int = 4096,
+        thinking: dict | None = None,
+        extra_headers: dict | None = None,
+    ):
+        """Generator version of complete().
+
+        Yields delta dicts as the model produces output:
+          {"type": "text_delta", "text": "..."}
+          {"type": "reasoning_delta", "text": "..."}
+
+        Returns the fully-assembled response object via StopIteration.value
+        (use `response = yield from llm_client.complete_stream(...)` from
+        another generator to capture it).
+        """
+        if is_anthropic(model):
+            response = yield from self._stream_anthropic(
+                model=model,
+                messages=messages,
+                system=system,
+                tools=tools,
+                max_tokens=max_tokens,
+                thinking=thinking,
+                extra_headers=extra_headers,
+            )
+        else:
+            response = yield from self._stream_litellm(
+                model=model,
+                messages=messages,
+                system=system,
+                tools=tools,
+                max_tokens=max_tokens,
+            )
+        return response
+
+    def _stream_litellm(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        system: str | list | None,
+        tools: list[dict] | None,
+        max_tokens: int,
+    ):
+        """Stream a litellm completion. Yields deltas; returns LLMResponse."""
+        openai_messages = _anthropic_messages_to_openai(messages, system=system)
+        capped_max_tokens = min(max_tokens, 4096)
+
+        params: dict[str, Any] = {
+            "model": model,
+            "messages": openai_messages,
+            "max_tokens": capped_max_tokens,
+            "stream": True,
+            # Get usage on the final chunk (otherwise we get zero token counts)
+            "stream_options": {"include_usage": True},
+        }
+        if tools and supports_tools(model):
+            params["tools"] = _anthropic_tools_to_openai(tools)
+        elif tools:
+            logger.info(f"Model {model} may not support tools — skipping tool params")
+
+        logger.info(f"LiteLLM stream to {model} (max_tokens={capped_max_tokens})")
+
+        text_buf: list[str] = []
+        reasoning_buf: list[str] = []
+        # tool_calls keyed by `index` since chunks reference each call by position
+        tool_calls: dict[int, dict[str, str]] = {}
+        usage_obj: Any = None
+        finish_reason: str | None = None
+        chunks_collected: list[Any] = []
+        model_name = ""
+
+        for chunk in litellm.completion(**params):
+            chunks_collected.append(chunk)
+            if not model_name:
+                model_name = getattr(chunk, "model", "") or model_name
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage:
+                usage_obj = chunk_usage
+
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            choice = choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+
+            text = getattr(delta, "content", None)
+            if text:
+                text_buf.append(text)
+                yield {"type": "text_delta", "text": text}
+
+            reasoning = (
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
+            )
+            if reasoning:
+                reasoning_buf.append(reasoning)
+                yield {"type": "reasoning_delta", "text": reasoning}
+
+            for tc in getattr(delta, "tool_calls", None) or []:
+                idx = getattr(tc, "index", 0) or 0
+                slot = tool_calls.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["arguments"] += fn.arguments
+
+        # Assemble final response in the shape callers expect
+        content_blocks: list[ContentBlock] = []
+        if reasoning_buf:
+            content_blocks.append(ContentBlock(type="reasoning", text="".join(reasoning_buf)))
+        if text_buf:
+            content_blocks.append(ContentBlock(type="text", text="".join(text_buf)))
+        for idx in sorted(tool_calls):
+            tc = tool_calls[idx]
+            try:
+                args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            content_blocks.append(ContentBlock(
+                type="tool_use", id=tc["id"], name=tc["name"], input=args,
+            ))
+        if not content_blocks:
+            content_blocks.append(ContentBlock(type="text", text=""))
+
+        stop_reason_map = {
+            "stop": "end_turn",
+            "tool_calls": "tool_use",
+            "length": "max_tokens",
+            "content_filter": "end_turn",
+        }
+        stop_reason = stop_reason_map.get(finish_reason or "stop", "end_turn")
+
+        usage = Usage(
+            input_tokens=getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0,
+            output_tokens=getattr(usage_obj, "completion_tokens", 0) if usage_obj else 0,
+        )
+
+        # Reconstruct a non-streaming-shaped response so litellm.completion_cost
+        # can read it. stream_chunk_builder is the official helper for this.
+        rebuilt: Any = None
+        try:
+            rebuilt = litellm.stream_chunk_builder(
+                chunks_collected, messages=openai_messages
+            )
+        except Exception as e:
+            logger.debug(f"stream_chunk_builder failed (non-fatal): {e}")
+
+        return LLMResponse(
+            content=content_blocks,
+            stop_reason=stop_reason,
+            usage=usage,
+            model=model_name or model,
+            _raw_response=rebuilt,
+        )
+
+    def _stream_anthropic(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        system: str | list | None,
+        tools: list[dict] | None,
+        max_tokens: int,
+        thinking: dict | None,
+        extra_headers: dict | None,
+    ):
+        """Stream from the Anthropic SDK. Yields deltas; returns the final
+        Anthropic Message object (same shape as non-streaming complete())."""
+        params: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": _strip_reasoning_blocks(messages),
+        }
+        if system is not None:
+            params["system"] = system
+        if tools:
+            params["tools"] = tools
+        if extra_headers:
+            params["extra_headers"] = extra_headers
+        if thinking:
+            params["thinking"] = thinking
+
+        with self.anthropic_client.messages.stream(**params) as stream:
+            for event in stream:
+                etype = getattr(event, "type", None)
+                if etype != "content_block_delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                if delta is None:
+                    continue
+                dtype = getattr(delta, "type", None)
+                if dtype == "text_delta":
+                    text = getattr(delta, "text", "") or ""
+                    if text:
+                        yield {"type": "text_delta", "text": text}
+                elif dtype == "thinking_delta":
+                    text = getattr(delta, "thinking", "") or ""
+                    if text:
+                        yield {"type": "reasoning_delta", "text": text}
+                # input_json_delta (tool input streaming) — assembled internally
+                # by the SDK, no need to forward
+            return stream.get_final_message()
+
     def get_completion_cost(self, response: Any, model: str) -> float | None:
         """Get cost for a completion. Returns None if unknown.
 

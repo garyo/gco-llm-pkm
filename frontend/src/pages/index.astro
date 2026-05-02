@@ -568,6 +568,71 @@ import EditorInterface from '../components/EditorInterface.astro';
     }
   }
 
+  // Currently-streaming assistant message — text/reasoning deltas append here
+  // until a tool_call (or 'done') arrives, at which point we finalize and any
+  // subsequent deltas open a new streaming message for the next turn.
+  type StreamingMsg = {
+    container: HTMLElement;
+    textEl: HTMLElement;
+    reasoningEl: HTMLElement | null;
+    text: string;
+    reasoning: string;
+  };
+  let currentStreaming: StreamingMsg | null = null;
+
+  function ensureStreamingMessage(): StreamingMsg {
+    if (currentStreaming) return currentStreaming;
+    const container = document.createElement('div');
+    container.className = 'message assistant streaming';
+    const textEl = document.createElement('div');
+    textEl.className = 'streaming-text whitespace-pre-wrap';
+    container.appendChild(textEl);
+    chat.insertBefore(container, loading);
+    chat.scrollTop = chat.scrollHeight;
+    currentStreaming = { container, textEl, reasoningEl: null, text: '', reasoning: '' };
+    return currentStreaming;
+  }
+
+  function appendTextDelta(text: string) {
+    const m = ensureStreamingMessage();
+    m.text += text;
+    m.textEl.textContent = m.text;
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function appendReasoningDelta(text: string) {
+    const m = ensureStreamingMessage();
+    if (!m.reasoningEl) {
+      const details = document.createElement('details');
+      details.className = 'reasoning-block text-xs italic mb-2 text-gray-500';
+      details.innerHTML = '<summary class="cursor-pointer select-none">Thinking…</summary><div class="reasoning-content whitespace-pre-wrap mt-1 text-gray-600"></div>';
+      m.container.insertBefore(details, m.textEl);
+      m.reasoningEl = details.querySelector('.reasoning-content') as HTMLElement;
+    }
+    m.reasoning += text;
+    if (m.reasoningEl) m.reasoningEl.textContent = m.reasoning;
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  // Mark the current streaming message "frozen" — its text stays in the chat
+  // but new deltas will start a fresh message (used when a tool_call arrives
+  // between LLM rounds in the tool loop).
+  function finalizeStreamingMessage() {
+    if (currentStreaming) {
+      currentStreaming.container.classList.remove('streaming');
+    }
+    currentStreaming = null;
+  }
+
+  // Drop the current streaming message entirely — used when 'done' arrives
+  // so appendMessage() can render the final markdown version in its place.
+  function removeCurrentStreamingMessage() {
+    if (currentStreaming) {
+      currentStreaming.container.remove();
+      currentStreaming = null;
+    }
+  }
+
   // Append a "tool call" block to the chat. Returns the element so
   // updateToolCallBlock() can fill in the result when it arrives.
   function appendToolCallBlock(id: string, name: string, input: any) {
@@ -939,7 +1004,14 @@ import EditorInterface from '../components/EditorInterface.astro';
           catch { console.warn('Bad NDJSON line:', line); continue; }
           if (event.type === 'done') finalEvent = event;
           else if (event.type === 'error') errorEvent = event;
-          else if (event.type === 'tool_call') {
+          else if (event.type === 'text_delta') {
+            appendTextDelta(event.text || '');
+          } else if (event.type === 'reasoning_delta') {
+            appendReasoningDelta(event.text || '');
+          } else if (event.type === 'tool_call') {
+            // A tool call ends the current streaming message; subsequent
+            // deltas (after the tool returns) start a fresh one.
+            finalizeStreamingMessage();
             appendToolCallBlock(event.id, event.name, event.input);
           } else if (event.type === 'tool_result') {
             updateToolCallBlock(event.id, !!event.ok, event.preview || '', event.duration_ms);
@@ -954,6 +1026,11 @@ import EditorInterface from '../components/EditorInterface.astro';
 
       loading.classList.add('hidden');
       loading.classList.remove('flex');
+
+      // Drop the still-active streaming message so the final markdown-rendered
+      // version takes its place (intermediate streaming messages from earlier
+      // tool-loop turns stay in the chat as plain text).
+      removeCurrentStreamingMessage();
 
       if (errorEvent) {
         appendMessage('assistant', errorEvent.error || '❌ Query failed');

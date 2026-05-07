@@ -436,6 +436,9 @@ def serialize_message_content(content):
 
     Strips thinking blocks (both API-level thinking blocks and inline <thinking>
     XML tags) to avoid bloating conversation history with transient reasoning.
+    Also drops fields the SDK marks as `__api_exclude__` (e.g. `parsed_output`
+    on ParsedTextBlock from anthropic>=0.99) — Pydantic's plain `model_dump()`
+    returns them, but Anthropic's API rejects them on the next turn.
     """
     if isinstance(content, str):
         return re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
@@ -447,12 +450,16 @@ def serialize_message_content(content):
             if item_type == 'thinking':
                 continue
 
+            api_exclude = getattr(item, '__api_exclude__', None) or set()
             if hasattr(item, 'model_dump'):
                 dumped = item.model_dump()
             elif isinstance(item, dict):
                 dumped = item
             else:
                 dumped = {"type": item_type or "unknown", "data": str(item)}
+
+            for key in api_exclude:
+                dumped.pop(key, None)
 
             # Strip inline <thinking> tags from text blocks
             if dumped.get('type') == 'text' and 'text' in dumped:
@@ -729,6 +736,7 @@ def query():
         request_start = time.time()
         query_id = str(uuid.uuid4())  # Unique ID for this query
         session_id = "default"  # may be overwritten before any error event
+        terminal_emitted = False  # whether 'done' or 'error' was sent
 
         try:
             data = request.json
@@ -1155,6 +1163,7 @@ def query():
             finally:
                 db.close()
 
+            terminal_emitted = True
             yield _ndjson({
                 "type": "done",
                 "response": assistant_text,
@@ -1171,13 +1180,32 @@ def query():
                 },
             })
 
+        except GeneratorExit:
+            # Client disconnected mid-stream (browser tab closed, network drop,
+            # proxy idle timeout). Don't try to yield — the stream is dead.
+            logger.warning(
+                f"Query stream closed by client before terminal event "
+                f"(session={session_id}, query_id={query_id})"
+            )
+            terminal_emitted = True  # suppress the finally-block log; this case is logged above
+            raise
         except Exception as e:
             logger.error(f"Query error: {str(e)}", exc_info=True)
+            terminal_emitted = True
             yield _ndjson({
                 "type": "error",
                 "error": f"❌ Error: {str(e)}",
                 "session_id": session_id,
             })
+        finally:
+            if not terminal_emitted:
+                # Exited without 'done' or 'error' and without a client-side
+                # disconnect — something went wrong above the except handlers
+                # (e.g. yield itself raised). Worth investigating if seen.
+                logger.error(
+                    f"Query stream ended without terminal event "
+                    f"(session={session_id}, query_id={query_id})"
+                )
 
     return Response(
         stream_with_context(_stream()),

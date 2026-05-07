@@ -5,7 +5,7 @@ description = "Personal Knowledge Management assistant with Claude integration"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.39.0",
+    "anthropic>=0.99,<1.0",
     "flask>=3.0.0",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0.2",

@@ -1027,19 +1027,28 @@ import EditorInterface from '../components/EditorInterface.astro';
       loading.classList.add('hidden');
       loading.classList.remove('flex');
 
-      // Drop the still-active streaming message so the final markdown-rendered
-      // version takes its place (intermediate streaming messages from earlier
-      // tool-loop turns stay in the chat as plain text).
-      removeCurrentStreamingMessage();
-
       if (errorEvent) {
+        removeCurrentStreamingMessage();
         appendMessage('assistant', errorEvent.error || '❌ Query failed');
         return;
       }
       if (!finalEvent) {
-        appendMessage('assistant', '❌ Query ended without a result');
+        // Stream ended without a final 'done' event — connection dropped
+        // mid-flight (proxy timeout, network blip, server crash). Preserve
+        // whatever partial text/reasoning was already streamed instead of
+        // discarding it, so the user sees what they got.
+        finalizeStreamingMessage();
+        appendMessage(
+          'assistant',
+          '⚠️ Connection ended before the response finished. Any partial text above is what arrived; the server may still have saved a complete reply — refresh to check.'
+        );
         return;
       }
+
+      // Drop the still-active streaming message so the final markdown-rendered
+      // version takes its place (intermediate streaming messages from earlier
+      // tool-loop turns stay in the chat as plain text).
+      removeCurrentStreamingMessage();
 
       const data = finalEvent;
       appendMessage('assistant', data.response, data.query_id, data.usage);

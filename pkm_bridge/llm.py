@@ -72,23 +72,35 @@ class LLMResponse:
 # ---------------------------------------------------------------------------
 
 
-def _strip_reasoning_blocks(messages: list[dict]) -> list[dict]:
-    """Remove `type=reasoning` content blocks from messages.
+# Fields that SDK content-block models may carry but Anthropic's API rejects
+# on input. Most notably `parsed_output` on ParsedTextBlock (anthropic>=0.99),
+# which leaks into history when `model_dump()` is called without honoring the
+# block's `__api_exclude__` set.
+_API_REJECTED_BLOCK_FIELDS = ("parsed_output",)
 
-    Reasoning blocks are how we round-trip `reasoning_content` across
-    non-Anthropic provider turns. Anthropic's API rejects unknown block
-    types, so they have to be stripped before sending to Anthropic — this
-    matters when a session that previously used a reasoning model (DeepSeek)
-    switches to a Claude model and the prior history is replayed.
+
+def _sanitize_for_anthropic(messages: list[dict]) -> list[dict]:
+    """Clean message history before sending to Anthropic's API.
+
+    - Drops `type=reasoning` blocks (used to round-trip non-Anthropic providers'
+      `reasoning_content`; Anthropic rejects unknown block types).
+    - Strips fields like `parsed_output` that Pydantic's plain `model_dump()`
+      includes but Anthropic's API rejects. This matters for sessions whose
+      stored history was serialized by an older code path before the
+      serializer learned about `__api_exclude__`.
     """
     cleaned: list[dict] = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
-            new_content = [
-                b for b in content
-                if not (isinstance(b, dict) and b.get("type") == "reasoning")
-            ]
+            new_content = []
+            for b in content:
+                if isinstance(b, dict):
+                    if b.get("type") == "reasoning":
+                        continue
+                    if any(k in b for k in _API_REJECTED_BLOCK_FIELDS):
+                        b = {k: v for k, v in b.items() if k not in _API_REJECTED_BLOCK_FIELDS}
+                new_content.append(b)
             cleaned.append({**msg, "content": new_content})
         else:
             cleaned.append(msg)
@@ -385,7 +397,7 @@ class LLMClient:
             "max_tokens": max_tokens,
             # Strip `reasoning` blocks left behind by prior non-Anthropic turns;
             # Anthropic's API rejects unknown block types.
-            "messages": _strip_reasoning_blocks(messages),
+            "messages": _sanitize_for_anthropic(messages),
         }
         if system is not None:
             params["system"] = system
@@ -616,7 +628,7 @@ class LLMClient:
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "messages": _strip_reasoning_blocks(messages),
+            "messages": _sanitize_for_anthropic(messages),
         }
         if system is not None:
             params["system"] = system

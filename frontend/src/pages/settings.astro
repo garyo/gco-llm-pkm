@@ -168,7 +168,7 @@ import Layout from '../layouts/Layout.astro';
             </button>
 
             <div id="add-task-form" class="task-form" style="display: none;">
-                <h3>New Scheduled Task</h3>
+                <h3 id="task-form-title">New Scheduled Task</h3>
                 <div class="form-group">
                     <label for="new-task-name">Name</label>
                     <input type="text" id="new-task-name" placeholder="e.g. morning-calendar-check" class="form-input">
@@ -211,6 +211,7 @@ import Layout from '../layouts/Layout.astro';
                     <button id="cancel-task-btn" class="btn btn-secondary">Cancel</button>
                     <button id="save-task-btn" class="btn btn-primary">Create Task</button>
                 </div>
+                <input type="hidden" id="edit-task-id" value="">
                 <span id="task-form-status" class="status-text"></span>
             </div>
 
@@ -694,6 +695,11 @@ import Layout from '../layouts/Layout.astro';
     .task-card-actions button.btn-run {
         color: #28a745;
         border-color: #28a745;
+    }
+
+    .task-card-actions button.btn-edit {
+        color: #007bff;
+        border-color: #007bff;
     }
 
     .task-card-actions button.btn-delete {
@@ -1297,6 +1303,7 @@ import Layout from '../layouts/Layout.astro';
                                 <input type="checkbox" class="toggle-input task-toggle" data-id="${t.id}" ${t.enabled ? 'checked' : ''} style="width: 36px; height: 18px;">
                             </label>
                             <button class="btn-run" onclick="runTaskNow(${t.id})">Run Now</button>
+                            <button class="btn-edit" onclick="editTask(${t.id})">Edit</button>
                             ${!t.is_heartbeat ? `<button class="btn-delete" onclick="deleteTask(${t.id}, '${t.name}')">Delete</button>` : ''}
                         </div>
                     </div>
@@ -1350,18 +1357,65 @@ import Layout from '../layouts/Layout.astro';
         }
     };
 
+    function resetTaskForm() {
+        (document.getElementById('edit-task-id') as HTMLInputElement).value = '';
+        (document.getElementById('new-task-name') as HTMLInputElement).value = '';
+        (document.getElementById('new-task-name') as HTMLInputElement).disabled = false;
+        (document.getElementById('new-task-prompt') as HTMLTextAreaElement).value = '';
+        (document.getElementById('new-task-schedule-type') as HTMLSelectElement).value = 'cron';
+        (document.getElementById('new-task-schedule-expr') as HTMLInputElement).value = '';
+        (document.getElementById('new-task-max-turns') as HTMLInputElement).value = '10';
+        (document.getElementById('new-task-max-input') as HTMLInputElement).value = '200000';
+        (document.getElementById('new-task-max-output') as HTMLInputElement).value = '10000';
+        document.getElementById('task-form-title')!.textContent = 'New Scheduled Task';
+        document.getElementById('save-task-btn')!.textContent = 'Create Task';
+        document.getElementById('task-form-status')!.textContent = '';
+    }
+
+    (window as any).editTask = async (id: number) => {
+        try {
+            const res = await fetch('/api/scheduled-tasks', { headers: authHeaders() });
+            if (!res.ok) { alert('Failed to load task'); return; }
+            const tasks = await res.json();
+            const t = tasks.find((x: any) => x.id === id);
+            if (!t) { alert('Task not found'); return; }
+
+            (document.getElementById('edit-task-id') as HTMLInputElement).value = String(t.id);
+            (document.getElementById('new-task-name') as HTMLInputElement).value = t.name;
+            // Heartbeat name is meaningful to the backend — don't allow renaming it.
+            (document.getElementById('new-task-name') as HTMLInputElement).disabled = !!t.is_heartbeat;
+            (document.getElementById('new-task-prompt') as HTMLTextAreaElement).value = t.prompt || '';
+            (document.getElementById('new-task-schedule-type') as HTMLSelectElement).value = t.schedule_type;
+            (document.getElementById('new-task-schedule-expr') as HTMLInputElement).value = t.schedule_expr;
+            (document.getElementById('new-task-max-turns') as HTMLInputElement).value = String(t.max_turns ?? 10);
+            (document.getElementById('new-task-max-input') as HTMLInputElement).value = String(t.max_input_tokens ?? 200000);
+            (document.getElementById('new-task-max-output') as HTMLInputElement).value = String(t.max_output_tokens ?? 10000);
+            document.getElementById('task-form-title')!.textContent = `Edit: ${t.name}`;
+            document.getElementById('save-task-btn')!.textContent = 'Save Changes';
+
+            document.getElementById('add-task-form')!.style.display = 'block';
+            document.getElementById('add-task-btn')!.style.display = 'none';
+            document.getElementById('add-task-form')!.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } catch (e) {
+            alert('Failed to load task for editing');
+        }
+    };
+
     // Add task form
     document.getElementById('add-task-btn')?.addEventListener('click', () => {
+        resetTaskForm();
         document.getElementById('add-task-form')!.style.display = 'block';
         document.getElementById('add-task-btn')!.style.display = 'none';
     });
 
     document.getElementById('cancel-task-btn')?.addEventListener('click', () => {
+        resetTaskForm();
         document.getElementById('add-task-form')!.style.display = 'none';
         document.getElementById('add-task-btn')!.style.display = 'inline-block';
     });
 
     document.getElementById('save-task-btn')?.addEventListener('click', async () => {
+        const editId = (document.getElementById('edit-task-id') as HTMLInputElement).value;
         const name = (document.getElementById('new-task-name') as HTMLInputElement).value.trim();
         const prompt = (document.getElementById('new-task-prompt') as HTMLTextAreaElement).value.trim();
         const scheduleType = (document.getElementById('new-task-schedule-type') as HTMLSelectElement).value;
@@ -1377,36 +1431,41 @@ import Layout from '../layouts/Layout.astro';
             return;
         }
 
+        const isEdit = editId !== '';
+        const url = isEdit ? `/api/scheduled-tasks/${editId}` : '/api/scheduled-tasks';
+        const method = isEdit ? 'PUT' : 'POST';
+        const body: Record<string, any> = {
+            prompt,
+            schedule_type: scheduleType,
+            schedule_expr: scheduleExpr,
+            max_turns: maxTurns,
+            max_input_tokens: maxInput,
+            max_output_tokens: maxOutput,
+        };
+        // PUT also allows name; on the heartbeat task the name field is disabled (frozen).
+        if (!isEdit || !(document.getElementById('new-task-name') as HTMLInputElement).disabled) {
+            body.name = name;
+        }
+
         try {
-            const res = await fetch('/api/scheduled-tasks', {
-                method: 'POST',
+            const res = await fetch(url, {
+                method,
                 headers: authHeaders(),
-                body: JSON.stringify({
-                    name, prompt,
-                    schedule_type: scheduleType,
-                    schedule_expr: scheduleExpr,
-                    max_turns: maxTurns,
-                    max_input_tokens: maxInput,
-                    max_output_tokens: maxOutput,
-                }),
+                body: JSON.stringify(body),
             });
 
             if (res.ok) {
                 document.getElementById('add-task-form')!.style.display = 'none';
                 document.getElementById('add-task-btn')!.style.display = 'inline-block';
-                // Clear form
-                (document.getElementById('new-task-name') as HTMLInputElement).value = '';
-                (document.getElementById('new-task-prompt') as HTMLTextAreaElement).value = '';
-                (document.getElementById('new-task-schedule-expr') as HTMLInputElement).value = '';
-                statusEl.textContent = '';
+                resetTaskForm();
                 loadTasks();
             } else {
                 const data = await res.json();
-                statusEl.textContent = data.error || 'Failed to create task';
+                statusEl.textContent = data.error || (isEdit ? 'Failed to update task' : 'Failed to create task');
                 statusEl.className = 'status-text error';
             }
         } catch (e) {
-            statusEl.textContent = 'Error creating task';
+            statusEl.textContent = isEdit ? 'Error updating task' : 'Error creating task';
             statusEl.className = 'status-text error';
         }
     });

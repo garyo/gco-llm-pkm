@@ -15,7 +15,7 @@ from typing import Any
 
 import litellm
 
-from pkm_bridge.models import is_anthropic, supports_tools
+from pkm_bridge.models import is_anthropic, supports_caching, supports_tools
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,51 @@ class LLMResponse:
 # which leaks into history when `model_dump()` is called without honoring the
 # block's `__api_exclude__` set.
 _API_REJECTED_BLOCK_FIELDS = ("parsed_output",)
+
+
+def _extract_litellm_usage(usage_obj: Any) -> Usage:
+    """Normalize litellm/OpenAI-shaped usage into our Anthropic-shaped Usage.
+
+    OpenAI-style reports `prompt_tokens` as the *total* (cached + uncached);
+    Anthropic reports `input_tokens` as the *uncached* portion only. Subtract
+    cached_tokens so the two shapes mean the same thing downstream.
+    """
+    if not usage_obj:
+        return Usage()
+    prompt_tokens = getattr(usage_obj, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage_obj, "completion_tokens", 0) or 0
+
+    cached_tokens = 0
+    details = getattr(usage_obj, "prompt_tokens_details", None)
+    if details is not None:
+        cached_tokens = getattr(details, "cached_tokens", 0) or 0
+
+    return Usage(
+        input_tokens=max(0, prompt_tokens - cached_tokens),
+        output_tokens=completion_tokens,
+        cache_read_input_tokens=cached_tokens,
+        cache_creation_input_tokens=0,
+    )
+
+
+def _structured_system_content(system_blocks: list) -> list:
+    """Convert Anthropic-style system blocks to litellm-compatible content,
+    preserving `cache_control` hints so Gemini/etc. can apply prompt caching.
+    """
+    out: list[dict] = []
+    for block in system_blocks:
+        if isinstance(block, dict):
+            entry: dict[str, Any] = {
+                "type": block.get("type", "text"),
+                "text": block.get("text", ""),
+            }
+            cc = block.get("cache_control")
+            if cc:
+                entry["cache_control"] = cc
+            out.append(entry)
+        else:
+            out.append({"type": "text", "text": str(block)})
+    return out
 
 
 def _sanitize_for_anthropic(messages: list[dict]) -> list[dict]:
@@ -309,12 +354,8 @@ def _openai_response_to_llm_response(response: Any) -> LLMResponse:
     }
     stop_reason = stop_reason_map.get(finish, "end_turn")
 
-    # Usage
-    raw_usage = getattr(response, "usage", None)
-    usage = Usage(
-        input_tokens=getattr(raw_usage, "prompt_tokens", 0) if raw_usage else 0,
-        output_tokens=getattr(raw_usage, "completion_tokens", 0) if raw_usage else 0,
-    )
+    # Usage (extract cache hits where available)
+    usage = _extract_litellm_usage(getattr(response, "usage", None))
 
     return LLMResponse(
         content=content_blocks if content_blocks else [ContentBlock(type="text", text="")],
@@ -423,6 +464,16 @@ class LLMClient:
         # Translate messages (includes system prompt injection)
         openai_messages = _anthropic_messages_to_openai(messages, system=system)
 
+        # Preserve cache_control hints on the system message for providers that
+        # support prompt caching (Gemini via litellm's CachedContent mapping).
+        if (
+            supports_caching(model)
+            and isinstance(system, list)
+            and openai_messages
+            and openai_messages[0].get("role") == "system"
+        ):
+            openai_messages[0]["content"] = _structured_system_content(system)
+
         # Cap output tokens for non-Anthropic models to leave room for context
         capped_max_tokens = min(max_tokens, 4096)
 
@@ -494,6 +545,13 @@ class LLMClient:
     ):
         """Stream a litellm completion. Yields deltas; returns LLMResponse."""
         openai_messages = _anthropic_messages_to_openai(messages, system=system)
+        if (
+            supports_caching(model)
+            and isinstance(system, list)
+            and openai_messages
+            and openai_messages[0].get("role") == "system"
+        ):
+            openai_messages[0]["content"] = _structured_system_content(system)
         capped_max_tokens = min(max_tokens, 4096)
 
         params: dict[str, Any] = {
@@ -589,10 +647,7 @@ class LLMClient:
         }
         stop_reason = stop_reason_map.get(finish_reason or "stop", "end_turn")
 
-        usage = Usage(
-            input_tokens=getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0,
-            output_tokens=getattr(usage_obj, "completion_tokens", 0) if usage_obj else 0,
-        )
+        usage = _extract_litellm_usage(usage_obj)
 
         # Reconstruct a non-streaming-shaped response so litellm.completion_cost
         # can read it. stream_chunk_builder is the official helper for this.

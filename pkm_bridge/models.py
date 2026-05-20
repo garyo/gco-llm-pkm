@@ -46,6 +46,12 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
         "tier": "fast",
     },
     {
+        "id": "gemini/gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "provider": "google",
+        "tier": "fast",
+    },
+    {
         "id": "gemini/gemini-2.5-pro",
         "name": "Gemini 2.5 Pro",
         "provider": "google",
@@ -138,8 +144,20 @@ def supports_thinking(model: str) -> bool:
 
 
 def supports_caching(model: str) -> bool:
-    """Only Anthropic models support prompt caching."""
-    return is_anthropic(model)
+    """Models that support prompt caching via cache_control hints.
+
+    Anthropic uses transparent ephemeral caching — always on, always safe.
+
+    Gemini supports explicit context caching, but Google's free tier disallows
+    cached-content storage entirely (limit=0). To avoid breaking free-tier
+    users, explicit caching for Gemini is opt-in via GEMINI_EXPLICIT_CACHING=1.
+    Implicit caching on Gemini 2.5+ happens automatically and needs no hint.
+    """
+    if is_anthropic(model):
+        return True
+    if model.startswith("gemini/") and os.getenv("GEMINI_EXPLICIT_CACHING") == "1":
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

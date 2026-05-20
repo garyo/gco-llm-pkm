@@ -177,6 +177,7 @@ class ScenarioRun:
     total_duration_s: float = 0.0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
     passed: bool = False
     status: str = ""           # "ok" | "capped" | "error"
     error: str = ""
@@ -389,8 +390,10 @@ def run_scenario(
         usage = getattr(response, "usage", None)
         in_tok = getattr(usage, "input_tokens", 0) if usage else 0
         out_tok = getattr(usage, "output_tokens", 0) if usage else 0
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) if usage else 0
         result.total_input_tokens += in_tok
         result.total_output_tokens += out_tok
+        result.total_cache_read_tokens += cache_read
         result.turns.append(TraceTurn(
             turn=turn_idx, kind="llm",
             text=_text_from_response(response)[:2000],
@@ -457,8 +460,10 @@ def run_scenario(
             usage = getattr(response, "usage", None)
             in_tok = getattr(usage, "input_tokens", 0) if usage else 0
             out_tok = getattr(usage, "output_tokens", 0) if usage else 0
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) if usage else 0
             result.total_input_tokens += in_tok
             result.total_output_tokens += out_tok
+            result.total_cache_read_tokens += cache_read
             result.turns.append(TraceTurn(
                 turn=turn_idx, kind="llm",
                 text=_text_from_response(response)[:2000],
@@ -631,12 +636,13 @@ def main() -> int:
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"{'model':42s} {'scenario':22s} {'status':7s} {'pass':5s} {'turns':5s} {'tools':6s} {'in→out tok':12s} {'time':6s}")
+    print(f"{'model':42s} {'scenario':22s} {'status':7s} {'pass':5s} {'turns':5s} {'tools':6s} {'in→out tok':14s} {'cache':8s} {'time':6s}")
     for r in runs:
         print(
             f"{r.model[:42]:42s} {r.scenario_id[:22]:22s} {r.status:7s} "
             f"{('yes' if r.passed else 'no'):5s} {len(r.turns):5d} "
-            f"{len(r.tools_called):6d} {f'{r.total_input_tokens}→{r.total_output_tokens}':12s} "
+            f"{len(r.tools_called):6d} {f'{r.total_input_tokens}→{r.total_output_tokens}':14s} "
+            f"{r.total_cache_read_tokens:8d} "
             f"{r.total_duration_s:6.1f}"
         )
     print(f"\nTraces: {out_dir}")

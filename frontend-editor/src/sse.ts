@@ -1,5 +1,5 @@
 import type { SSEState } from './types';
-import { MAX_RECONNECT_DELAY, SSE_GLOBAL_KEY } from './types';
+import { MAX_RECONNECT_DELAY, SSE_GLOBAL_KEY, STORAGE_KEYS } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const win: Record<string, any> = window as any;
@@ -49,7 +49,12 @@ export function connectSSE(
 
   try {
     updateConnectionStatus('connecting');
-    const es = new EventSource('/api/events');
+    // EventSource can't set an Authorization header, so pass the token as
+    // ?token= (the server accepts it there for browser-native GETs).
+    const authToken = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    const es = new EventSource(
+      authToken ? `/api/events?token=${encodeURIComponent(authToken)}` : '/api/events',
+    );
     sse.eventSource = es;
     win[SSE_GLOBAL_KEY] = es;
 

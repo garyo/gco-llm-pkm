@@ -699,7 +699,8 @@ import EditorInterface from '../components/EditorInterface.astro';
       'google-gmail': 'Gmail',
       'google_gmail': 'Gmail',
     } as Record<string, string>)[provider] || provider;
-    const url = `/auth/${provider.replace('_', '-')}/authorize`;
+    const authorizePath = `/auth/${provider.replace('_', '-')}/authorize`;
+    const url = authToken ? `${authorizePath}?token=${encodeURIComponent(authToken)}` : authorizePath;
     div.innerHTML = `
       <div class="flex items-center justify-between gap-3 flex-wrap">
         <span class="text-sm text-gray-800">⚠️ <strong>${escapeHtml(label)}</strong> needs re-authorization to continue.</span>

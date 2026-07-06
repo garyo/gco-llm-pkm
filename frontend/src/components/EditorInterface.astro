@@ -1173,8 +1173,15 @@
         console.warn('No session ID available - SSE events will not be session-scoped');
       }
 
-      // Connect with session ID as query parameter
-      const url = sessionId ? `/api/events?session_id=${encodeURIComponent(sessionId)}` : '/api/events';
+      // Connect with session ID as query parameter. EventSource can't set an
+      // Authorization header, so pass the auth token as ?token= (the server
+      // accepts it there for browser-native GETs).
+      const authToken = localStorage.getItem('pkm-authToken');
+      const params = new URLSearchParams();
+      if (sessionId) params.set('session_id', sessionId);
+      if (authToken) params.set('token', authToken);
+      const qs = params.toString();
+      const url = qs ? `/api/events?${qs}` : '/api/events';
 
       updateConnectionStatus('connecting');
       eventSource = new EventSource(url);

@@ -1045,6 +1045,14 @@ import Layout from '../layouts/Layout.astro';
     } as const;
 
     // User Context Management
+    // Append the auth token to an OAuth /authorize URL. A full-page navigation
+    // can't set an Authorization header and the endpoint now requires auth, so
+    // the token rides along as ?token= (server accepts it for browser GETs).
+    function authorizeUrl(path: string): string {
+        const t = localStorage.getItem('pkm-authToken');
+        return t ? `${path}?token=${encodeURIComponent(t)}` : path;
+    }
+
     let originalContext = '';
     const contextTextarea = document.getElementById('user-context-textarea');
     const saveContextBtn = document.getElementById('save-context-btn');
@@ -1173,8 +1181,9 @@ import Layout from '../layouts/Layout.astro';
     }
 
     document.getElementById('connect-ticktick')?.addEventListener('click', () => {
-        // Open authorization in same tab
-        window.location.href = '/auth/ticktick/authorize';
+        // Open authorization in same tab (full navigation can't set a header,
+        // so pass the token as ?token= — the /authorize endpoint requires auth)
+        window.location.href = authorizeUrl('/auth/ticktick/authorize');
     });
 
     document.getElementById('disconnect-ticktick')?.addEventListener('click', async () => {
@@ -1240,8 +1249,7 @@ import Layout from '../layouts/Layout.astro';
     }
 
     document.getElementById('connect-google-calendar')?.addEventListener('click', () => {
-        // Open authorization in same tab
-        window.location.href = '/auth/google-calendar/authorize';
+        window.location.href = authorizeUrl('/auth/google-calendar/authorize');
     });
 
     document.getElementById('disconnect-google-calendar')?.addEventListener('click', async () => {
@@ -1307,7 +1315,7 @@ import Layout from '../layouts/Layout.astro';
     }
 
     document.getElementById('connect-gmail')?.addEventListener('click', () => {
-        window.location.href = '/auth/google-gmail/authorize';
+        window.location.href = authorizeUrl('/auth/google-gmail/authorize');
     });
 
     document.getElementById('disconnect-gmail')?.addEventListener('click', async () => {

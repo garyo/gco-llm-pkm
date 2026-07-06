@@ -99,8 +99,15 @@ class AuthManager:
                 token,
                 self.secret_key,
                 algorithms=["HS256"],
-                options={"verify_exp": True}  # Explicitly enable expiration check
+                options={"verify_exp": True, "verify_aud": False}  # aud checked manually below
             )
+            # The MCP server shares this JWT secret but mints tokens with
+            # aud="mcp". Reject those here so an MCP access/refresh token can't
+            # be replayed as a Flask session token.
+            if payload.get("aud") == "mcp":
+                if self.logger:
+                    self.logger.warning("Rejected MCP-audience token used as a Flask session token")
+                return None
             if self.logger:
                 self.logger.debug(f"Token verified for user '{payload.get('username', 'unknown')}'")
             return payload

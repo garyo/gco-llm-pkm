@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
 
+from pkm_bridge.context_retriever import DEFAULT_MIN_SIMILARITY
+
 logger = logging.getLogger("mcp_server.tools")
 
 # Lazy-initialized shared state
@@ -260,7 +262,7 @@ def register_all_tools(mcp: FastMCP):
     def semantic_search(
         query: str,
         limit: int = 10,
-        min_similarity: float = 0.6,
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
         newer: str | None = None,
     ) -> str:
         """Search notes using semantic similarity (understands meaning, not just keywords).
@@ -271,7 +273,7 @@ def register_all_tools(mcp: FastMCP):
         Args:
             query: Natural language search query
             limit: Maximum results
-            min_similarity: Minimum similarity threshold 0-1 (higher = more strict)
+            min_similarity: Minimum cosine similarity threshold 0-1 (higher = more strict)
             newer: Optional YYYY-MM-DD date filter
         """
         params: dict[str, Any] = {

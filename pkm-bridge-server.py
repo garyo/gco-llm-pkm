@@ -112,7 +112,7 @@ from pkm_bridge.voice_preprocessor import VoicePreprocessor
 from pkm_bridge.stt_client import STTClient
 
 # Import RAG components
-from pkm_bridge.context_retriever import ContextRetriever
+from pkm_bridge.context_retriever import ContextRetriever, DEFAULT_MIN_SIMILARITY
 from pkm_bridge.embeddings.voyage_client import VoyageClient
 from pkm_bridge.embeddings.embedding_service import run_incremental_embedding
 
@@ -849,7 +849,7 @@ def query():
                         context_block_text = context_retriever.retrieve_and_format(
                             query=expanded_query,
                             limit=12,
-                            min_similarity=0.60
+                            min_similarity=DEFAULT_MIN_SIMILARITY
                         )
 
                         if context_block_text:

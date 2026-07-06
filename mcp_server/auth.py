@@ -10,6 +10,7 @@ are persisted to PostgreSQL. Auth codes remain in-memory (short-lived).
 The server is behind Traefik with HTTPS at oberbrunner.com.
 """
 
+import asyncio
 import html
 import logging
 import os
@@ -24,6 +25,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
     RefreshToken,
+    RegistrationError,
     construct_redirect_uri,
 )
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
@@ -39,8 +41,22 @@ logger = logging.getLogger("mcp_server.auth")
 ACCESS_TOKEN_TTL = 24 * 3600  # 24 hours
 REFRESH_TOKEN_TTL = 90 * 24 * 3600  # 90 days
 AUTH_CODE_TTL = 300  # 5 minutes
+PENDING_AUTH_TTL = 600  # 10 minutes — time allowed to complete the login form
+
+# Caps so unauthenticated callers can't grow in-memory state without bound.
+MAX_CLIENT_REGISTRATIONS = 200
+
+# Login throttling (single-user server, so a simple global backoff is enough).
+FAILED_LOGIN_BASE_DELAY = 1.0  # seconds
+FAILED_LOGIN_MAX_DELAY = 30.0  # seconds
 
 JWT_ALGORITHM = "HS256"
+# Scope tokens minted by this server to the MCP domain, so a Flask session
+# token (which carries neither claim) is rejected outright. Tokens minted
+# before this claim existed still validate during the transition (see
+# _decode_token) so no forced re-auth is needed.
+JWT_ISSUER = "pkm-mcp-server"
+JWT_AUDIENCE = "mcp"
 
 
 def _get_jwt_secret() -> str:
@@ -70,7 +86,9 @@ class PKMOAuthProvider(
         self.auth_codes: dict[str, AuthorizationCode] = {}
         self.revoked_jtis: set[str] = set()  # Best-effort revocation (in-memory)
         # Maps state → authorization params for the login callback
-        self.pending_auth: dict[str, dict[str, str | None]] = {}
+        self.pending_auth: dict[str, dict[str, str | float | None]] = {}
+        # Consecutive failed login attempts, for backoff (reset on success)
+        self._failed_login_attempts = 0
         # Load persisted client registrations from DB
         self._load_clients_from_db()
 
@@ -118,6 +136,29 @@ class PKMOAuthProvider(
         except Exception as e:
             logger.warning(f"Could not persist client registration to DB: {e}")
 
+    def _prune_expired(self) -> None:
+        """Drop stale pending-auth and auth-code entries.
+
+        Unauthenticated callers can start (and abandon) as many OAuth flows
+        as they like; without this, `pending_auth` and `auth_codes` only
+        shrink on a successful login and grow forever otherwise. Called
+        opportunistically on each `/authorize` hit.
+        """
+        now = time.time()
+        stale_states = [
+            state
+            for state, data in self.pending_auth.items()
+            if now - float(data.get("created_at") or 0) > PENDING_AUTH_TTL
+        ]
+        for state in stale_states:
+            del self.pending_auth[state]
+
+        stale_codes = [
+            code for code, auth_code in self.auth_codes.items() if auth_code.expires_at < now
+        ]
+        for code in stale_codes:
+            del self.auth_codes[code]
+
     def _encode_token(
         self,
         token_type: str,
@@ -136,6 +177,8 @@ class PKMOAuthProvider(
             "iat": now,
             "exp": now + ttl,
             "jti": jti,
+            "iss": JWT_ISSUER,
+            "aud": JWT_AUDIENCE,
         }
         if resource is not None:
             payload["resource"] = resource
@@ -145,8 +188,15 @@ class PKMOAuthProvider(
     def _decode_token(self, token_str: str, expected_type: str) -> dict | None:
         """Decode and verify a JWT token. Returns payload or None."""
         try:
+            # PyJWT auto-rejects tokens with an "aud" claim if `audience=` isn't
+            # passed to decode(). We verify aud/iss manually below instead (to
+            # accept older tokens minted before these claims existed), so that
+            # implicit check is disabled here.
             payload = jwt.decode(
-                token_str, self.jwt_secret, algorithms=[JWT_ALGORITHM]
+                token_str,
+                self.jwt_secret,
+                algorithms=[JWT_ALGORITHM],
+                options={"verify_aud": False},
             )
         except jwt.ExpiredSignatureError:
             logger.debug(f"Token expired ({expected_type})")
@@ -157,6 +207,16 @@ class PKMOAuthProvider(
 
         if payload.get("type") != expected_type:
             logger.debug(f"Token type mismatch: expected {expected_type}, got {payload.get('type')}")
+            return None
+
+        # Reject tokens minted for a different audience/issuer outright (e.g. a
+        # Flask session token). Tokens that predate this claim (no aud/iss at
+        # all) are still accepted so existing sessions aren't force-logged-out.
+        if payload.get("aud") not in (None, JWT_AUDIENCE):
+            logger.debug("Token rejected: audience mismatch")
+            return None
+        if payload.get("iss") not in (None, JWT_ISSUER):
+            logger.debug("Token rejected: issuer mismatch")
             return None
 
         if payload.get("jti") in self.revoked_jtis:
@@ -171,6 +231,17 @@ class PKMOAuthProvider(
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if not client_info.client_id:
             raise ValueError("No client_id provided")
+        if (
+            client_info.client_id not in self.clients
+            and len(self.clients) >= MAX_CLIENT_REGISTRATIONS
+        ):
+            logger.warning(
+                f"Rejecting client registration: at cap of {MAX_CLIENT_REGISTRATIONS}"
+            )
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description="Server has reached its maximum number of registered clients",
+            )
         self.clients[client_info.client_id] = client_info
         self._save_client_to_db(client_info)
         logger.info(f"Registered OAuth client: {client_info.client_id}")
@@ -179,6 +250,7 @@ class PKMOAuthProvider(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
         """Return URL to redirect user to for authentication."""
+        self._prune_expired()
         state = params.state or secrets.token_hex(16)
         self.pending_auth[state] = {
             "redirect_uri": str(params.redirect_uri),
@@ -189,6 +261,7 @@ class PKMOAuthProvider(
             "client_id": client.client_id,
             "scopes": " ".join(params.scopes) if params.scopes else "",
             "resource": params.resource,
+            "created_at": time.time(),
         }
         return f"{self.server_url}/login?state={state}"
 
@@ -238,10 +311,22 @@ class PKMOAuthProvider(
         password = str(form.get("password", ""))
         state = str(form.get("state", ""))
 
-        if password != self.password:
-            logger.warning("Failed login attempt")
+        if not secrets.compare_digest(password.encode("utf-8"), self.password.encode("utf-8")):
+            self._failed_login_attempts += 1
+            delay = min(
+                FAILED_LOGIN_BASE_DELAY * (2 ** (self._failed_login_attempts - 1)),
+                FAILED_LOGIN_MAX_DELAY,
+            )
+            logger.warning(
+                f"Failed login attempt #{self._failed_login_attempts} "
+                f"(delaying {delay:.1f}s before responding)"
+            )
+            await asyncio.sleep(delay)
             raise HTTPException(status_code=401, detail="Invalid password")
 
+        self._failed_login_attempts = 0
+
+        self._prune_expired()
         state_data = self.pending_auth.pop(state, None)
         if not state_data:
             raise HTTPException(status_code=400, detail="Invalid or expired state")
@@ -380,11 +465,34 @@ class PKMOAuthProvider(
 
 
 def get_oauth_provider() -> PKMOAuthProvider | None:
-    """Create an OAuth provider if MCP_AUTH_PASSWORD is configured."""
+    """Create the OAuth provider for the MCP server.
+
+    Hard-fails at startup if `MCP_AUTH_PASSWORD` is unset — this server
+    exposes `execute_shell`/`write_and_execute_script`/`write_file` at an
+    internet-facing hostname, so silently starting unauthenticated is not an
+    acceptable default (mirrors `config/settings.py`'s hard fail on a missing
+    `JWT_SECRET`).
+
+    Set `MCP_AUTH_DISABLED=true` to explicitly run without authentication
+    (local dev only). This bypasses the raise and returns None, which is the
+    pre-existing no-auth code path.
+    """
     password = os.getenv("MCP_AUTH_PASSWORD")
     if not password:
-        logger.warning("MCP_AUTH_PASSWORD not set — MCP server has no authentication")
-        return None
+        if os.getenv("MCP_AUTH_DISABLED", "").lower() == "true":
+            logger.warning(
+                "MCP_AUTH_DISABLED=true — MCP server is starting with NO "
+                "authentication. Every tool (including execute_shell and "
+                "write_file) is open to anyone who can reach this host. "
+                "Never set this on an internet-facing deployment."
+            )
+            return None
+        raise RuntimeError(
+            "MCP_AUTH_PASSWORD environment variable is required — the MCP "
+            "server exposes shell and file-write tools and must not start "
+            "without authentication. Set MCP_AUTH_DISABLED=true to explicitly "
+            "bypass this for local dev."
+        )
 
     server_url = os.getenv("MCP_BASE_URL", "https://mcp.oberbrunner.com")
     logger.info("OAuth authentication enabled for MCP server")

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from starlette.responses import PlainTextResponse
 
 # Add project root to path so we can import pkm_bridge
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -66,6 +67,12 @@ def create_server() -> FastMCP:
         kwargs["auth"] = get_auth_settings(mcp_base_url)
 
     mcp = FastMCP(**kwargs)
+
+    # Unauthenticated liveness probe — lets Docker/compose detect a dead MCP
+    # process instead of only ever checking the Flask server on :8000.
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request):
+        return PlainTextResponse("ok")
 
     # Register login routes if OAuth is enabled
     if oauth_provider:

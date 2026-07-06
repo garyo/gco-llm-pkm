@@ -92,7 +92,10 @@ services:
       - "traefik.http.services.pkm-mcp.loadbalancer.server.port=8001"
 
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      # Probe the MCP server (:8001) too — it runs as an unsupervised
+      # background child of the entrypoint script, so without this a
+      # crashed/never-started MCP process is a silent Claude.ai outage.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health && curl -sf http://localhost:8001/health"]
       interval: 5s
       timeout: 3s
       retries: 3

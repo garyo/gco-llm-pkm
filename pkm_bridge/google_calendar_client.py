@@ -81,17 +81,26 @@ class GoogleCalendarClient:
             if time_min is None:
                 time_min = datetime.utcnow()
 
-            # Format times as RFC3339 timestamps
+            # Format times as RFC3339 timestamps. Naive datetimes are assumed to
+            # already be UTC (the shape produced internally by get_today_events/
+            # get_week_events); timezone-aware datetimes (e.g. a date-only
+            # list_range value localized by the caller) are converted to true UTC
+            # instead of having their wall-clock time reinterpreted as UTC.
+            def _rfc3339_utc(dt: datetime) -> str:
+                if dt.tzinfo is not None:
+                    return dt.astimezone(ZoneInfo('UTC')).isoformat().replace('+00:00', 'Z')
+                return dt.isoformat() + 'Z'
+
             params = {
                 'calendarId': calendar_id,
-                'timeMin': time_min.isoformat() + 'Z',
+                'timeMin': _rfc3339_utc(time_min),
                 'maxResults': max_results,
                 'singleEvents': single_events,
                 'orderBy': order_by
             }
 
             if time_max:
-                params['timeMax'] = time_max.isoformat() + 'Z'
+                params['timeMax'] = _rfc3339_utc(time_max)
 
             events_result = self.service.events().list(**params).execute()
             return events_result.get('items', [])

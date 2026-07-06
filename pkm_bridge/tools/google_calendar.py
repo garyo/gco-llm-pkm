@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import logging
 
 from pkm_bridge.tools.base import BaseTool
@@ -118,7 +119,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 },
                 "timezone": {
                     "type": "string",
-                    "description": "Timezone for event times (default: 'UTC'). Examples: 'America/New_York', 'Europe/London'"
+                    "description": "Timezone for event times (default: the user's current timezone). Examples: 'America/New_York', 'Europe/London'"
                 }
             },
             "required": ["action"]
@@ -253,6 +254,19 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 except ValueError as e:
                     return f"Error: Invalid date format: {e}"
 
+                # Date-only inputs parse as naive datetimes; localize them in the
+                # user's timezone (falling back to UTC) instead of letting the
+                # client silently treat them as UTC.
+                if time_min.tzinfo is None or time_max.tzinfo is None:
+                    try:
+                        range_tz = ZoneInfo(user_timezone) if user_timezone else ZoneInfo('UTC')
+                    except Exception:
+                        range_tz = ZoneInfo('UTC')
+                    if time_min.tzinfo is None:
+                        time_min = time_min.replace(tzinfo=range_tz)
+                    if time_max.tzinfo is None:
+                        time_max = time_max.replace(tzinfo=range_tz)
+
                 events = client.get_events(
                     calendar_id=calendar_id,
                     time_min=time_min,
@@ -282,7 +296,10 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 description = params.get('description')
                 location = params.get('location')
                 attendees = params.get('attendees')
-                timezone = params.get('timezone', 'UTC')
+                # Default to the user's timezone (threaded via context), then the
+                # server config timezone (already folded into user_timezone by
+                # the caller), and only fall back to UTC as a last resort.
+                timezone = params.get('timezone') or user_timezone or 'UTC'
 
                 event = client.create_event(
                     summary=summary,
@@ -304,12 +321,15 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
                 # Build updates dict from provided parameters
                 updates = {}
+                # Default to the user's timezone (threaded via context), then the
+                # server config timezone (already folded into user_timezone by
+                # the caller), and only fall back to UTC as a last resort.
+                timezone = params.get('timezone') or user_timezone or 'UTC'
                 if 'summary' in params:
                     updates['summary'] = params['summary']
                 if 'start' in params:
                     try:
                         start = datetime.fromisoformat(params['start'])
-                        timezone = params.get('timezone', 'UTC')
                         updates['start'] = {
                             'dateTime': start.isoformat(),
                             'timeZone': timezone
@@ -319,7 +339,6 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 if 'end' in params:
                     try:
                         end = datetime.fromisoformat(params['end'])
-                        timezone = params.get('timezone', 'UTC')
                         updates['end'] = {
                             'dateTime': end.isoformat(),
                             'timeZone': timezone

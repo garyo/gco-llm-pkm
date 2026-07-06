@@ -859,6 +859,11 @@ def query():
             model = data.get('model', config.model)
             thinking = data.get('thinking')
             user_timezone = data.get('timezone')  # Optional timezone from client
+            if not user_timezone and config.timezone:
+                # Fall back to the server-configured timezone so tools (e.g. the
+                # calendar tool's create/update) never silently default to UTC
+                # just because the client omitted one.
+                user_timezone = config.timezone.key
             is_voice = data.get('is_voice', False)  # Flag indicating voice transcription
 
             # Preprocess voice transcriptions to clean up disfluencies

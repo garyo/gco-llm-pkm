@@ -73,6 +73,7 @@ export class VoiceInput {
   private vad: MicVAD | null = null;
   private active = false;
   private starting = false;  // mutex: prevents concurrent start() calls
+  private pendingTranscription: Promise<void> | null = null;  // in-flight /transcribe call
   private config: Required<VoiceInputConfig>;
 
   constructor(config: VoiceInputConfig = {}) {
@@ -111,60 +112,20 @@ export class VoiceInput {
           // Speech detected -- no visible change needed
         },
 
-        onSpeechEnd: async (audio: Float32Array) => {
+        onSpeechEnd: (audio: Float32Array) => {
           // Skip very short segments (noise/clicks) -- 0.3s at 16kHz
           if (audio.length < 4800) return;
 
           // Guard: stop() may have been called while VAD was processing
           if (!this.active) return;
 
-          this.config.onStatusChange('transcribing');
-
-          try {
-            const wav = encodeWAV(audio);
-            const form = new FormData();
-            form.append('audio', wav, 'audio.wav');
-            form.append('language', this.config.language);
-
-            // Extract only the Authorization header (FormData sets its own Content-Type)
-            const allHeaders = this.config.getAuthHeaders();
-            const headers: HeadersInit = {};
-            if (allHeaders && typeof allHeaders === 'object') {
-              const auth = (allHeaders as Record<string, string>)['Authorization'];
-              if (auth) {
-                (headers as Record<string, string>)['Authorization'] = auth;
-              }
-            }
-
-            const resp = await fetch('/transcribe', {
-              method: 'POST',
-              headers,
-              body: form,
-            });
-
-            if (!resp.ok) {
-              const err = await resp.json().catch(() => ({ error: resp.statusText }));
-              throw new Error(err.error || `HTTP ${resp.status}`);
-            }
-
-            // Guard: stop() may have been called during the fetch
-            if (!this.active) return;
-
-            const data = await resp.json();
-            const text = (data.text || '').trim();
-            if (text) {
-              this.config.onTranscript(text);
-            }
-          } catch (e: any) {
-            console.error('Transcription failed:', e);
-            if (this.active) {
-              this.config.onError(`Transcription error: ${e.message}`);
-            }
-          } finally {
-            if (this.active) {
-              this.config.onStatusChange('listening');
-            }
-          }
+          // Track the in-flight call so stop() can flush it instead of the
+          // final utterance being silently discarded (see transcribe()).
+          const p = this.transcribe(audio);
+          this.pendingTranscription = p;
+          p.finally(() => {
+            if (this.pendingTranscription === p) this.pendingTranscription = null;
+          });
         },
 
         onVADMisfire: () => {
@@ -190,6 +151,58 @@ export class VoiceInput {
     }
   }
 
+  // POST one speech segment to /transcribe and deliver the result via
+  // onTranscript. Runs to completion even if stop() flips `active` to false
+  // partway through -- stop() awaits the promise this returns so the final
+  // utterance is flushed to the caller instead of silently dropped (e.g.
+  // the user taps Send the instant speech ends, before the response lands).
+  private async transcribe(audio: Float32Array): Promise<void> {
+    this.config.onStatusChange('transcribing');
+
+    try {
+      const wav = encodeWAV(audio);
+      const form = new FormData();
+      form.append('audio', wav, 'audio.wav');
+      form.append('language', this.config.language);
+
+      // Extract only the Authorization header (FormData sets its own Content-Type)
+      const allHeaders = this.config.getAuthHeaders();
+      const headers: HeadersInit = {};
+      if (allHeaders && typeof allHeaders === 'object') {
+        const auth = (allHeaders as Record<string, string>)['Authorization'];
+        if (auth) {
+          (headers as Record<string, string>)['Authorization'] = auth;
+        }
+      }
+
+      const resp = await fetch('/transcribe', {
+        method: 'POST',
+        headers,
+        body: form,
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: resp.statusText }));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      const text = (data.text || '').trim();
+      if (text) {
+        this.config.onTranscript(text);
+      }
+    } catch (e: any) {
+      console.error('Transcription failed:', e);
+      if (this.active) {
+        this.config.onError(`Transcription error: ${e.message}`);
+      }
+    } finally {
+      if (this.active) {
+        this.config.onStatusChange('listening');
+      }
+    }
+  }
+
   public async stop(): Promise<void> {
     this.starting = false;  // cancel any in-progress start()
     if (!this.active) return;
@@ -198,6 +211,12 @@ export class VoiceInput {
     if (this.vad) {
       this.vad.destroy();
       this.vad = null;
+    }
+
+    // Flush any transcription still in flight so the last utterance reaches
+    // onTranscript before callers (e.g. send()) read the input value.
+    if (this.pendingTranscription) {
+      await this.pendingTranscription;
     }
 
     this.config.onEnd();

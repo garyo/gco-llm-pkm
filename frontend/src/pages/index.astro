@@ -9,7 +9,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   <LoginForm />
 
   <!-- App Container -->
-  <div id="app-container" class="hidden h-screen flex flex-col overflow-hidden">
+  <div id="app-container" class="hidden h-dvh flex flex-col overflow-hidden">
     <!-- Unified Header - Always visible at top -->
     <div class="bg-blue-500 text-white px-2 sm:px-4 py-2 sm:py-3 shadow-md flex items-center gap-2 sm:gap-4 flex-shrink-0 sticky top-0 z-10">
       <!-- Title: Short on mobile, full on desktop -->
@@ -752,7 +752,15 @@ import EditorInterface from '../components/EditorInterface.astro';
       editorTab?.classList.remove('bg-white/20');
       editorTab?.classList.add('bg-white/0');
 
-      // Clean up editor timers when switching away
+      // Flush (don't just cancel) any pending autosave before leaving the
+      // editor tab -- cleanupAutoSaveTimers() alone would drop an edit that
+      // was waiting out its debounce. The Save button is disabled exactly
+      // when the editor is clean, so use it as the dirty signal; clicking it
+      // when no file is loaded/dirty is a harmless no-op in EditorInterface.
+      const saveButton = document.getElementById('save-button') as HTMLButtonElement | null;
+      if (saveButton && !saveButton.disabled) {
+        saveButton.click();
+      }
       const cleanup = (window as any).cleanupAutoSaveTimers;
       if (cleanup) cleanup();
 
@@ -877,8 +885,11 @@ import EditorInterface from '../components/EditorInterface.astro';
     updateModelButtonHighlight();
   }
 
-  // Verify token on page load
-  async function verifyToken() {
+  // Verify token on page load. Retries a couple of times with backoff on a
+  // network/timeout failure before falling back to an optimistic launch with
+  // the stored token (a bad token will still 401 out via handle401()) --
+  // only an explicit `valid: false` from the server drops straight to login.
+  async function verifyToken(retriesLeft: number = 2) {
     if (!authToken) {
       showLogin();
       return;
@@ -902,7 +913,12 @@ import EditorInterface from '../components/EditorInterface.astro';
       }
     } catch (e) {
       console.error('Token verification error:', e);
-      showLogin();
+      if (retriesLeft > 0) {
+        const delayMs = (3 - retriesLeft) * 1000;
+        setTimeout(() => verifyToken(retriesLeft - 1), delayMs);
+        return;
+      }
+      showApp();
     }
   }
 
@@ -1084,8 +1100,10 @@ import EditorInterface from '../components/EditorInterface.astro';
         appendMessage('assistant', '⏱️ Response timed out, checking server...');
 
         try {
-          // Count messages before reload
-          const messagesBefore = chat.querySelectorAll('.message').length;
+          // Count only user/assistant messages before reload — tool-call blocks
+          // and system banners are also `.message` divs but aren't part of the
+          // server-side history array we're comparing against below.
+          const messagesBefore = chat.querySelectorAll('.message.user, .message.assistant').length;
 
           // Reload history to sync with server state
           // Use short timeout to fail fast if network is still down
@@ -1567,12 +1585,15 @@ import EditorInterface from '../components/EditorInterface.astro';
     autoResizeTextarea();
   });
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts. Shift+Enter always inserts a newline. Plain Enter
+  // sends only on devices with a precise pointer (mouse/trackpad) -- on
+  // touch soft keyboards Enter inserts a newline so multi-line messages are
+  // possible (Send button still sends).
   input.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    if (!matchMedia('(pointer: fine)').matches) return;
+    e.preventDefault();
+    send();
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1580,6 +1601,15 @@ import EditorInterface from '../components/EditorInterface.astro';
       e.preventDefault();
       input.focus();
     }
+  });
+
+  // Warn before closing/navigating away with an unsent chat message still in
+  // the input box (the editor has its own beforeunload guard for dirty file
+  // content, so this only covers chat's unsaved state).
+  window.addEventListener('beforeunload', (e) => {
+    if (!input.value.trim()) return;
+    e.preventDefault();
+    e.returnValue = '';
   });
 
   // Set up login form handler
@@ -1616,9 +1646,30 @@ import EditorInterface from '../components/EditorInterface.astro';
     return false;
   }
 
+  // Walk up from the touch target looking for an ancestor that actually
+  // scrolls horizontally (code blocks, wide tables) -- swiping to pan those
+  // shouldn't also switch tabs.
+  function hasScrollableXAncestor(element: HTMLElement | null): boolean {
+    let el: HTMLElement | null = element;
+    while (el && el !== document.body) {
+      const overflowX = getComputedStyle(el).overflowX;
+      if ((overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth) {
+        return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }
+
   function handleSwipeGesture() {
     // Only handle swipes that started in swipeable areas
     if (!isSwipeableArea(touchStartElement)) {
+      return;
+    }
+
+    // Don't hijack swipes that start inside a horizontally-scrollable element
+    // (code blocks, tables) -- let the user pan those normally.
+    if (hasScrollableXAncestor(touchStartElement)) {
       return;
     }
 

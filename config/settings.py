@@ -16,6 +16,19 @@ DEFAULT_DANGEROUS_PATTERNS = [
     # Destructive operations from root
     r'rm\s+(-[rf]+\s+)?/',
     r'rm\s+-[rf]*\s+\*\s*$',
+    # Recursive/force rm of a relative directory, e.g. "rm -rf journals/"
+    # (requires the recursive flag and a trailing slash so plain
+    # "rm -f note.org" single-file deletes are not blocked).
+    r'\brm\s+-\w*r\w*\s+\S+/',
+    # find ... -delete
+    r'\bfind\b.*-delete\b',
+    # truncate to zero bytes
+    r'\btruncate\s+-s\s?0\b',
+    # dd writing to a file/device
+    r'\bdd\b.*\bof=',
+    # secure-erase / filesystem creation tools
+    r'\bshred\b',
+    r'\bmkfs\b',
 
     # Fork bombs
     r':\(\)\s*\{.*\:',

@@ -26,6 +26,45 @@ def validate_command(command: str, dangerous_patterns: List[str]) -> Tuple[bool,
     return True, ""
 
 
+def confine_working_dir(working_dir: str | None, org_dir: Path, logseq_dir: Path | None) -> str:
+    """Resolve a requested working_dir, confining it to org_dir/logseq_dir.
+
+    working_dir is passed straight through to subprocess `cwd=`, so an
+    unconstrained absolute path or `..` traversal would let a command run
+    outside the PKM directories. Mirrors the is_relative_to containment
+    check used in file_editor.py. Falls back to org_dir if the requested
+    path can't be resolved or escapes both allowed directories.
+
+    Args:
+        working_dir: Requested working directory (absolute or relative to org_dir)
+        org_dir: Primary org-mode directory (default and fallback)
+        logseq_dir: Optional secondary Logseq directory
+
+    Returns:
+        A resolved, contained path as a string
+    """
+    org_dir = org_dir.resolve()
+    if not working_dir:
+        return str(org_dir)
+
+    allowed_dirs = [d for d in (org_dir, logseq_dir.resolve() if logseq_dir else None) if d]
+
+    candidate = Path(working_dir).expanduser()
+    if not candidate.is_absolute():
+        candidate = org_dir / candidate
+
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return str(org_dir)
+
+    for allowed in allowed_dirs:
+        if resolved.is_relative_to(allowed):
+            return str(resolved)
+
+    return str(org_dir)
+
+
 class ExecuteShellTool(BaseTool):
     """Execute shell commands and pipelines in PKM environment."""
 
@@ -92,10 +131,11 @@ Directories:
 {dirs_info}
 
 Security notes:
-- Environment is Docker-isolated with access only to PKM files
-- Dangerous patterns (rm -rf /, fork bombs, package installs) are blocked
+- In production this runs inside a Docker container; in local dev it runs
+  directly on the host, so treat it as full shell access as the running user
+- working_dir is confined to the org/Logseq directories above
+- Dangerous patterns (rm -rf, fork bombs, package installs, etc.) are blocked
 - All commands are logged with stdout, stderr, and exit codes
-- Real security comes from container isolation and git backups
 """
 
     @property
@@ -119,7 +159,7 @@ Security notes:
             Command output with stderr and exit code information
         """
         command = params["command"]
-        working_dir = params.get("working_dir") or str(self.org_dir)
+        working_dir = confine_working_dir(params.get("working_dir"), self.org_dir, self.logseq_dir)
 
         # Validate against blacklist
         is_valid, error = validate_command(command, self.dangerous_patterns)
@@ -267,7 +307,7 @@ Security notes:
         """
         script_content = params["script_content"]
         description = params["description"]
-        working_dir = params.get("working_dir") or str(self.org_dir)
+        working_dir = confine_working_dir(params.get("working_dir"), self.org_dir, self.logseq_dir)
 
         # Validate against blacklist
         is_valid, error = validate_command(script_content, self.dangerous_patterns)

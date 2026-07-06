@@ -1,8 +1,14 @@
 """File editor functionality for PKM notes."""
 
-from pathlib import Path
-from typing import List, Dict
 import logging
+import os
+import tempfile
+from pathlib import Path
+from typing import Dict, List
+
+# Cap for read_file to keep large notes from blowing the LLM token budget.
+# Editor/checkbox callers opt out (max_chars=None) since they need full content.
+READ_FILE_CHAR_CAP = 200_000
 
 
 class ConflictError(Exception):
@@ -49,6 +55,41 @@ class FileEditor:
                 continue
         
         raise ValueError(f"Path '{filepath}' is not within allowed directories")
+
+    def _resolve_prefixed_path(self, filepath: str) -> Path:
+        """Resolve a prefixed ('org:'/'logseq:') or legacy path with containment check.
+
+        Args:
+            filepath: Path in format "org:path/to/file.org", "logseq:path/to/file.md",
+                      or a legacy prefix-less relative path.
+
+        Returns:
+            Resolved Path, guaranteed to be inside the target base directory.
+
+        Raises:
+            ValueError: On unknown prefix, unconfigured directory, or path traversal
+                        (resolved path escaping the base directory).
+        """
+        if ":" not in filepath:
+            # Legacy: validate_path already enforces containment.
+            return self.validate_path(filepath)
+
+        dir_type, rel_path = filepath.split(":", 1)
+        if dir_type == "org":
+            base_dir = self.org_dir
+        elif dir_type == "logseq":
+            base_dir = self.logseq_dir
+        else:
+            raise ValueError(f"Unknown directory type: {dir_type}")
+
+        if base_dir is None:
+            raise ValueError(f"Directory type '{dir_type}' is not configured")
+
+        base_dir = base_dir.resolve()
+        full_path = (base_dir / rel_path).resolve()
+        if not full_path.is_relative_to(base_dir):
+            raise ValueError(f"Path '{filepath}' escapes the '{dir_type}' directory")
+        return full_path
 
     def list_files(self) -> List[Dict[str, str]]:
         """List all .org and .md files in allowed directories.
@@ -127,46 +168,54 @@ class FileEditor:
 
         return files
 
-    def read_file(self, filepath: str) -> Dict[str, any]:
+    def read_file(
+        self,
+        filepath: str,
+        offset: int = 0,
+        max_chars: int | None = READ_FILE_CHAR_CAP,
+    ) -> Dict[str, any]:
         """Read file content.
 
         Args:
             filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
+            offset: Character offset to start reading from (for paging large files).
+            max_chars: Cap on returned characters; a truncation note is appended when the
+                       content is longer. Pass None to return the full file (editor path).
 
         Returns:
-            Dict with content, path, modified timestamp
+            Dict with content, path, modified timestamp, size, and 'truncated' flag.
 
         Raises:
             ValueError: If file path is invalid or file doesn't exist
         """
-        # Parse prefix
-        if ':' in filepath:
-            dir_type, rel_path = filepath.split(':', 1)
-            if dir_type == 'org':
-                base_dir = self.org_dir
-            elif dir_type == 'logseq':
-                base_dir = self.logseq_dir
-            else:
-                raise ValueError(f"Unknown directory type: {dir_type}")
-            
-            full_path = (base_dir / rel_path).resolve()
-        else:
-            # Legacy: try to validate without prefix
-            full_path = self.validate_path(filepath)
-        
+        full_path = self._resolve_prefixed_path(filepath)
+
         if not full_path.exists():
             raise ValueError(f"File not found: {filepath}")
-        
+
         if not full_path.is_file():
             raise ValueError(f"Not a file: {filepath}")
-        
-        content = full_path.read_text(encoding='utf-8')
-        
+
+        full_content = full_path.read_text(encoding="utf-8")
+        total_chars = len(full_content)
+
+        content = full_content[offset:] if offset else full_content
+        truncated = False
+        if max_chars is not None and len(content) > max_chars:
+            next_offset = offset + max_chars
+            content = content[:max_chars]
+            truncated = True
+            content += (
+                f"\n\n[... truncated at {max_chars} of {total_chars} chars. "
+                f"Read more with offset={next_offset}.]"
+            )
+
         return {
             'content': content,
             'path': filepath,
             'modified': full_path.stat().st_mtime,
-            'size': full_path.stat().st_size
+            'size': full_path.stat().st_size,
+            'truncated': truncated,
         }
 
     def write_file(
@@ -194,20 +243,7 @@ class FileEditor:
             FileExistsError: (via create_only)
             ConflictError: If expected_mtime is stale (caller should return 409)
         """
-        # Parse prefix
-        if ':' in filepath:
-            dir_type, rel_path = filepath.split(':', 1)
-            if dir_type == 'org':
-                base_dir = self.org_dir
-            elif dir_type == 'logseq':
-                base_dir = self.logseq_dir
-            else:
-                raise ValueError(f"Unknown directory type: {dir_type}")
-
-            full_path = (base_dir / rel_path).resolve()
-        else:
-            # Legacy: try to validate without prefix
-            full_path = self.validate_path(filepath)
+        full_path = self._resolve_prefixed_path(filepath)
 
         # Ensure parent directory exists
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -243,7 +279,7 @@ class FileEditor:
                     'size': full_path.stat().st_size
                 }
         else:
-            full_path.write_text(content, encoding='utf-8')
+            self._atomic_write(full_path, content)
             self.logger.info(f"Saved file: {filepath} ({len(content)} bytes)")
             return {
                 'status': 'saved',
@@ -251,3 +287,28 @@ class FileEditor:
                 'modified': full_path.stat().st_mtime,
                 'size': len(content)
             }
+
+    @staticmethod
+    def _atomic_write(full_path: Path, content: str) -> None:
+        """Write content atomically: temp file in the same dir, then os.replace().
+
+        A crash or a Syncthing read mid-write can never see a partially written note —
+        readers observe either the old or the new file, never a truncated one.
+        """
+        directory = full_path.parent
+        fd, tmp_name = tempfile.mkstemp(
+            dir=directory, prefix=f".{full_path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_name, full_path)
+        except BaseException:
+            # Best-effort cleanup; os.replace already consumed tmp_name on success.
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise

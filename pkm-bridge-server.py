@@ -33,6 +33,8 @@ A modular server providing Claude API access to Personal Knowledge Management fi
 
 import json
 import re
+import secrets
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -46,6 +48,7 @@ from pkm_bridge.models import (
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 from pathlib import Path
 
@@ -268,6 +271,10 @@ query_enhancer = QueryEnhancer(logger)
 # Flask app
 app = Flask(__name__)
 
+# Behind Traefik: trust one proxy hop so request.remote_addr (and thus the rate
+# limiter's key_func) reflects the real client IP from X-Forwarded-For, not Traefik.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
+
 # Enable browser hot-reload in debug mode (if available)
 if config.debug and HOT_RELOAD_AVAILABLE:
     HotReload(app, includes=['templates', 'static'])
@@ -342,6 +349,19 @@ if config.auth_enabled:
         logger=logger
     )
     logger.info("Authentication enabled with rate limiting")
+
+
+def require_auth(f):
+    """Route decorator: enforce auth when enabled, no-op when disabled.
+
+    Resolves at import time so decorators like ``@require_auth`` work even when
+    ``auth_manager`` is None (AUTH_ENABLED=false), which would otherwise raise
+    AttributeError on ``@auth_manager.require_auth``.
+    """
+    if auth_manager is not None:
+        return auth_manager.require_auth(f)
+    return f
+
 
 # -------------------------
 # Initialize Tools
@@ -655,6 +675,11 @@ def transcribe():
 
     if not stt_client:
         return jsonify({"error": "STT not configured (set STT_PROVIDER and API key)"}), 503
+
+    # Cap upload size (Whisper API limit is ~25 MB); reject early before buffering.
+    max_bytes = 25 * 1024 * 1024
+    if request.content_length is not None and request.content_length > max_bytes:
+        return jsonify({"error": "Audio file too large (max 25 MB)"}), 413
 
     audio_file = request.files.get('audio')
     if not audio_file:
@@ -1476,7 +1501,7 @@ def serve_asset(filepath):
 
                 # Check if path is within allowed directories
                 is_allowed = any(
-                    str(resolved_path).startswith(str(root))
+                    resolved_path.is_relative_to(root)
                     for root in allowed_roots
                 )
 
@@ -1498,7 +1523,7 @@ def serve_asset(filepath):
 
         # Final security check: ensure resolved path is within allowed directories
         is_safe = any(
-            str(found_path).startswith(str(root))
+            found_path.is_relative_to(root)
             for root in allowed_roots
         )
 
@@ -1556,7 +1581,7 @@ def serve_org_attachment(org_id, filename):
     # Path traversal protection
     resolved = found_path.resolve()
     allowed_root = config.org_dir.resolve()
-    if not str(resolved).startswith(str(allowed_root)):
+    if not resolved.is_relative_to(allowed_root):
         logger.warning(f"Path traversal attempt: {org_id}/{filename}")
         return jsonify({"error": "Invalid file path"}), 403
 
@@ -1564,7 +1589,7 @@ def serve_org_attachment(org_id, filename):
 
 
 @app.route('/api/resolve-org-id/<uuid_str>', methods=['GET'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("60 per minute")
 def resolve_org_id(uuid_str):
     """Resolve an org-id UUID to its file path and line number."""
@@ -1589,7 +1614,7 @@ def resolve_org_id(uuid_str):
 # -------------------------
 
 @app.route('/api/models', methods=['GET'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("30 per minute")
 def get_models():
     """Return available LLM models (filtered by configured API keys)."""
@@ -1597,7 +1622,7 @@ def get_models():
 
 
 @app.route('/api/user-context', methods=['GET'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("30 per minute")
 def get_user_context():
     """Get user context for the current user.
@@ -1628,7 +1653,7 @@ def get_user_context():
 
 
 @app.route('/api/user-context', methods=['PUT'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("10 per minute")
 def update_user_context():
     """Update user context for the current user.
@@ -1672,7 +1697,7 @@ def update_user_context():
 # -------------------------
 
 @app.route('/api/files', methods=['GET'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("60 per minute")
 def list_files():
     """List all editable files (.org and .md) in PKM directories.
@@ -1689,7 +1714,7 @@ def list_files():
 
 
 @app.route('/api/file/<path:filepath>', methods=['GET'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("60 per minute")
 def get_file(filepath):
     """Read file content.
@@ -1701,7 +1726,9 @@ def get_file(filepath):
         JSON with content, path, modified timestamp
     """
     try:
-        file_data = file_editor.read_file(filepath)
+        # Editor needs the full file (max_chars=None); the char cap is for the
+        # LLM/MCP read path, not the interactive editor.
+        file_data = file_editor.read_file(filepath, max_chars=None)
         return jsonify(file_data)
     except ValueError as e:
         logger.warning(f"Invalid file path requested: {filepath} - {str(e)}")
@@ -1712,7 +1739,7 @@ def get_file(filepath):
 
 
 @app.route('/api/file/<path:filepath>', methods=['PUT'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("60 per minute")
 def save_file(filepath):
     """Save file content.
@@ -1759,7 +1786,7 @@ def save_file(filepath):
 # -------------------------
 
 @app.route('/api/checkbox/toggle', methods=['POST'])
-@auth_manager.require_auth
+@require_auth
 @limiter.limit("30 per minute")
 def toggle_checkbox():
     """Toggle a checkbox item in TickTick or a file.
@@ -1815,7 +1842,8 @@ def toggle_checkbox():
         logger.info(f"Checkbox toggle (file): path={file_path!r}, item_text={item_text!r}, line_hint={line_hint}, checked={checked}")
 
         try:
-            file_data = file_editor.read_file(file_path)
+            # Full content required: we rewrite the whole file after toggling.
+            file_data = file_editor.read_file(file_path, max_chars=None)
             content = file_data['content']
             lines = content.split('\n')
 
@@ -1951,13 +1979,39 @@ def toggle_checkbox():
 # OAuth Helpers
 # -------------------------
 
-# Store return_to URLs for OAuth flows (keyed by service name, short-lived)
-_oauth_return_to: dict[str, str] = {}
+# Pending OAuth flows keyed by service name (single-user, short-lived):
+# holds the CSRF `state` and the sanitized post-auth `return_to`.
+_oauth_pending: dict[str, dict[str, str]] = {}
 
 
-def _get_oauth_return_to(service: str) -> str:
-    """Pop and return the stored return_to URL for a service, defaulting to '/'."""
-    return _oauth_return_to.pop(service, "/")
+def _sanitize_return_to(raw: str | None) -> str:
+    """Restrict return_to to a same-site relative path to prevent open redirects.
+
+    Rejects absolute URLs (``http://evil``) and protocol-relative URLs (``//evil``).
+    """
+    if raw and raw.startswith("/") and not raw.startswith("//"):
+        return raw
+    return "/"
+
+
+def _begin_oauth_flow(service: str, state: str, return_to: str | None) -> None:
+    """Record the CSRF state + redirect target for a starting OAuth flow."""
+    _oauth_pending[service] = {
+        "state": state,
+        "return_to": _sanitize_return_to(return_to),
+    }
+
+
+def _finish_oauth_flow(service: str, state: str | None) -> str:
+    """Validate the returned CSRF state and pop the sanitized return_to.
+
+    Raises:
+        PermissionError: if no flow is pending or the state doesn't match.
+    """
+    pending = _oauth_pending.pop(service, None)
+    if not pending or not state or not secrets.compare_digest(pending["state"], state):
+        raise PermissionError("Invalid or missing OAuth state")
+    return pending["return_to"]
 
 
 def _oauth_success_html(service_name: str, message: str, return_to: str) -> str:
@@ -1987,20 +2041,24 @@ def _oauth_success_html(service_name: str, message: str, return_to: str) -> str:
 def ticktick_authorize():
     """Initiate TickTick OAuth flow.
 
-    This endpoint doesn't require authentication since it's part of the initial
-    setup flow. The actual authorization happens on TickTick's servers.
-    Redirects user to TickTick's authorization page.
+    Requires a valid JWT (via header or ?token=) so only the authenticated user can
+    start a flow — otherwise an attacker could connect their own account and overwrite
+    stored tokens. Redirects the user to TickTick's authorization page.
 
-    Optional query param: return_to — URL to redirect to after successful auth.
+    Optional query param: return_to — relative URL to redirect to after successful auth.
     """
     if not ticktick_oauth:
         return jsonify({"error": "TickTick not configured"}), 503
 
+    auth_err = _check_auth(allow_query_token=True)
+    if auth_err:
+        return auth_err
+
     return_to = request.args.get('return_to', '/')
-    _oauth_return_to['ticktick'] = return_to
 
     try:
         auth_data = ticktick_oauth.get_authorization_url()
+        _begin_oauth_flow('ticktick', auth_data['state'], return_to)
         # Use HTML redirect to avoid hot-reload middleware issues
         return f"""
         <html>
@@ -2037,6 +2095,13 @@ def ticktick_callback():
         return jsonify({"error": "No authorization code received"}), 400
 
     try:
+        return_to = _finish_oauth_flow('ticktick', state)
+    except PermissionError:
+        logger.warning("TickTick OAuth callback rejected: invalid/missing state")
+        return jsonify({"error": "Invalid OAuth state"}), 400
+
+    db = None
+    try:
         # Exchange code for tokens
         token_data = ticktick_oauth.exchange_code(code)
 
@@ -2050,10 +2115,8 @@ def ticktick_callback():
             expires_at=token_data['expires_at'],
             scope=token_data.get('scope')
         )
-        db.close()
 
         logger.info("TickTick OAuth completed successfully")
-        return_to = _get_oauth_return_to('ticktick')
         return _oauth_success_html(
             "TickTick", "Claude can now access your TickTick tasks.", return_to
         )
@@ -2070,6 +2133,9 @@ def ticktick_callback():
             </body>
         </html>
         """, 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.route('/auth/ticktick/status', methods=['GET'])
@@ -2080,10 +2146,10 @@ def ticktick_status():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    db = None
     try:
         db = get_db()
         token = OAuthRepository.get_token(db, 'ticktick')
-        db.close()
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
@@ -2104,6 +2170,9 @@ def ticktick_status():
     except Exception as e:
         logger.error(f"Error checking TickTick status: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.route('/auth/ticktick/disconnect', methods=['POST'])
@@ -2114,10 +2183,10 @@ def ticktick_disconnect():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    db = None
     try:
         db = get_db()
         deleted = OAuthRepository.delete_token(db, 'ticktick')
-        db.close()
 
         if deleted:
             logger.info("TickTick disconnected")
@@ -2128,6 +2197,9 @@ def ticktick_disconnect():
     except Exception as e:
         logger.error(f"Error disconnecting TickTick: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 # -------------------------
@@ -2138,16 +2210,21 @@ def ticktick_disconnect():
 def google_calendar_authorize():
     """Initiate Google Calendar OAuth flow.
 
-    Optional query param: return_to — URL to redirect to after successful auth.
+    Requires a valid JWT (header or ?token=) so only the authenticated user can start
+    the flow. Optional query param: return_to — relative URL to redirect to after auth.
     """
     if not google_oauth:
         return jsonify({"error": "Google Calendar not configured"}), 503
 
+    auth_err = _check_auth(allow_query_token=True)
+    if auth_err:
+        return auth_err
+
     return_to = request.args.get('return_to', '/')
-    _oauth_return_to['google_calendar'] = return_to
 
     try:
         auth_data = google_oauth.get_authorization_url()
+        _begin_oauth_flow('google_calendar', auth_data['state'], return_to)
         # Use HTML redirect to avoid hot-reload middleware issues
         return f"""
         <html>
@@ -2184,6 +2261,13 @@ def google_calendar_callback():
         return jsonify({"error": "No authorization code received"}), 400
 
     try:
+        return_to = _finish_oauth_flow('google_calendar', state)
+    except PermissionError:
+        logger.warning("Google Calendar OAuth callback rejected: invalid/missing state")
+        return jsonify({"error": "Invalid OAuth state"}), 400
+
+    db = None
+    try:
         # Exchange code for tokens
         token_data = google_oauth.exchange_code(code)
 
@@ -2197,10 +2281,8 @@ def google_calendar_callback():
             expires_at=token_data['expires_at'],
             scope=token_data.get('scope')
         )
-        db.close()
 
         logger.info("Google Calendar OAuth completed successfully")
-        return_to = _get_oauth_return_to('google_calendar')
         return _oauth_success_html(
             "Google Calendar", "Claude can now access your Google Calendar.", return_to
         )
@@ -2217,6 +2299,9 @@ def google_calendar_callback():
             </body>
         </html>
         """, 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.route('/auth/google-calendar/status', methods=['GET'])
@@ -2227,10 +2312,10 @@ def google_calendar_status():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    db = None
     try:
         db = get_db()
         token = OAuthRepository.get_token(db, 'google_calendar')
-        db.close()
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
@@ -2251,6 +2336,9 @@ def google_calendar_status():
     except Exception as e:
         logger.error(f"Error checking Google Calendar status: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.route('/auth/google-calendar/disconnect', methods=['POST'])
@@ -2261,10 +2349,10 @@ def google_calendar_disconnect():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    db = None
     try:
         db = get_db()
         deleted = OAuthRepository.delete_token(db, 'google_calendar')
-        db.close()
 
         if deleted:
             logger.info("Google Calendar disconnected")
@@ -2275,6 +2363,9 @@ def google_calendar_disconnect():
     except Exception as e:
         logger.error(f"Error disconnecting Google Calendar: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 # -------------------------
@@ -2285,16 +2376,21 @@ def google_calendar_disconnect():
 def google_gmail_authorize():
     """Initiate Google Gmail OAuth flow.
 
-    Optional query param: return_to — URL to redirect to after successful auth.
+    Requires a valid JWT (header or ?token=) so only the authenticated user can start
+    the flow. Optional query param: return_to — relative URL to redirect to after auth.
     """
     if not google_gmail_oauth:
         return jsonify({"error": "Google Gmail not configured"}), 503
 
+    auth_err = _check_auth(allow_query_token=True)
+    if auth_err:
+        return auth_err
+
     return_to = request.args.get('return_to', '/')
-    _oauth_return_to['google_gmail'] = return_to
 
     try:
         auth_data = google_gmail_oauth.get_authorization_url()
+        _begin_oauth_flow('google_gmail', auth_data['state'], return_to)
         return f"""
         <html>
             <head>
@@ -2319,6 +2415,7 @@ def google_gmail_callback():
         return jsonify({"error": "Google Gmail not configured"}), 503
 
     code = request.args.get('code')
+    state = request.args.get('state')
     error = request.args.get('error')
 
     if error:
@@ -2328,6 +2425,13 @@ def google_gmail_callback():
     if not code:
         return jsonify({"error": "No authorization code received"}), 400
 
+    try:
+        return_to = _finish_oauth_flow('google_gmail', state)
+    except PermissionError:
+        logger.warning("Google Gmail OAuth callback rejected: invalid/missing state")
+        return jsonify({"error": "Invalid OAuth state"}), 400
+
+    db = None
     try:
         token_data = google_gmail_oauth.exchange_code(code)
 
@@ -2340,10 +2444,8 @@ def google_gmail_callback():
             expires_at=token_data['expires_at'],
             scope=token_data.get('scope')
         )
-        db.close()
 
         logger.info("Google Gmail OAuth completed successfully")
-        return_to = _get_oauth_return_to('google_gmail')
         return _oauth_success_html(
             "Gmail", "Claude can now read your Gmail messages.", return_to
         )
@@ -2360,6 +2462,9 @@ def google_gmail_callback():
             </body>
         </html>
         """, 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.route('/auth/google-gmail/status', methods=['GET'])
@@ -2370,10 +2475,10 @@ def google_gmail_status():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    db = None
     try:
         db = get_db()
         token = OAuthRepository.get_token(db, 'google_gmail')
-        db.close()
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
@@ -2394,6 +2499,9 @@ def google_gmail_status():
     except Exception as e:
         logger.error(f"Error checking Gmail status: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.route('/auth/google-gmail/disconnect', methods=['POST'])
@@ -2404,10 +2512,10 @@ def google_gmail_disconnect():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
+    db = None
     try:
         db = get_db()
         deleted = OAuthRepository.delete_token(db, 'google_gmail')
-        db.close()
 
         if deleted:
             logger.info("Gmail disconnected")
@@ -2418,6 +2526,9 @@ def google_gmail_disconnect():
     except Exception as e:
         logger.error(f"Error disconnecting Gmail: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if db is not None:
+            db.close()
 
 
 # Map of (db_provider_key, label, authorize_url) for the aggregate status
@@ -2470,15 +2581,12 @@ def integrations_status():
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check with database connectivity test."""
-    health_data = {
-        "status": "ok",
-        "org_dir": str(config.org_dir),
-        "org_dir_exists": config.org_dir.exists(),
-        "dangerous_patterns_count": len(config.dangerous_patterns),
-        "tools": tool_registry.list_tools(),
-        "ticktick_configured": ticktick_oauth is not None,
-    }
+    """Health check with database connectivity test.
+
+    Public (Docker healthcheck), so it deliberately does NOT expose filesystem
+    paths, the tool list, or config internals.
+    """
+    health_data = {"status": "ok"}
 
     # Test database connectivity
     try:
@@ -2489,37 +2597,47 @@ def health():
         health_data["database"] = "connected"
         db.close()
     except Exception as e:
+        logger.error(f"Health check DB error: {e}")
         health_data["database"] = "error"
-        health_data["database_error"] = str(e)
         health_data["status"] = "degraded"
 
-    if config.logseq_dir:
-        health_data["logseq_dir"] = str(config.logseq_dir)
-        health_data["logseq_dir_exists"] = config.logseq_dir.exists()
-    else:
-        health_data["logseq_dir"] = None
     return jsonify(health_data)
 
 
+_embedding_in_progress = threading.Lock()
+
+
 @app.route('/admin/trigger-embedding', methods=['POST'])
+@limiter.limit("6 per hour")
 def trigger_embedding():
     """Manually trigger incremental embedding (admin endpoint)."""
+    auth_err = _check_auth()
+    if auth_err:
+        return auth_err
+
     if not voyage_client:
         return jsonify({
             "error": "RAG not configured",
             "message": "VOYAGE_API_KEY not set"
         }), 503
 
-    try:
-        # Run embedding in background thread to avoid blocking
-        import threading
+    # Single-flight: refuse to spawn a second run while one is active, so repeated
+    # calls can't pile up daemon threads and Voyage API spend.
+    if not _embedding_in_progress.acquire(blocking=False):
+        return jsonify({
+            "status": "busy",
+            "message": "An embedding run is already in progress"
+        }), 409
 
+    try:
         def run_embedding():
             try:
                 stats = run_incremental_embedding(logger, voyage_client, config, google_gmail_oauth)
                 logger.info(f"Manual embedding complete: {stats}")
             except Exception as e:
                 logger.error(f"Manual embedding failed: {e}")
+            finally:
+                _embedding_in_progress.release()
 
         thread = threading.Thread(target=run_embedding, daemon=True)
         thread.start()
@@ -2529,6 +2647,7 @@ def trigger_embedding():
             "message": "Incremental embedding started in background"
         })
     except Exception as e:
+        _embedding_in_progress.release()
         logger.error(f"Failed to trigger embedding: {e}")
         return jsonify({
             "error": "Failed to start embedding",
@@ -3117,13 +3236,21 @@ def delete_skill(name: str):
 # Scheduled Tasks API
 # -------------------------
 
-def _check_auth():
-    """Check auth if enabled. Returns error response or None."""
+def _check_auth(allow_query_token: bool = False):
+    """Check auth if enabled. Returns error response or None.
+
+    Args:
+        allow_query_token: Also accept the token from a ``?token=`` query param.
+            Needed for browser-native GETs that cannot set headers (EventSource,
+            <img>) — mirrors the /assets endpoint.
+    """
     if config.auth_enabled:
         auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        token = auth_header[7:] if auth_header.startswith('Bearer ') else ''
+        if not token and allow_query_token:
+            token = request.args.get('token', '')
+        if not token:
             return jsonify({"error": "Missing authorization"}), 401
-        token = auth_header[7:]
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
     return None
@@ -3371,6 +3498,11 @@ def sse_events():
     import json
     import queue
     from flask import request
+
+    # EventSource can't set headers, so accept the token from ?token= too.
+    auth_err = _check_auth(allow_query_token=True)
+    if auth_err:
+        return auth_err
 
     # Get session_id from query parameter
     session_id = request.args.get('session_id', None)

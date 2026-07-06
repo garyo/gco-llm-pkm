@@ -126,7 +126,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Initialize markdown-it with task-lists plugin
   const md = (window as any).markdownit({
-    html: true,
+    html: false,  // Don't render raw HTML from model/tool output (XSS: this app holds the JWT)
     linkify: true,
     typographer: true
   }).use((window as any).markdownitTaskLists, {enabled: true});
@@ -1449,7 +1449,7 @@ import EditorInterface from '../components/EditorInterface.astro';
       sessionList.innerHTML = sessions.map((session: any) => {
         const isActive = session.session_id === sessionId;
         const date = new Date(session.updated_at).toLocaleString();
-        const preview = session.preview || 'Empty session';
+        const preview = escapeHtml(session.preview || 'Empty session');
         const cost = session.total_cost || 0;
         const costDisplay = cost > 0 ? `$${cost.toFixed(3)}` : '';
         const totalTokens = (session.total_input_tokens || 0) + (session.total_output_tokens || 0);
@@ -1722,13 +1722,13 @@ import EditorInterface from '../components/EditorInterface.astro';
             <span class="${statusColor} font-bold">${statusIcon}</span>
             <div class="flex-1">
               <div class="font-mono text-sm text-gray-700">
-                <span class="font-semibold">${tool.tool_name}</span>
+                <span class="font-semibold">${escapeHtml(tool.tool_name || '')}</span>
               </div>
               <div class="text-xs text-gray-500 mt-1">
                 ${formatToolParams(tool.tool_params)}
               </div>
               <div class="text-xs text-gray-600 mt-1">
-                ${tool.result_summary}
+                ${escapeHtml(tool.result_summary || '')}
               </div>
               <div class="text-xs text-gray-400 mt-1">
                 ${tool.execution_time_ms}ms

@@ -512,6 +512,25 @@ def validate_history(history):
             msg['content'] = '[Empty message]'
 
 
+def _independent_message_copy(messages):
+    """Copy `messages` so it shares no mutable container with the input.
+
+    Returns a new list of new message dicts with new content lists (block dicts
+    inside are shared, but callers below only ever *replace* blocks, never mutate
+    them in place). This lets the API-bound copy be truncated, thinking-preserved,
+    and cache-annotated without ever altering the persisted `history` — which
+    reuses the same message objects when no truncation is needed.
+    """
+    copied = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            copied.append({**m, "content": list(content)})
+        else:
+            copied.append(dict(m))
+    return copied
+
+
 def mark_last_message_for_cache(messages):
     """Move a single ephemeral cache breakpoint to the end of the message list.
 
@@ -521,19 +540,23 @@ def mark_last_message_for_cache(messages):
     previous per-message breakpoint first so that, together with the up-to-3
     cached system blocks, we stay within Anthropic's 4-breakpoint limit.
     String-content messages can't carry a per-block breakpoint, so they're skipped.
+
+    Blocks are *replaced* rather than mutated in place: a block dict may be shared
+    with the persisted history, so an in-place edit would leak the cache_control
+    marker (or a stripped-vs-unstripped mismatch) into stored conversation state.
     """
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    block.pop("cache_control", None)
+            for i, block in enumerate(content):
+                if isinstance(block, dict) and "cache_control" in block:
+                    content[i] = {k: v for k, v in block.items() if k != "cache_control"}
 
     if not messages:
         return
     last_content = messages[-1].get("content")
     if isinstance(last_content, list) and last_content and isinstance(last_content[-1], dict):
-        last_content[-1]["cache_control"] = {"type": "ephemeral"}
+        last_content[-1] = {**last_content[-1], "cache_control": {"type": "ephemeral"}}
 
 
 # Per-session in-process locks: a session's history is read at request start and
@@ -989,11 +1012,14 @@ def query():
 
             # Truncate only the copy sent to the API — `history` stays the full,
             # persisted record so old PKM conversation content is never destroyed.
+            # truncate_history may return the same list object (and reuses message
+            # dicts) when nothing needs trimming, so wrap it in an independent copy;
+            # otherwise loop appends and cache bookkeeping would corrupt `history`.
             stats_before = history_manager.get_history_stats(history)
             if stats_before['total_tokens'] > 50000:  # Only log if potentially concerning
                 logger.info(f"History before truncation: {stats_before['budget_usage']}")
 
-            api_messages = history_manager.truncate_history(history)
+            api_messages = _independent_message_copy(history_manager.truncate_history(history))
 
             # Log if we truncated
             stats_after = history_manager.get_history_stats(api_messages)

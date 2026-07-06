@@ -206,6 +206,11 @@ def _anthropic_messages_to_openai(
         if msg.get("role") == "assistant":
             last_assistant_idx = i
 
+    # Track tool_call ids emitted so far. A `tool_result` with no matching
+    # preceding `tool_call` (e.g. a leading orphan left by history truncation)
+    # would make OpenAI reject the request, so we drop such orphans.
+    seen_tool_call_ids: set[str] = set()
+
     for i, msg in enumerate(messages):
         role = msg.get("role", "user")
         content = msg.get("content")
@@ -214,6 +219,8 @@ def _anthropic_messages_to_openai(
             openai_msg = _translate_assistant_message(
                 content, include_reasoning=(i == last_assistant_idx)
             )
+            for tc in openai_msg.get("tool_calls", []):
+                seen_tool_call_ids.add(tc["id"])
             openai_msgs.append(openai_msg)
 
         elif role == "user":
@@ -230,8 +237,11 @@ def _anthropic_messages_to_openai(
                         text_parts.append(str(block))
 
                 # Emit tool messages (OpenAI requires these directly after
-                # the assistant message that produced the tool_calls)
+                # the assistant message that produced the tool_calls). Skip any
+                # orphaned tool_result whose tool_call was truncated away.
                 for tr in tool_results:
+                    if tr.get("tool_use_id", "") not in seen_tool_call_ids:
+                        continue
                     tr_content = tr.get("content", "")
                     # tool_result content can be a list of blocks; flatten to string
                     if isinstance(tr_content, list):

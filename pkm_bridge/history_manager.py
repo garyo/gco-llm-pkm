@@ -178,6 +178,23 @@ class HistoryManager:
                 result.append(item)
         return result
 
+    @staticmethod
+    def _is_turn_start(message: Dict[str, Any]) -> bool:
+        """True if `message` begins a fresh conversation turn.
+
+        A turn starts at a plain user message: either string content or a list
+        of content blocks that carries no `tool_result` (a `tool_result` block
+        answers a prior assistant `tool_use`, so it can't lead the history).
+        """
+        if message.get('role') != 'user':
+            return False
+        content = message.get('content')
+        if isinstance(content, list):
+            return not any(
+                isinstance(b, dict) and b.get('type') == 'tool_result' for b in content
+            )
+        return True
+
     def truncate_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Truncate conversation history to fit within token budget.
 
@@ -244,36 +261,41 @@ class HistoryManager:
                             break
 
                 if has_large_tool_results:
-                    # Filter this message's tool results
+                    # Filter this message's tool results (line-based truncation).
+                    # LLM-based filtering (USE_LLM_FILTERING) is not implemented yet;
+                    # see the module docstring / filter_tool_result_with_llm.
                     msg = msg.copy()
-                    if USE_LLM_FILTERING:
-                        # TODO: Implement LLM-based filtering
-                        # See test-multiple-queries-review.py for implementation
-                        msg['content'] = self.truncate_tool_result(
-                            msg['content'],
-                            max_tokens=TARGET_TOKENS_AFTER_FILTERING
-                        )
-                    else:
-                        # Use fast line-based truncation
-                        msg['content'] = self.truncate_tool_result(
-                            msg['content'],
-                            max_tokens=TARGET_TOKENS_AFTER_FILTERING
-                        )
+                    msg['content'] = self.truncate_tool_result(
+                        msg['content'],
+                        max_tokens=TARGET_TOKENS_AFTER_FILTERING
+                    )
 
             filtered_history.append(msg)
 
         # Recalculate tokens after filtering
         total_tokens = sum(self.estimate_message_tokens(msg) for msg in filtered_history)
 
-        # If still over budget after filtering, remove oldest messages
-        # But always keep at least keep_recent_turns conversation turns
-        # Calculate minimum messages to keep
+        # If still over budget after filtering, remove oldest *whole turns*.
+        # A turn starts at a plain user message (string content, or a list with
+        # no tool_result blocks). Removing partial turns would leave an orphaned
+        # tool_result as history[0] — or a leading assistant message — which
+        # Anthropic rejects with a 400, bricking the session on every retry.
+        #
+        # We keep at least keep_recent_turns turns for context. NOTE: that guard
+        # means the most recent turns are never dropped even if they alone exceed
+        # budget; the final turn-boundary cleanup below still runs so history[0]
+        # is always a clean turn start.
         min_messages_to_keep = self.keep_recent_turns * 2  # Each turn is user + assistant
 
         while total_tokens > self.max_tokens and len(filtered_history) > min_messages_to_keep:
-            # Remove oldest message (but maintain minimum)
             removed = filtered_history.pop(0)
             total_tokens -= self.estimate_message_tokens(removed)
+
+        # The budget/keep-recent guards can stop mid-turn. A leading orphaned
+        # tool_result (or assistant message) is always an API error, so drop any
+        # partial-turn prefix — even if that dips below keep_recent_turns.
+        while filtered_history and not self._is_turn_start(filtered_history[0]):
+            total_tokens -= self.estimate_message_tokens(filtered_history.pop(0))
 
         new_history = filtered_history
 

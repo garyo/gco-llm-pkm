@@ -451,23 +451,30 @@ def timer(label: str):
         logger.debug(f"{label}: {time.time() - start:.3f}s")
 
 
-def serialize_message_content(content):
+def serialize_message_content(content, *, strip_thinking: bool = True):
     """Convert Anthropic message content to JSON-serializable format.
 
-    Strips thinking blocks (both API-level thinking blocks and inline <thinking>
-    XML tags) to avoid bloating conversation history with transient reasoning.
     Also drops fields the SDK marks as `__api_exclude__` (e.g. `parsed_output`
     on ParsedTextBlock from anthropic>=0.99) — Pydantic's plain `model_dump()`
     returns them, but Anthropic's API rejects them on the next turn.
+
+    When `strip_thinking` is True (the default, used when persisting a completed
+    turn to the DB) API-level thinking blocks and inline `<thinking>` XML tags
+    are removed to keep stored history lean. When False (used for messages
+    appended *during* the current tool loop) thinking blocks are preserved
+    unchanged — the interleaved-thinking beta requires them to be replayed
+    verbatim while continuing a tool-use turn, or the API returns a 400.
     """
     if isinstance(content, str):
-        return re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
+        if strip_thinking:
+            return re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
+        return content
     elif isinstance(content, list):
         serialized = []
         for item in content:
-            # Skip API-level thinking blocks
             item_type = getattr(item, 'type', None) or (item.get('type') if isinstance(item, dict) else None)
-            if item_type == 'thinking':
+            # Drop API-level thinking blocks only when stripping for persistence
+            if item_type in ('thinking', 'redacted_thinking') and strip_thinking:
                 continue
 
             api_exclude = getattr(item, '__api_exclude__', None) or set()
@@ -481,12 +488,14 @@ def serialize_message_content(content):
             for key in api_exclude:
                 dumped.pop(key, None)
 
-            # Strip inline <thinking> tags from text blocks
-            if dumped.get('type') == 'text' and 'text' in dumped:
+            # Strip inline <thinking> tags from text blocks (persist path only)
+            if strip_thinking and dumped.get('type') == 'text' and 'text' in dumped:
                 dumped = {**dumped, 'text': re.sub(r'<thinking>[\s\S]*?</thinking>', '', dumped['text']).strip()}
 
+            # Skip empty text blocks — Anthropic rejects them on replay
             if dumped.get('type') == 'text' and not dumped.get('text'):
-                continue  # Skip empty text blocks after stripping
+                continue
+
             serialized.append(dumped)
         return serialized
     else:
@@ -501,6 +510,67 @@ def validate_history(history):
         if not content or (isinstance(content, str) and not content.strip()):
             logger.warning(f"Empty content at message {i} (role={msg.get('role')}), fixing")
             msg['content'] = '[Empty message]'
+
+
+def mark_last_message_for_cache(messages):
+    """Move a single ephemeral cache breakpoint to the end of the message list.
+
+    The conversation history (assistant tool_use + large tool_result blocks) is
+    re-sent on every tool-loop iteration and every turn. A moving breakpoint on
+    the last content block lets cache hits accrue through the loop. We clear any
+    previous per-message breakpoint first so that, together with the up-to-3
+    cached system blocks, we stay within Anthropic's 4-breakpoint limit.
+    String-content messages can't carry a per-block breakpoint, so they're skipped.
+    """
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+
+    if not messages:
+        return
+    last_content = messages[-1].get("content")
+    if isinstance(last_content, list) and last_content and isinstance(last_content[-1], dict):
+        last_content[-1]["cache_control"] = {"type": "ephemeral"}
+
+
+# Per-session in-process locks: a session's history is read at request start and
+# rewritten at the end, so two overlapping /query calls on one session would be
+# last-writer-wins. We reject a second in-flight query for the same session.
+_session_locks: Dict[str, threading.Lock] = {}
+_session_locks_guard = threading.Lock()
+
+
+def _get_session_lock(session_id: str) -> threading.Lock:
+    """Return the process-wide lock for `session_id`, creating it on first use."""
+    with _session_locks_guard:
+        lock = _session_locks.get(session_id)
+        if lock is None:
+            lock = threading.Lock()
+            _session_locks[session_id] = lock
+        return lock
+
+
+def _persist_history_safely(session_id: str, history) -> None:
+    """Best-effort save of `history` to the DB, swallowing all errors.
+
+    Used from the GeneratorExit path (client disconnect) where we can't yield
+    and must never raise. `history` may be None if the disconnect happened
+    before it was loaded.
+    """
+    if not history:
+        return
+    try:
+        db = get_db()
+        try:
+            SessionRepository.update_history(db, session_id, history)
+            logger.info(f"Persisted history for session {session_id} after client disconnect")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Failed to persist history after disconnect (session={session_id}): {e}")
 
 
 # -------------------------
@@ -762,10 +832,29 @@ def query():
         query_id = str(uuid.uuid4())  # Unique ID for this query
         session_id = "default"  # may be overwritten before any error event
         terminal_emitted = False  # whether 'done' or 'error' was sent
+        history = None  # full, persisted history; set once loaded from the DB
+        session_lock = None
+        lock_acquired = False
 
         try:
             data = request.json
             session_id = data.get('session_id', 'default')
+
+            # Serialize queries per session: history is read at the start and
+            # rewritten at the end, so a concurrent query would drop a turn.
+            session_lock = _get_session_lock(session_id)
+            lock_acquired = session_lock.acquire(blocking=False)
+            if not lock_acquired:
+                logger.warning(f"Rejecting concurrent query for session {session_id}")
+                terminal_emitted = True
+                yield _ndjson({
+                    "type": "error",
+                    "error": "❌ Another query is already running for this session. "
+                             "Please wait for it to finish.",
+                    "session_id": session_id,
+                })
+                return
+
             user_message = data['message']
             model = data.get('model', config.model)
             thinking = data.get('thinking')
@@ -893,22 +982,22 @@ def query():
                 "content": user_message
             })
 
-            # Truncate history to stay within budget before sending to API
-            # Log history stats before truncation
+            # Truncate only the copy sent to the API — `history` stays the full,
+            # persisted record so old PKM conversation content is never destroyed.
             stats_before = history_manager.get_history_stats(history)
             if stats_before['total_tokens'] > 50000:  # Only log if potentially concerning
                 logger.info(f"History before truncation: {stats_before['budget_usage']}")
 
-            history = history_manager.truncate_history(history)
+            api_messages = history_manager.truncate_history(history)
 
             # Log if we truncated
-            stats_after = history_manager.get_history_stats(history)
+            stats_after = history_manager.get_history_stats(api_messages)
             if stats_after['total_tokens'] < stats_before['total_tokens']:
                 saved = stats_before['total_tokens'] - stats_after['total_tokens']
                 logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
 
             # Validate all messages have non-empty content (API requirement)
-            validate_history(history)
+            validate_history(api_messages)
 
             # Get tools in Anthropic format (adapter translates for non-Anthropic)
             tools = tool_registry.get_anthropic_tools()
@@ -918,7 +1007,7 @@ def query():
                 "model": model,
                 "max_tokens": 8192,
                 "system": system_prompt_blocks,
-                "messages": history,
+                "messages": api_messages,
                 "tools": tools,
             }
 
@@ -930,9 +1019,12 @@ def query():
                 api_params["extra_headers"] = {
                     "anthropic-beta": ",".join(beta_features)
                 }
-                # Mark the last tool for caching (tools are relatively static)
-                if tools:
-                    tools[-1]["cache_control"] = {"type": "ephemeral"}
+                # Cache breakpoint goes on the last *message* block (see
+                # mark_last_message_for_cache), not on tools: render order is
+                # tools→system→messages and the system blocks already carry cache
+                # breakpoints, so a tools breakpoint is redundant and leaves the
+                # growing history re-sent uncached every loop iteration.
+                mark_last_message_for_cache(api_messages)
                 if thinking:
                     api_params["thinking"] = thinking
 
@@ -1074,11 +1166,27 @@ def query():
                             "content": result
                         })
 
-                history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+                # Persist a thinking-stripped copy to the full history; send the
+                # raw assistant content (thinking blocks intact) to the API, since
+                # the interleaved-thinking beta requires them replayed verbatim
+                # while continuing a tool-use turn.
+                history.append({
+                    "role": "assistant",
+                    "content": serialize_message_content(response.content),
+                })
                 history.append({"role": "user", "content": tool_results})
+                api_messages.append({
+                    "role": "assistant",
+                    "content": serialize_message_content(response.content, strip_thinking=False),
+                })
+                # Distinct block shells so the moving cache breakpoint isn't
+                # written into the persisted history.
+                api_messages.append({"role": "user", "content": [dict(tr) for tr in tool_results]})
 
-                # Update API params with new history
-                api_params["messages"] = history
+                # Send the truncated copy; move the cache breakpoint to its tail.
+                api_params["messages"] = api_messages
+                if is_anthropic(model):
+                    mark_last_message_for_cache(api_messages)
 
                 api_call_count += 1
                 # Keepalive before each follow-up LLM call (the slow part)
@@ -1207,11 +1315,15 @@ def query():
 
         except GeneratorExit:
             # Client disconnected mid-stream (browser tab closed, network drop,
-            # proxy idle timeout). Don't try to yield — the stream is dead.
+            # proxy idle timeout). Don't try to yield — the stream is dead. But
+            # persist whatever completed work is in `history` (the user message,
+            # plus any finished tool rounds) so a disconnect doesn't discard the
+            # whole turn.
             logger.warning(
                 f"Query stream closed by client before terminal event "
                 f"(session={session_id}, query_id={query_id})"
             )
+            _persist_history_safely(session_id, history)
             terminal_emitted = True  # suppress the finally-block log; this case is logged above
             raise
         except Exception as e:
@@ -1223,6 +1335,8 @@ def query():
                 "session_id": session_id,
             })
         finally:
+            if lock_acquired and session_lock is not None:
+                session_lock.release()
             if not terminal_emitted:
                 # Exited without 'done' or 'error' and without a client-side
                 # disconnect — something went wrong above the except handlers

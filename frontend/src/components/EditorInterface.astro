@@ -665,7 +665,10 @@
         const option = document.createElement('option');
         option.value = filepath;
         option.textContent = filepath.split('/').pop() || filepath;
-        fileSelector.insertBefore(option, fileSelector.options[1]); // Insert after "Select a file..."
+        // Insert after the "Select a file..." placeholder. Reference a *direct*
+        // child (children[1]) — `options[1]` flattens optgroup contents, so it's
+        // a child of an <optgroup>, not the <select>, and insertBefore would throw.
+        fileSelector.insertBefore(option, fileSelector.children[1] || null);
       }
       fileSelector.value = filepath;
 

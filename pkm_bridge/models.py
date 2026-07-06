@@ -5,6 +5,7 @@ an available models catalog for the frontend, and capability detection.
 """
 
 import os
+from datetime import date, datetime, timezone
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -203,7 +204,43 @@ ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
         "cache_read": 0.50,
         "output": 25.00,
     },
+    # Standard rates; Sonnet 5 also has introductory pricing (see below).
+    "claude-sonnet-5": {
+        "input": 3.00,
+        "cache_write": 3.75,
+        "cache_read": 0.30,
+        "output": 15.00,
+    },
 }
+
+# Time-limited introductory rates that revert to the standard table above the
+# day after ``through`` (inclusive). Applied automatically by the current date.
+INTRO_COST_RATES: dict[str, dict[str, Any]] = {
+    "claude-sonnet-5": {
+        "through": date(2026, 8, 31),
+        "rates": {
+            "input": 2.00,
+            "cache_write": 2.50,
+            "cache_read": 0.20,
+            "output": 10.00,
+        },
+    },
+}
+
+
+def get_cost_rates(model: str, on_date: date | None = None) -> dict[str, float]:
+    """Resolve the effective per-million-token rates for a model on a given date.
+
+    Uses introductory pricing while in effect, otherwise the standard rates
+    (falling back to Haiku rates for unknown models). ``on_date`` defaults to
+    the current UTC date.
+    """
+    intro = INTRO_COST_RATES.get(model)
+    if intro is not None:
+        today = on_date or datetime.now(timezone.utc).date()
+        if today <= intro["through"]:
+            return intro["rates"]
+    return ANTHROPIC_COST_RATES.get(model, ANTHROPIC_COST_RATES["claude-haiku-4-5"])
 
 
 def get_anthropic_cost(
@@ -212,9 +249,10 @@ def get_anthropic_cost(
     output_tokens: int,
     cache_write_tokens: int = 0,
     cache_read_tokens: int = 0,
+    on_date: date | None = None,
 ) -> float:
     """Calculate cost for an Anthropic model call. Returns cost in dollars."""
-    rates = ANTHROPIC_COST_RATES.get(model, ANTHROPIC_COST_RATES["claude-haiku-4-5"])
+    rates = get_cost_rates(model, on_date)
     return (
         (input_tokens * rates["input"])
         + (cache_write_tokens * rates["cache_write"])

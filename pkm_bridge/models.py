@@ -34,6 +34,7 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
     # Anthropic (direct)
     {"id": "claude-haiku-4-5", "name": "Haiku 4.5", "provider": "anthropic", "tier": "fast"},
     {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "provider": "anthropic", "tier": "balanced"},
+    {"id": "claude-sonnet-5", "name": "Sonnet 5", "provider": "anthropic", "tier": "balanced"},
     {"id": "claude-opus-4-7", "name": "Opus 4.7", "provider": "anthropic", "tier": "best"},
     # OpenAI (direct)
     {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "tier": "balanced"},

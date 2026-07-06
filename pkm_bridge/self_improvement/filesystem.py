@@ -193,3 +193,32 @@ def write_memory_file(
 
 
 MEMORY_CATEGORIES = ("observations", "plans", "user-profile", "self-critique")
+
+# The curated learned-patterns file is injected verbatim into both interfaces'
+# system prompts, so it must stay within a tight token budget (~1500 tokens).
+LEARNED_PATTERNS_FILE = "learned-patterns.md"
+LEARNED_PATTERNS_MAX_CHARS = 6000
+
+
+def get_learned_patterns_path(org_dir: str | Path | None = None) -> Path:
+    """Return the path to .pkm/learned-patterns.md (does not create the file)."""
+    return get_pkm_dir(org_dir) / LEARNED_PATTERNS_FILE
+
+
+def read_learned_patterns(org_dir: str | Path | None = None) -> str:
+    """Read .pkm/learned-patterns.md, or return '' if it doesn't exist."""
+    filepath = get_learned_patterns_path(org_dir)
+    if filepath.exists():
+        return filepath.read_text(encoding="utf-8")
+    return ""
+
+
+def write_learned_patterns(content: str, org_dir: str | Path | None = None) -> Path:
+    """Replace the full contents of .pkm/learned-patterns.md.
+
+    The file is injected verbatim into the live system prompts, so callers
+    should keep it within LEARNED_PATTERNS_MAX_CHARS.
+    """
+    filepath = get_learned_patterns_path(org_dir)
+    filepath.write_text(content, encoding="utf-8")
+    return filepath

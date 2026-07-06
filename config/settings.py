@@ -7,6 +7,38 @@ from dotenv import load_dotenv
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+# Dangerous command patterns (blacklist) blocked before running shell commands
+# or saving skills. Real security comes from Docker isolation, limited filesystem
+# access, and git backups — this list just stops accidents and obvious disasters.
+# Exposed at module level so non-Config call sites (e.g. the retrospective's
+# auto-proposed skills) can reuse the same defaults instead of disabling validation.
+DEFAULT_DANGEROUS_PATTERNS = [
+    # Destructive operations from root
+    r'rm\s+(-[rf]+\s+)?/',
+    r'rm\s+-[rf]*\s+\*\s*$',
+
+    # Fork bombs
+    r':\(\)\s*\{.*\:',
+    r'fork\s*\(',
+
+    # Download and execute
+    r'curl.*\|.*\b(sh|bash)\b',
+    r'wget.*\|.*\b(sh|bash)\b',
+
+    # Network sockets (if network access is not needed)
+    r'/dev/(tcp|udp)/',
+
+    # Kernel/system tampering
+    r'/proc/sys/',
+    r'/sys/class/',
+
+    # Package managers (prevent Claude from installing things)
+    r'\b(apt|yum|dnf|pacman|brew)\s+install',
+    r'\bpip\s+install',
+    r'\bnpm\s+install\s+-g',
+]
+
+
 class Config:
     """Configuration manager for PKM Bridge Server.
 
@@ -64,34 +96,8 @@ class Config:
             print(f"Warning: Invalid timezone '{timezone_str}', using system default. Error: {e}")
             self.timezone = None  # Use system default
 
-        # Security - Dangerous command patterns (blacklist)
-        # These patterns are blocked to prevent accidents and obvious disasters
-        # Real security comes from Docker isolation, limited filesystem access, and git backups
-        self.dangerous_patterns = [
-            # Destructive operations from root
-            r'rm\s+(-[rf]+\s+)?/',
-            r'rm\s+-[rf]*\s+\*\s*$',
-
-            # Fork bombs
-            r':\(\)\s*\{.*\:',
-            r'fork\s*\(',
-
-            # Download and execute
-            r'curl.*\|.*\b(sh|bash)\b',
-            r'wget.*\|.*\b(sh|bash)\b',
-
-            # Network sockets (if network access is not needed)
-            r'/dev/(tcp|udp)/',
-
-            # Kernel/system tampering
-            r'/proc/sys/',
-            r'/sys/class/',
-
-            # Package managers (prevent Claude from installing things)
-            r'\b(apt|yum|dnf|pacman|brew)\s+install',
-            r'\bpip\s+install',
-            r'\bnpm\s+install\s+-g',
-        ]
+        # Security - Dangerous command patterns (blacklist), see module constant.
+        self.dangerous_patterns = list(DEFAULT_DANGEROUS_PATTERNS)
 
         # Authentication Configuration
         self.auth_enabled = os.getenv("AUTH_ENABLED", "true").lower() == "true"
@@ -213,15 +219,14 @@ class Config:
                 "cache_control": {"type": "ephemeral"}
             })
 
-        # Block 3: Learned rules (cached - changes at most daily)
-        if learned_rules:
-            rules_text = self._format_learned_rules(learned_rules)
-            if rules_text:
-                blocks.append({
-                    "type": "text",
-                    "text": rules_text,
-                    "cache_control": {"type": "ephemeral"}
-                })
+        # Block 3: Learned patterns (cached - changes at most daily)
+        rules_text = self.get_learned_patterns_block(learned_rules)
+        if rules_text:
+            blocks.append({
+                "type": "text",
+                "text": rules_text,
+                "cache_control": {"type": "ephemeral"}
+            })
 
         # Block N: Current date/time (NOT cached - refreshed every request)
         # Get current time in user's timezone
@@ -253,6 +258,36 @@ class Config:
         })
 
         return blocks
+
+    def get_learned_patterns_block(self, learned_rules=None) -> str:
+        """Return the learned-patterns block injected into the system prompt.
+
+        Precedence:
+        1. The SI agent's curated `.pkm/learned-patterns.md`, injected verbatim.
+           This is rewritten each run and kept within budget, so it is the block
+           that actually reaches the live model.
+        2. Fallback: `_format_learned_rules(learned_rules)` over the raw DB rules,
+           so injection keeps working before the first curated run (or if the
+           file is deleted).
+
+        Shared by all three injection sites (custom app, MCP tools, MCP resources).
+        """
+        curated = self._read_curated_patterns()
+        if curated:
+            return "\n\n" + curated
+        if learned_rules:
+            return self._format_learned_rules(learned_rules)
+        return ""
+
+    def _read_curated_patterns(self) -> str:
+        """Read `.pkm/learned-patterns.md`, or '' if absent/empty/unreadable."""
+        path = self.org_dir / ".pkm" / "learned-patterns.md"
+        try:
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        return ""
 
     @staticmethod
     def _format_learned_rules(rules) -> str:

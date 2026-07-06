@@ -607,12 +607,15 @@ class SessionRetrospective:
             return 0
 
         from pathlib import Path
+
+        from config.settings import DEFAULT_DANGEROUS_PATTERNS
+
         from .tools.skills import SaveSkillTool
 
         save_tool = SaveSkillTool(
             logger=self.logger,
             org_dir=Path(org_dir).expanduser(),
-            dangerous_patterns=[],  # Skip validation for retro-proposed skills
+            dangerous_patterns=list(DEFAULT_DANGEROUS_PATTERNS),
         )
 
         count = 0

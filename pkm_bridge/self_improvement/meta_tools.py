@@ -21,11 +21,14 @@ from ..tools.skills import (
     _parse_skill_file,
 )
 from .filesystem import (
+    LEARNED_PATTERNS_MAX_CHARS,
     MEMORY_CATEGORIES,
     get_skills_dir,
     read_memory_file,
+    write_learned_patterns,
     write_memory_file,
 )
+from .prompt import _truncate_dated_sections
 
 # ---------------------------------------------------------------------------
 # Inspection tools (read-only)
@@ -476,13 +479,22 @@ class ReadMemoryTool(BaseTool):
             content = read_memory_file(category, self.org_dir)
             return content if content else f"No {category} memory file yet."
 
-        # Read all
+        # Read all — return the same >7-day-collapsed view used in the system
+        # prompt (the full raw files can be ~150KB). Read a specific category
+        # to get its full contents.
         parts = []
         for cat in MEMORY_CATEGORIES:
             content = read_memory_file(cat, self.org_dir)
             if content:
-                parts.append(f"## {cat}\n\n{content}")
-        return "\n\n---\n\n".join(parts) if parts else "No memory files yet."
+                truncated = _truncate_dated_sections(content)
+                parts.append(f"## {cat}\n\n{truncated}")
+        if not parts:
+            return "No memory files yet."
+        return (
+            "*Older dated sections collapsed to headings. "
+            "Read a specific category for full detail.*\n\n"
+            + "\n\n---\n\n".join(parts)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +903,69 @@ class WriteMemoryTool(BaseTool):
         return msg
 
 
+class WriteLearnedPatternsTool(BaseTool):
+    """Rewrite .pkm/learned-patterns.md — the curated block injected live."""
+
+    def __init__(self, logger, org_dir: Path):
+        super().__init__(logger)
+        self.org_dir = org_dir
+        self._run_log: list[str] = []
+
+    @property
+    def name(self) -> str:
+        return "write_learned_patterns"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Rewrite .pkm/learned-patterns.md, the curated markdown that is injected "
+            "VERBATIM into BOTH interfaces' system prompts on every user message. "
+            "This — not the rules database — is what actually reaches the live model, "
+            "so consolidate the most important behavioral guidance here each run. "
+            f"Replaces the whole file. Keep it under {LEARNED_PATTERNS_MAX_CHARS} chars "
+            "(~1500 tokens); content beyond that is truncated and never injected."
+        )
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "The full new contents of learned-patterns.md. Markdown, "
+                        f"under {LEARNED_PATTERNS_MAX_CHARS} chars. Lead with a "
+                        "'# LEARNED PATTERNS' heading and group the highest-value "
+                        "retrieval hints, vocabulary, preferences, tool strategy, and "
+                        "approved amendments."
+                    ),
+                },
+            },
+            "required": ["content"],
+        }
+
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
+        content = params.get("content", "")
+        if not content or not content.strip():
+            return "Error: content is required and must be non-empty."
+
+        content = content.strip() + "\n"
+        note = ""
+        if len(content) > LEARNED_PATTERNS_MAX_CHARS:
+            content = content[:LEARNED_PATTERNS_MAX_CHARS].rstrip() + "\n... (truncated)\n"
+            note = (
+                f" WARNING: content exceeded {LEARNED_PATTERNS_MAX_CHARS} chars and was "
+                "truncated — trim it yourself so nothing important is lost."
+            )
+
+        write_learned_patterns(content, self.org_dir)
+        msg = f"Wrote learned-patterns.md ({len(content)} chars).{note}"
+        self._run_log.append(msg)
+        self.logger.info(f"SI Agent: {msg}")
+        return msg
+
+
 class WriteRulesSnapshotTool(BaseTool):
     """Write a human-readable YAML snapshot of all active rules."""
 
@@ -974,5 +1049,6 @@ def create_action_tools(logger, org_dir: Path) -> list[BaseTool]:
         ManageRulesTool(logger),
         ProposeAmendmentTool(logger),
         WriteMemoryTool(logger, org_dir),
+        WriteLearnedPatternsTool(logger, org_dir),
         WriteRulesSnapshotTool(logger, org_dir),
     ]

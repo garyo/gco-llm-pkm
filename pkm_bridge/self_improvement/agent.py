@@ -18,11 +18,41 @@ from .prompt import build_system_prompt, gather_run_stats
 
 from ..models import get_role_model, supports_caching
 
-# Action tool names that consume the write budget
+# Action tool names that consume the write budget. These mutate the shared
+# knowledge base (skills, rules, amendments, memory). `write_learned_patterns`
+# and `write_rules_snapshot` are deliberately excluded: like a snapshot, they
+# just serialize the current curated state at end of run, so the agent must
+# always be able to refresh the live-injected block even after spending its
+# mutation budget.
 ACTION_TOOL_NAMES = frozenset({
     "write_skill", "delete_skill", "manage_rules",
     "propose_amendment", "write_memory",
 })
+
+
+def _mark_last_message_for_cache(messages: List[Dict[str, Any]]) -> None:
+    """Move the ephemeral cache breakpoint to the end of the message history.
+
+    The growing `messages` array (assistant tool_use + huge tool_result blocks)
+    is re-sent every turn. Caching it keeps re-sends at ~10% of the input rate.
+    We keep a single moving breakpoint on the last content block of the last
+    message, clearing any previous message breakpoint first, so that together
+    with the cached system prompt and tools we stay within Anthropic's 4-block
+    cache_control limit. String-content messages (the initial kickoff) can't
+    carry a per-block breakpoint, so they're skipped.
+    """
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+
+    if not messages:
+        return
+    last_content = messages[-1].get("content")
+    if isinstance(last_content, list) and last_content and isinstance(last_content[-1], dict):
+        last_content[-1]["cache_control"] = {"type": "ephemeral"}
 
 
 class SelfImprovementAgent:
@@ -204,7 +234,8 @@ class SelfImprovementAgent:
         model = get_role_model("self_improvement")
         # Cache the static parts (system prompt + tools) so re-sending them
         # each turn costs ~10% of the full input rate.
-        if supports_caching(model):
+        caching = supports_caching(model)
+        if caching:
             system_blocks = [
                 {
                     "type": "text",
@@ -222,6 +253,11 @@ class SelfImprovementAgent:
         try:
             # Agent loop
             while budget.can_continue:
+                # Move the cache breakpoint to the tail of the growing history
+                # so the large tool_result blocks are re-sent from cache.
+                if caching:
+                    _mark_last_message_for_cache(messages)
+
                 api_params = {
                     "model": model,
                     "max_tokens": 4096,
@@ -271,8 +307,9 @@ class SelfImprovementAgent:
                             "content": (
                                 f"Action budget exhausted "
                                 f"({budget.actions_used}/{budget.max_actions}). "
-                                "You can still use inspection tools "
-                                "or finish with write_memory."
+                                "You can still use inspection tools or finish with "
+                                "write_memory, write_learned_patterns, and "
+                                "write_rules_snapshot (these don't consume budget)."
                             ),
                         })
                         continue
@@ -343,22 +380,28 @@ class SelfImprovementAgent:
             run_file_name, result.get("error"),
         )
 
-        # Mark feedback as processed
-        try:
-            from ..database import get_db
-            from ..db_repository import QueryFeedbackRepository
-
-            db = get_db()
+        # Mark feedback as processed — only on a successful run. A crashed run
+        # must not silently consume the feedback signals it never got to analyze.
+        if result.get("error") is None:
             try:
-                unprocessed = QueryFeedbackRepository.get_unprocessed(db)
-                if unprocessed:
-                    feedback_ids = [fb.id for fb in unprocessed]
-                    QueryFeedbackRepository.mark_processed(db, feedback_ids)
-                    self.logger.info(f"SI Agent: marked {len(feedback_ids)} feedback as processed")
-            finally:
-                db.close()
-        except Exception as e:
-            self.logger.warning(f"SI Agent: failed to mark feedback: {e}")
+                from ..database import get_db
+                from ..db_repository import QueryFeedbackRepository
+
+                db = get_db()
+                try:
+                    unprocessed = QueryFeedbackRepository.get_unprocessed(db)
+                    if unprocessed:
+                        feedback_ids = [fb.id for fb in unprocessed]
+                        QueryFeedbackRepository.mark_processed(db, feedback_ids)
+                        self.logger.info(
+                            f"SI Agent: marked {len(feedback_ids)} feedback as processed"
+                        )
+                finally:
+                    db.close()
+            except Exception as e:
+                self.logger.warning(f"SI Agent: failed to mark feedback: {e}")
+        else:
+            self.logger.info("SI Agent: run errored — leaving feedback unprocessed")
 
         # Populate result
         result["completed_at"] = datetime.utcnow().isoformat()

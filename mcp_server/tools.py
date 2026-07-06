@@ -215,14 +215,15 @@ def register_all_tools(mcp: FastMCP):
     def search_notes(
         pattern: str,
         context: int = 3,
-        limit: int = 200000,
+        limit: int = 15000,
     ) -> str:
         """Search PKM notes for a regex pattern. Returns matches from journals and pages (newest first).
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
             context: Lines of context around each match
-            limit: Approximate character limit for results
+            limit: Approximate character limit for results (default 15000; raise it
+                if you need more matches and the result was truncated)
         """
         return _execute_tool("search_notes", {
             "pattern": pattern,
@@ -593,10 +594,9 @@ def register_all_tools(mcp: FastMCP):
             db = get_db()
             try:
                 rules = LearnedRuleRepository.get_active(db)
-                if rules:
-                    rules_text = config._format_learned_rules(rules)
-                    if rules_text:
-                        parts.append(rules_text)
+                rules_text = config.get_learned_patterns_block(rules)
+                if rules_text:
+                    parts.append(rules_text)
             finally:
                 db.close()
         except Exception as e:

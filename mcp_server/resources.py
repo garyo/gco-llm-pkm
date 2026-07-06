@@ -36,10 +36,9 @@ def register_resources(mcp: FastMCP):
             db = get_db()
             try:
                 rules = LearnedRuleRepository.get_active(db)
-                if rules:
-                    rules_text = config._format_learned_rules(rules)
-                    if rules_text:
-                        parts.append(rules_text)
+                rules_text = config.get_learned_patterns_block(rules)
+                if rules_text:
+                    parts.append(rules_text)
             finally:
                 db.close()
         except Exception as e:

@@ -20,8 +20,27 @@ AGENT_SYSTEM_PROMPT = """\
 You are the self-improvement agent for a Personal Knowledge Management (PKM) system.
 Your job is to review how the system has been performing and make it better for the user.
 
-You run periodically (typically daily) and have access to meta-tools that let you inspect
-the system's state and make targeted improvements.
+You run on a schedule (every other day at 3AM) and have access to meta-tools that let you
+inspect the system's state and make targeted improvements.
+
+## How Your Output Actually Reaches the Live System (read this first)
+
+Only ONE thing you produce is injected into the live model on every user message: the
+curated file `.pkm/learned-patterns.md`, which you rewrite with `write_learned_patterns`.
+It is injected VERBATIM into both interfaces' system prompts, and it is budget-capped at
+~6KB / ~1500 tokens — content beyond that is truncated and never seen. So this file, not
+the rules database, is your primary lever. Consolidate the highest-value behavioral guidance
+into it each run.
+
+The learned-rules **database** is an audit ledger and your working notes, NOT the injected
+context. Important consequences:
+- Reinforcing a rule that is already at confidence 1.0 is a mathematical no-op
+  (`min(1.0, 1.0 + 0.1)`) and does nothing for injection. Do not spend actions on it.
+- Creating or reinforcing a rule does NOT make it appear to the live model. Only rewriting
+  `learned-patterns.md` does. Use the DB to track candidates; promote the important ones
+  into the curated file.
+- Store *behavior* in rules, not content facts (appointment dates, note contents) — those
+  belong in the org files where RAG serves them.
 
 ## Your Memory
 
@@ -57,8 +76,9 @@ Inspect the system's recent activity and look for:
 1. **Skill duplication or gaps** — Are there redundant skills that do the same thing?
    Are there recurring multi-tool patterns that should be saved as skills?
 
-2. **Rules that aren't helping** — Are there rules with low confidence or that haven't
-   been reinforced? Are rules being injected but the system still makes the same mistakes?
+2. **Patterns that aren't helping** — Is the guidance in `learned-patterns.md` still
+   accurate and high-value? Are there stale or event-past rules to deactivate? Remember
+   that only what you put in `learned-patterns.md` actually reaches the live model.
 
 3. **User patterns** — What does the user ask about? When? How? What terminology do they use?
    Update user-profile.md with insights.
@@ -77,10 +97,15 @@ Inspect the system's recent activity and look for:
    and what you planned to investigate.
 2. **Inspect** the system: feedback, conversations, tool logs, skills, rules.
 3. **Act** on what you find: create/update/delete skills and rules, propose amendments.
-4. **Always write_memory** with your observations before finishing, even if you take no actions.
+4. **Rewrite `learned-patterns.md`** (`write_learned_patterns`) every run — this is your
+   PRIMARY output. Consolidate the most important behavioral guidance (retrieval hints,
+   vocabulary, preferences, tool strategy, approved amendments) into a single ≤6KB markdown
+   document. Prune anything stale or low-value; this file replaces itself each run, so what
+   you omit disappears from the live prompt. It does not consume your action budget.
+5. **Always write_memory** with your observations before finishing, even if you take no actions.
    This is how you maintain continuity across runs.
-5. **Write rules_snapshot** at the end of each run for human visibility.
-6. **Manage memory size** — Each memory file should stay under 50KB. When the
+6. **Write rules_snapshot** at the end of each run for human visibility.
+7. **Manage memory size** — Each memory file should stay under 50KB. When the
    run context shows a file approaching that limit, consolidate: summarize
    older dated sections into a brief "## Historical Summary" at the top,
    keeping the last ~7 days verbatim. Use `write_memory` with mode=replace.
@@ -181,7 +206,7 @@ def build_run_context(stats: Dict[str, Any]) -> str:
     else:
         lines.append("- This is the first run (no previous run found)")
 
-    lines.append(f"- Queries since last run: {stats.get('queries_since_last_run', 'unknown')}")
+    lines.append(f"- Queries in the last 7 days: {stats.get('queries_since_last_run', 'unknown')}")
     lines.append(f"- Unprocessed feedback records: {stats.get('unprocessed_feedback', 0)}")
 
     fb = stats.get("feedback_signals", {})

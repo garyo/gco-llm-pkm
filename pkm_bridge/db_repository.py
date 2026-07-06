@@ -492,10 +492,16 @@ class LearnedRuleRepository:
 
     @staticmethod
     def get_active(db: Session) -> List[LearnedRule]:
-        """Get all active learned rules, ordered by confidence descending."""
+        """Get all active learned rules, ordered by confidence descending.
+
+        The secondary ``id`` ascending key makes ordering deterministic: with
+        dozens of rules tied at confidence 1.0, a bare confidence sort lets ties
+        reshuffle whenever a row is updated, which churns the downstream prompt
+        cache. Stable order keeps the injected block byte-identical between runs.
+        """
         return db.query(LearnedRule).filter(
-            LearnedRule.is_active == True
-        ).order_by(LearnedRule.confidence.desc()).all()
+            LearnedRule.is_active == True  # noqa: E712
+        ).order_by(LearnedRule.confidence.desc(), LearnedRule.id.asc()).all()
 
     @staticmethod
     def get_all(db: Session) -> List[LearnedRule]:

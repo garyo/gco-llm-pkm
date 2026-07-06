@@ -173,10 +173,10 @@
   /* CodeMirror styling */
   #editor-container {
     font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-    /* Only the CM scroller (below) should scroll; matches the
-       `overflow-hidden` class already on this element (see markup above) --
-       a scrollable outer container creates nested scrollbars. */
-    overflow: hidden;
+    /* Scrollable outer container (overrides the element's overflow-hidden
+       Tailwind class via ID specificity). CodeMirror's internal scroller does
+       not receive wheel events in this layout, so the container must scroll. */
+    overflow: auto;
   }
 
   #editor-container .cm-editor {

@@ -4,9 +4,11 @@ Provides tools for Claude to save, list, and use reusable procedures (skills),
 and to maintain per-session working memory (note_to_self).
 """
 
+import os
 import re
 import stat
 import subprocess
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +25,28 @@ SKILL_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
 SHELL_FM_START = '# ---'
 SHELL_FM_END = '# ---'
 MD_FM_DELIM = '---'
+
+
+def _atomic_write(filepath: Path, content: str) -> None:
+    """Write content atomically: temp file in the same dir, then os.replace().
+
+    Mirrors FileEditor._atomic_write so a crash or concurrent read mid-write
+    can never observe a partially written skill file.
+    """
+    directory = filepath.parent
+    fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{filepath.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, filepath)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _get_skills_dir(org_dir: Path) -> Path:
@@ -237,7 +261,7 @@ class SaveSkillTool(BaseTool):
             fm = _build_md_frontmatter(metadata)
             file_content = fm + '\n\n' + content.strip() + '\n'
 
-        filepath.write_text(file_content, encoding='utf-8')
+        _atomic_write(filepath, file_content)
 
         # Make shell/python scripts executable
         if skill_type in ('shell', 'python'):
@@ -404,7 +428,7 @@ class UseSkillTool(BaseTool):
             fm = _build_md_frontmatter(metadata)
             updated = fm + '\n\n' + body.lstrip('\n')
 
-        filepath.write_text(updated, encoding='utf-8')
+        _atomic_write(filepath, updated)
 
         stype = parsed.get('_type', 'unknown')
         body_content = parsed.get('_body', '')

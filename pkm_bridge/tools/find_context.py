@@ -6,6 +6,7 @@
 # ///
 """Find notes matching a regex with full context extraction."""
 
+import json
 import re
 import sys
 import yaml
@@ -315,7 +316,7 @@ Default directories searched (if paths not provided):
                 if not line:
                     continue
                 try:
-                    data = yaml.safe_load(line)  # JSON is valid YAML
+                    data = json.loads(line)
                     if data.get('type') == 'match':
                         match_data = data['data']
                         matches.append({

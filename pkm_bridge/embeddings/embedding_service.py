@@ -173,6 +173,30 @@ def embed_document(
 
     if not chunks:
         log(f"⚠️  No chunks created for {file_path.name}")
+        # File shrank below the chunking threshold. Clear any stale chunks and
+        # store the current hash so this file isn't reprocessed on every run.
+        try:
+            if existing:
+                db.query(DocumentChunk).filter_by(document_id=existing.id).delete()
+                doc = existing
+                doc.file_hash = current_hash
+                doc.total_chunks = 0
+                doc.updated_at = datetime.utcnow()
+                doc.last_embedded_at = datetime.utcnow()
+            else:
+                doc = Document(
+                    file_path=str(file_path),
+                    file_type=file_path.suffix[1:],
+                    file_hash=current_hash,
+                    date_extracted=extract_date_from_file(file_path, logger=logger),
+                    total_chunks=0,
+                    last_embedded_at=datetime.utcnow(),
+                )
+                db.add(doc)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            log(f"❌ Error recording empty-chunk state for {file_path}: {e}")
         return False
 
     # Batch embed all chunks
@@ -488,6 +512,48 @@ def embed_gmail_messages(
     return stats
 
 
+def reconcile_deleted_files(files: list[Path], db, logger) -> int:
+    """Remove Document rows for filesystem files that no longer exist.
+
+    Compares the current on-disk scan against `Document.file_path` and
+    deletes any row (and its chunks, via cascade) whose path wasn't found.
+    Only reconciles real filesystem-backed documents — paths from external
+    sources (e.g. `gmail://...`, produced by `embed_gmail_messages`) are
+    excluded since they aren't part of this scan.
+
+    Args:
+        files: Current on-disk note files (same set used for embedding)
+        db: Database session
+        logger: Logger instance
+
+    Returns:
+        Number of documents removed
+    """
+    found_paths = {str(f) for f in files}
+
+    try:
+        stale_docs = (
+            db.query(Document)
+            .filter(~Document.file_path.startswith("gmail://"))
+            .filter(~Document.file_path.in_(found_paths))
+            .all()
+        )
+
+        for doc in stale_docs:
+            logger.info(f"🗑️  Removing embeddings for missing file: {doc.file_path}")
+            db.delete(doc)
+
+        if stale_docs:
+            db.commit()
+
+        return len(stale_docs)
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error reconciling deleted files: {e}")
+        return 0
+
+
 def run_incremental_embedding(
     logger, voyage_client: VoyageClient, config: Config = None, gmail_oauth=None
 ) -> dict:
@@ -530,6 +596,7 @@ def run_incremental_embedding(
     embedded_count = 0
     skipped_count = 0
     error_count = 0
+    deleted_count = 0
 
     try:
         for file_path in files:
@@ -542,6 +609,14 @@ def run_incremental_embedding(
                 logger.error(f"Error processing {file_path}: {e}")
                 error_count += 1
 
+        # Reconcile deleted/renamed files. Skip if the scan came back empty —
+        # that's more likely a transient failure (e.g. missing directory) than
+        # a genuinely empty PKM, and we don't want to wipe the whole index.
+        if files:
+            deleted_count = reconcile_deleted_files(files, db, logger)
+        else:
+            logger.warning("Skipping deletion reconciliation: no files found in scan")
+
         # Embed recent Gmail messages (if connected)
         if gmail_oauth:
             gmail_stats = embed_gmail_messages(
@@ -553,10 +628,14 @@ def run_incremental_embedding(
     finally:
         db.close()
 
-    logger.info(f"✅ Incremental embedding complete: {embedded_count} embedded, {skipped_count} skipped, {error_count} errors")
+    logger.info(
+        f"✅ Incremental embedding complete: {embedded_count} embedded, "
+        f"{skipped_count} skipped, {deleted_count} deleted, {error_count} errors"
+    )
 
     return {
         "embedded_count": embedded_count,
         "skipped_count": skipped_count,
+        "deleted_count": deleted_count,
         "error_count": error_count
     }

@@ -4,14 +4,22 @@ Automatically retrieves semantically relevant note chunks for user queries
 and formats them for injection into Claude's system prompt.
 """
 
-from typing import List, Dict, Any
 import logging
+from typing import Any, Dict, List, Optional
 
-from pkm_bridge.database import get_db, Document, DocumentChunk
+from sqlalchemy import or_
+
+from pkm_bridge.database import Document, DocumentChunk, get_db
 from pkm_bridge.embeddings.voyage_client import VoyageClient
 
 
 logger = logging.getLogger(__name__)
+
+# pgvector's cosine_distance = 1 - cosine_similarity, so true similarity lives
+# in [0, 1] (not the [0, 2] distance range). A near-duplicate chunk typically
+# scores ~0.7-0.9; unrelated content is often ~0.1-0.2, so 0.3-0.4 is a
+# reasonable "somewhat relevant" default cutoff on this scale.
+DEFAULT_MIN_SIMILARITY = 0.35
 
 
 class ContextRetriever:
@@ -29,14 +37,20 @@ class ContextRetriever:
         self,
         query: str,
         limit: int = 12,
-        min_similarity: float = 0.65
+        min_similarity: float = DEFAULT_MIN_SIMILARITY,
+        newer: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Retrieve semantically relevant chunks for a query.
 
         Args:
             query: User's query text
             limit: Maximum number of chunks to retrieve
-            min_similarity: Minimum cosine similarity threshold (0-1)
+            min_similarity: Minimum cosine similarity threshold (0-1; see
+                DEFAULT_MIN_SIMILARITY for the cosine-scale rationale)
+            newer: Optional YYYY-MM-DD filter; only chunks whose document date
+                is on/after this (or has no known date) are considered. Applied
+                in SQL before the LIMIT so it can't hide matches ranked below
+                the top N.
 
         Returns:
             List of dicts with keys: content, heading_path, filename, date, similarity
@@ -54,6 +68,13 @@ class ContextRetriever:
         # Vector similarity search
         db = get_db()
         try:
+            filters = [DocumentChunk.embedding.isnot(None)]
+            if newer:
+                # Keep undated chunks too -- we can't verify they're too old.
+                filters.append(
+                    or_(Document.date_extracted.is_(None), Document.date_extracted >= newer)
+                )
+
             # Cosine similarity search with pgvector
             # Note: cosine_distance returns 0-2, where 0 is most similar
             results = db.query(
@@ -64,7 +85,7 @@ class ContextRetriever:
                 Document,
                 DocumentChunk.document_id == Document.id
             ).filter(
-                DocumentChunk.embedding.isnot(None)
+                *filters
             ).order_by(
                 'distance'
             ).limit(limit).all()
@@ -72,9 +93,9 @@ class ContextRetriever:
             # Format and filter by similarity threshold
             chunks = []
             for chunk, doc, distance in results:
-                # Convert distance to similarity (1 - distance/2 for cosine)
-                # pgvector cosine_distance returns 0-2, where 0 is most similar
-                similarity = 1 - (distance / 2)
+                # Convert distance to similarity: pgvector cosine_distance is
+                # defined as 1 - cosine_similarity, so similarity = 1 - distance.
+                similarity = 1 - distance
 
                 if similarity >= min_similarity:
                     chunks.append({
@@ -146,7 +167,7 @@ class ContextRetriever:
         self,
         query: str,
         limit: int = 12,
-        min_similarity: float = 0.65
+        min_similarity: float = DEFAULT_MIN_SIMILARITY
     ) -> str:
         """Convenience method: retrieve and format in one call.
 

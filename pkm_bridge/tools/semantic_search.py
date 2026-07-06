@@ -4,11 +4,12 @@ Provides Claude with the ability to explicitly search notes using
 semantic similarity when auto-retrieved context is insufficient.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
+
 import yaml
 
+from pkm_bridge.context_retriever import DEFAULT_MIN_SIMILARITY, ContextRetriever
 from pkm_bridge.tools.base import BaseTool
-from pkm_bridge.context_retriever import ContextRetriever
 
 
 class SemanticSearchTool(BaseTool):
@@ -42,7 +43,7 @@ IMPORTANT: You already have auto-retrieved context in your system prompt. Only u
 Arguments:
 - query: natural language search query (describe what you're looking for)
 - limit: maximum results to return (default: 10)
-- min_similarity: minimum similarity threshold 0-1 (default: 0.6, higher = more strict)
+- min_similarity: minimum cosine similarity threshold 0-1 (default: 0.35, higher = more strict)
 - newer: optional YYYY-MM-DD date filter (only return notes >= this date)
 
 Returns YAML with:
@@ -73,8 +74,8 @@ Results are sorted by similarity (most similar first).
                 },
                 "min_similarity": {
                     "type": "number",
-                    "default": 0.6,
-                    "description": "Minimum similarity threshold (0-1)"
+                    "default": DEFAULT_MIN_SIMILARITY,
+                    "description": "Minimum cosine similarity threshold (0-1)"
                 },
                 "newer": {
                     "type": "string",
@@ -96,17 +97,20 @@ Results are sorted by similarity (most similar first).
         """
         query = params["query"]
         limit = params.get("limit", 10)
-        min_similarity = params.get("min_similarity", 0.6)
+        min_similarity = params.get("min_similarity", DEFAULT_MIN_SIMILARITY)
         newer_date = params.get("newer")
 
         self.logger.info(f"Semantic search: '{query[:50]}...' (limit={limit}, min_sim={min_similarity})")
 
-        # Retrieve relevant chunks
+        # Retrieve relevant chunks. The date filter is applied inside the SQL
+        # query (before the LIMIT) so recent matches ranked below the top-N
+        # by similarity are still reachable.
         try:
             chunks = self.context_retriever.retrieve_context(
                 query=query,
                 limit=limit,
-                min_similarity=min_similarity
+                min_similarity=min_similarity,
+                newer=newer_date
             )
         except Exception as e:
             self.logger.error(f"Semantic search failed: {e}")
@@ -114,14 +118,6 @@ Results are sorted by similarity (most similar first).
                 'error': str(e),
                 'query': query
             })
-
-        # Filter by date if requested
-        # Include chunks without dates (can't verify they're too old)
-        if newer_date:
-            chunks = [
-                c for c in chunks
-                if not c.get('date') or c['date'] >= newer_date
-            ]
 
         # Format results
         results = []

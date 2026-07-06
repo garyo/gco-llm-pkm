@@ -87,13 +87,11 @@ class NoteChunker:
             if heading_match:
                 # Save previous section if exists
                 if current_content:
-                    chunk = self._create_org_chunk(
+                    chunks.extend(self._create_org_chunk(
                         heading_stack,
                         current_content,
                         current_section_start
-                    )
-                    if chunk:
-                        chunks.append(chunk)
+                    ))
 
                 # Update heading stack
                 level = len(heading_match.group(1))
@@ -119,13 +117,11 @@ class NoteChunker:
 
         # Don't forget last section
         if current_content:
-            chunk = self._create_org_chunk(
+            chunks.extend(self._create_org_chunk(
                 heading_stack,
                 current_content,
                 current_section_start
-            )
-            if chunk:
-                chunks.append(chunk)
+            ))
 
         return chunks
 
@@ -134,8 +130,13 @@ class NoteChunker:
         heading_stack: List[Dict[str, Any]],
         content_lines: List[str],
         start_line: int
-    ) -> Optional[Chunk]:
-        """Create a chunk from an org section.
+    ) -> List[Chunk]:
+        """Create chunk(s) from an org section.
+
+        Sections under the token limit become a single chunk. Oversized
+        sections are split on paragraph (blank-line) boundaries, the same
+        pattern used by chunk_email, so a single huge section can't fail the
+        whole file.
 
         Args:
             heading_stack: Stack of parent headings
@@ -143,13 +144,13 @@ class NoteChunker:
             start_line: Starting line number
 
         Returns:
-            Chunk object or None if content too small
+            List of Chunk objects (empty if content too small)
         """
-        # Filter out property drawers and empty lines
-        filtered_content = []
+        # Filter out property drawers, tracking each line's original number
+        filtered_content: List[tuple[str, int]] = []
         in_drawer = False
 
-        for line in content_lines:
+        for offset, line in enumerate(content_lines):
             if line.strip().startswith(':PROPERTIES:'):
                 in_drawer = True
                 continue
@@ -157,15 +158,15 @@ class NoteChunker:
                 in_drawer = False
                 continue
             if not in_drawer:
-                filtered_content.append(line)
+                filtered_content.append((line, start_line + offset))
 
         # Join content
-        content_text = ''.join(filtered_content).strip()
+        content_text = ''.join(line for line, _ in filtered_content).strip()
 
         # Skip if too small
         token_count = self.estimate_tokens(content_text)
         if token_count < self.min_tokens:
-            return None
+            return []
 
         # Build heading path
         heading_path = None
@@ -175,19 +176,70 @@ class NoteChunker:
                 for h in heading_stack
             ])
 
-        # If too large, split on paragraphs
-        if token_count > self.max_tokens:
-            # TODO: Implement paragraph splitting if needed
-            # For now, just truncate
-            pass
+        if token_count <= self.max_tokens:
+            return [Chunk(
+                content=content_text,
+                chunk_type='heading',
+                heading_path=heading_path,
+                start_line=start_line,
+                token_count=token_count
+            )]
 
-        return Chunk(
-            content=content_text,
-            chunk_type='heading',
-            heading_path=heading_path,
-            start_line=start_line,
-            token_count=token_count
-        )
+        # Too large: split on paragraph boundaries
+        return self._split_oversized_section(filtered_content, heading_path)
+
+    def _split_oversized_section(
+        self,
+        filtered_content: List[tuple[str, int]],
+        heading_path: Optional[str]
+    ) -> List[Chunk]:
+        """Split an oversized org section into paragraph-bounded chunks.
+
+        Args:
+            filtered_content: (line, original_line_number) pairs for the
+                section, with property drawers already removed
+            heading_path: Heading path shared by all resulting chunks
+
+        Returns:
+            List of Chunk objects, each under max_tokens where possible
+        """
+        chunks: List[Chunk] = []
+        current_lines: List[str] = []
+        current_start = filtered_content[0][1] if filtered_content else 0
+
+        for line, line_num in filtered_content:
+            is_blank = line.strip() == ''
+            if is_blank and current_lines:
+                candidate = ''.join(current_lines + [line])
+                if self.estimate_tokens(candidate) > self.max_tokens:
+                    text = ''.join(current_lines).strip()
+                    tc = self.estimate_tokens(text)
+                    if tc >= self.min_tokens:
+                        chunks.append(Chunk(
+                            content=text,
+                            chunk_type='heading',
+                            heading_path=heading_path,
+                            start_line=current_start,
+                            token_count=tc
+                        ))
+                    current_lines = []
+                    current_start = line_num + 1
+                    continue
+            current_lines.append(line)
+
+        if current_lines:
+            text = ''.join(current_lines).strip()
+            tc = self.estimate_tokens(text)
+            if tc >= self.min_tokens:
+                chunks.append(Chunk(
+                    content=text,
+                    chunk_type='heading',
+                    heading_path=heading_path,
+                    start_line=current_start,
+                    token_count=tc
+                ))
+
+        return chunks
 
     def chunk_markdown_file(self, file_path: Path) -> List[Chunk]:
         """Parse markdown file and create chunks at bullet boundaries.

@@ -224,6 +224,31 @@ import Layout from '../layouts/Layout.astro';
             </details>
         </section>
 
+        <section class="self-improvement-section">
+            <h2>Self-Improvement</h2>
+            <p class="section-description">
+                A background agent periodically reviews usage and proposes changes to Claude's
+                base instructions. Prompt changes require your approval before they take effect.
+            </p>
+
+            <h3 class="si-subheading">Pending Prompt Amendments</h3>
+            <div id="si-amendments" class="si-amendments">
+                <p class="loading-text">Loading proposals...</p>
+            </div>
+
+            <h3 class="si-subheading">Last Run</h3>
+            <div id="si-last-run" class="si-last-run">
+                <p class="loading-text">Loading...</p>
+            </div>
+
+            <details class="si-rules-section">
+                <summary><strong>Active Learned Rules</strong></summary>
+                <div id="si-rules-summary" class="si-rules-summary">
+                    <p class="loading-text">Loading...</p>
+                </div>
+            </details>
+        </section>
+
         <section class="account-section">
             <h2>Account</h2>
             <button id="logout-btn" class="btn btn-danger">
@@ -873,6 +898,143 @@ import Layout from '../layouts/Layout.astro';
         font-style: italic;
     }
 
+    /* Self-Improvement */
+    .self-improvement-section {
+        margin-bottom: 3rem;
+    }
+
+    .si-subheading {
+        font-size: 1.05rem;
+        margin: 1.5rem 0 0.75rem;
+    }
+
+    .si-amendments,
+    .si-last-run {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        background: white;
+        padding: 1rem;
+    }
+
+    .si-amendments :global(.amendment-card) {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        background: #fafafa;
+    }
+
+    .si-amendments :global(.amendment-card:last-child) {
+        margin-bottom: 0;
+    }
+
+    .si-amendments :global(.amendment-text) {
+        font-size: 0.95rem;
+        margin-bottom: 0.75rem;
+        line-height: 1.5;
+    }
+
+    .si-amendments :global(.amendment-proposed) {
+        background: #f0f8ff;
+        border: 1px solid #b3d9ff;
+        border-radius: 4px;
+        padding: 0.5rem 0.75rem;
+        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+        font-size: 0.85rem;
+        margin-bottom: 0.75rem;
+        white-space: pre-wrap;
+    }
+
+    .si-amendments :global(.amendment-meta) {
+        font-size: 0.8rem;
+        color: #888;
+        margin-bottom: 0.75rem;
+    }
+
+    .si-amendments :global(.amendment-actions) {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .si-amendments :global(.btn-approve) {
+        background: #28a745;
+        color: white;
+        padding: 0.375rem 0.75rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+    }
+
+    .si-amendments :global(.btn-approve:hover) {
+        background: #218838;
+    }
+
+    .si-amendments :global(.btn-reject) {
+        background: #dc3545;
+        color: white;
+        padding: 0.375rem 0.75rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+    }
+
+    .si-amendments :global(.btn-reject:hover) {
+        background: #c82333;
+    }
+
+    .si-last-run :global(.si-run-summary) {
+        font-size: 0.9rem;
+        color: #333;
+        margin-bottom: 0.5rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+    }
+
+    .si-last-run :global(.si-run-meta) {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        font-size: 0.8rem;
+        color: #888;
+    }
+
+    .si-last-run :global(.si-run-error) {
+        color: #dc3545;
+        font-size: 0.85rem;
+        margin-top: 0.5rem;
+    }
+
+    .si-rules-section {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem 1.5rem;
+        background: white;
+        margin-top: 1rem;
+    }
+
+    .si-rules-section summary {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .si-rules-summary {
+        margin-top: 0.75rem;
+    }
+
+    .si-rules-summary :global(.si-rule-type-row) {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.35rem 0;
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 0.85rem;
+    }
+
+    .si-rules-summary :global(.si-rule-type-row:last-child) {
+        border-bottom: none;
+    }
+
 </style>
 
 <script>
@@ -1295,20 +1457,20 @@ import Layout from '../layouts/Layout.astro';
                 <div class="task-card ${t.is_heartbeat ? 'heartbeat' : ''} ${!t.enabled ? 'disabled' : ''}" data-id="${t.id}">
                     <div class="task-card-header">
                         <span class="task-card-title">
-                            ${t.name}
+                            ${escapeHtml(t.name)}
                             ${t.is_heartbeat ? '<span class="heartbeat-badge">heartbeat</span>' : ''}
                         </span>
                         <div class="task-card-actions">
                             <label class="toggle-label" style="gap: 0.4rem; font-size: 0.8rem;">
                                 <input type="checkbox" class="toggle-input task-toggle" data-id="${t.id}" ${t.enabled ? 'checked' : ''} style="width: 36px; height: 18px;">
                             </label>
-                            <button class="btn-run" onclick="runTaskNow(${t.id})">Run Now</button>
-                            <button class="btn-edit" onclick="editTask(${t.id})">Edit</button>
-                            ${!t.is_heartbeat ? `<button class="btn-delete" onclick="deleteTask(${t.id}, '${t.name}')">Delete</button>` : ''}
+                            <button class="btn-run" data-id="${t.id}">Run Now</button>
+                            <button class="btn-edit" data-id="${t.id}">Edit</button>
+                            ${!t.is_heartbeat ? `<button class="btn-delete" data-id="${t.id}" data-name="${escapeAttr(t.name)}">Delete</button>` : ''}
                         </div>
                     </div>
                     <div class="task-card-meta">
-                        <span>${t.schedule_type}: <code>${t.schedule_expr}</code></span>
+                        <span>${escapeHtml(t.schedule_type)}: <code>${escapeHtml(t.schedule_expr)}</code></span>
                         <span>Last: ${formatDateTime(t.last_run_at)}</span>
                         <span>Next: ${formatDateTime(t.next_run_at)}</span>
                     </div>
@@ -1324,6 +1486,19 @@ import Layout from '../layouts/Layout.astro';
                     loadTasks();
                 });
             });
+
+            // Action buttons: attach listeners with data-attributes rather than inline
+            // onclick with interpolated task names — a name containing a quote or HTML
+            // would otherwise break the handler or inject markup.
+            container.querySelectorAll<HTMLButtonElement>('.btn-run').forEach(btn => {
+                btn.addEventListener('click', () => runTaskNow(Number(btn.dataset.id)));
+            });
+            container.querySelectorAll<HTMLButtonElement>('.btn-edit').forEach(btn => {
+                btn.addEventListener('click', () => editTask(Number(btn.dataset.id)));
+            });
+            container.querySelectorAll<HTMLButtonElement>('.btn-delete').forEach(btn => {
+                btn.addEventListener('click', () => deleteTask(Number(btn.dataset.id), btn.dataset.name || ''));
+            });
         } catch (e) {
             console.error('Error loading tasks:', e);
             container.innerHTML = '<p class="loading-text">Error loading tasks</p>';
@@ -1336,8 +1511,11 @@ import Layout from '../layouts/Layout.astro';
         return div.innerHTML;
     }
 
-    // Make these available globally for onclick handlers
-    (window as any).runTaskNow = async (id: number) => {
+    function escapeAttr(text: string): string {
+        return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;');
+    }
+
+    async function runTaskNow(id: number) {
         if (!confirm('Run this task now?')) return;
         try {
             await fetch(`/api/scheduled-tasks/${id}/run`, { method: 'POST', headers: authHeaders() });
@@ -1345,9 +1523,9 @@ import Layout from '../layouts/Layout.astro';
         } catch (e) {
             alert('Failed to start task');
         }
-    };
+    }
 
-    (window as any).deleteTask = async (id: number, name: string) => {
+    async function deleteTask(id: number, name: string) {
         if (!confirm(`Delete task "${name}"?`)) return;
         try {
             await fetch(`/api/scheduled-tasks/${id}`, { method: 'DELETE', headers: authHeaders() });
@@ -1355,7 +1533,7 @@ import Layout from '../layouts/Layout.astro';
         } catch (e) {
             alert('Failed to delete task');
         }
-    };
+    }
 
     function resetTaskForm() {
         (document.getElementById('edit-task-id') as HTMLInputElement).value = '';
@@ -1372,7 +1550,7 @@ import Layout from '../layouts/Layout.astro';
         document.getElementById('task-form-status')!.textContent = '';
     }
 
-    (window as any).editTask = async (id: number) => {
+    async function editTask(id: number) {
         try {
             const res = await fetch('/api/scheduled-tasks', { headers: authHeaders() });
             if (!res.ok) { alert('Failed to load task'); return; }
@@ -1399,7 +1577,7 @@ import Layout from '../layouts/Layout.astro';
         } catch (e) {
             alert('Failed to load task for editing');
         }
-    };
+    }
 
     // Add task form
     document.getElementById('add-task-btn')?.addEventListener('click', () => {
@@ -1502,6 +1680,185 @@ import Layout from '../layouts/Layout.astro';
         }
     }
 
+    // ---- Self-Improvement ----
+
+    function handleUnauthorized() {
+        localStorage.removeItem('pkm-authToken');
+        window.location.href = '/';
+    }
+
+    async function loadPromptAmendments() {
+        const container = document.getElementById('si-amendments')!;
+        try {
+            const res = await fetch('/api/prompt-amendments', { headers: authHeaders() });
+            if (res.status === 401) { handleUnauthorized(); return; }
+            if (!res.ok) {
+                container.innerHTML = '<p class="loading-text">Failed to load proposals</p>';
+                return;
+            }
+            const amendments = await res.json();
+
+            if (amendments.length === 0) {
+                container.innerHTML = '<p class="loading-text">No pending prompt change proposals.</p>';
+                return;
+            }
+
+            container.innerHTML = amendments.map((a: any) => {
+                const data = a.rule_data || {};
+                const action = data.action || 'add';
+                const section = data.section || '';
+                const proposedText = data.proposed_text || a.rule_text || '';
+                const reason = data.reason || '';
+
+                return `
+                    <div class="amendment-card" data-id="${a.id}">
+                        <div class="amendment-text">
+                            <strong>${escapeHtml(String(action).toUpperCase())}</strong>${section ? ` in <em>${escapeHtml(section)}</em>` : ''}
+                        </div>
+                        <div class="amendment-proposed">${escapeHtml(proposedText)}</div>
+                        ${reason ? `<div class="amendment-text"><strong>Reason:</strong> ${escapeHtml(reason)}</div>` : ''}
+                        <div class="amendment-meta">
+                            Confidence: ${Math.round((a.confidence ?? 0) * 100)}% &middot; Proposed ${formatDateTime(a.created_at)}
+                        </div>
+                        <div class="amendment-actions">
+                            <button class="btn-approve" data-id="${a.id}">Approve</button>
+                            <button class="btn-reject" data-id="${a.id}">Reject</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            container.querySelectorAll<HTMLButtonElement>('.btn-approve').forEach(btn => {
+                btn.addEventListener('click', () => approveAmendment(Number(btn.dataset.id)));
+            });
+            container.querySelectorAll<HTMLButtonElement>('.btn-reject').forEach(btn => {
+                btn.addEventListener('click', () => rejectAmendment(Number(btn.dataset.id)));
+            });
+        } catch (e) {
+            console.error('Error loading prompt amendments:', e);
+            container.innerHTML = '<p class="loading-text">Error loading proposals</p>';
+        }
+    }
+
+    async function approveAmendment(id: number) {
+        if (!confirm('Approve this prompt change? It will take effect immediately.')) return;
+        try {
+            const res = await fetch(`/api/prompt-amendments/${id}/approve`, { method: 'POST', headers: authHeaders() });
+            if (res.status === 401) { handleUnauthorized(); return; }
+            if (res.ok) {
+                loadPromptAmendments();
+            } else {
+                alert('Failed to approve amendment');
+            }
+        } catch (e) {
+            console.error('Error approving amendment:', e);
+            alert('Error approving amendment');
+        }
+    }
+
+    async function rejectAmendment(id: number) {
+        if (!confirm('Reject this prompt change?')) return;
+        try {
+            const res = await fetch(`/api/prompt-amendments/${id}/reject`, { method: 'POST', headers: authHeaders() });
+            if (res.status === 401) { handleUnauthorized(); return; }
+            if (res.ok) {
+                loadPromptAmendments();
+            } else {
+                alert('Failed to reject amendment');
+            }
+        } catch (e) {
+            console.error('Error rejecting amendment:', e);
+            alert('Error rejecting amendment');
+        }
+    }
+
+    async function loadLastSelfImproveRun() {
+        const container = document.getElementById('si-last-run')!;
+        try {
+            const res = await fetch('/admin/self-improve/log', { headers: authHeaders() });
+            if (res.status === 401) { handleUnauthorized(); return; }
+            if (!res.ok) {
+                container.innerHTML = '<p class="loading-text">Failed to load run info</p>';
+                return;
+            }
+            const data = await res.json();
+            const recentRuns = data.recent_runs || [];
+
+            // Prefer the persisted DB history (survives server restarts); fall back to
+            // the in-memory last_run only if no run has ever been logged to the DB.
+            let run: any = null;
+            let fromDb = true;
+            if (recentRuns.length > 0) {
+                run = recentRuns[0];
+            } else if (data.last_run) {
+                run = data.last_run;
+                fromDb = false;
+            }
+
+            if (!run) {
+                container.innerHTML = '<p class="loading-text">No self-improvement runs yet.</p>';
+                return;
+            }
+
+            const turns = fromDb ? String(run.turns_used ?? '—') : (run.budget?.turns ?? '—');
+            const inputTokens = fromDb
+                ? (run.input_tokens != null ? `${(run.input_tokens / 1000).toFixed(0)}k` : '—')
+                : (run.budget?.input_tokens ?? '—');
+            const outputTokens = fromDb
+                ? (run.output_tokens != null ? `${(run.output_tokens / 1000).toFixed(0)}k` : '—')
+                : (run.budget?.output_tokens ?? '—');
+            const summary = run.summary || '(no summary)';
+
+            container.innerHTML = `
+                <div class="si-run-summary">${escapeHtml(summary)}</div>
+                <div class="si-run-meta">
+                    <span>Started: ${formatDateTime(run.started_at)}</span>
+                    <span>Completed: ${formatDateTime(run.completed_at)}</span>
+                    <span>Turns: ${escapeHtml(turns)}</span>
+                    <span>Input tokens: ${escapeHtml(inputTokens)}</span>
+                    <span>Output tokens: ${escapeHtml(outputTokens)}</span>
+                </div>
+                ${run.error ? `<div class="si-run-error">Error: ${escapeHtml(run.error)}</div>` : ''}
+            `;
+        } catch (e) {
+            console.error('Error loading last self-improvement run:', e);
+            container.innerHTML = '<p class="loading-text">Error loading run info</p>';
+        }
+    }
+
+    async function loadActiveRulesSummary() {
+        const container = document.getElementById('si-rules-summary')!;
+        try {
+            const res = await fetch('/api/learned-rules', { headers: authHeaders() });
+            if (res.status === 401) { handleUnauthorized(); return; }
+            if (!res.ok) {
+                container.innerHTML = '<p class="loading-text">Failed to load rules</p>';
+                return;
+            }
+            const rules = await res.json();
+            const active = rules.filter((r: any) => r.is_active);
+
+            if (active.length === 0) {
+                container.innerHTML = '<p class="loading-text">No active learned rules.</p>';
+                return;
+            }
+
+            const counts = new Map<string, number>();
+            for (const r of active) {
+                counts.set(r.rule_type, (counts.get(r.rule_type) || 0) + 1);
+            }
+            const rows = Array.from(counts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => `<div class="si-rule-type-row"><span>${escapeHtml(type.replace(/_/g, ' '))}</span><span>${count}</span></div>`)
+                .join('');
+
+            container.innerHTML = `<div class="si-rule-type-row"><strong>Total active</strong><strong>${active.length}</strong></div>${rows}`;
+        } catch (e) {
+            console.error('Error loading learned rules:', e);
+            container.innerHTML = '<p class="loading-text">Error loading rules</p>';
+        }
+    }
+
     // Load data on page load
     loadUserContext();
     checkTickTickStatus();
@@ -1511,4 +1868,7 @@ import Layout from '../layouts/Layout.astro';
     loadBudget();
     loadTasks();
     loadRecentRuns();
+    loadPromptAmendments();
+    loadLastSelfImproveRun();
+    loadActiveRulesSummary();
 </script>

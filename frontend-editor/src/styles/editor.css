@@ -3,7 +3,9 @@
 /* CodeMirror container */
 #editor-container {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  overflow: auto;
+  /* Only the CM scroller (below) should scroll; a scrollable outer
+     container creates nested scrollbars and fights touch scrolling. */
+  overflow: hidden;
 }
 
 #editor-container .cm-editor {

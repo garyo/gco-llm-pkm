@@ -17,11 +17,16 @@ export function createEditor(
   const isOrg = filepath.endsWith('.org');
   const langMode = isOrg ? orgMode : markdown();
 
+  // The emacs keymap's mark-based selection state fights native touch
+  // selection/cursor placement, so only load it on devices with a precise
+  // pointer (mouse/trackpad).
+  const hasFinePointer = window.matchMedia?.('(pointer: fine)').matches ?? true;
+
   const extensions = [
     basicSetup,
     langMode,
     oneDark,
-    emacs(),
+    ...(hasFinePointer ? [emacs()] : []),
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {

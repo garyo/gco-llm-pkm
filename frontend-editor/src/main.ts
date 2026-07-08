@@ -250,11 +250,22 @@ async function refreshFileInPlace(): Promise<boolean> {
   if (!res.ok) return false;
   const data = await res.json();
   if (state.currentFileMtime && data.modified && data.modified <= state.currentFileMtime) return false;
+
+  // The user may have typed while the fetch was in flight; don't clobber
+  // their edits. Conflict handling will pick this up on the next event.
+  if (state.isDirty) return false;
+
   if (state.editorView) {
+    // Replacing the document mid-IME-composition corrupts the editor DOM on
+    // mobile keyboards. Skip; a later event or resume will retry.
+    if (state.editorView.composing) return false;
+
     const currentContent = state.editorView.state.doc.toString();
     if (data.content !== currentContent) {
+      const head = state.editorView.state.selection.main.head;
       state.editorView.dispatch({
         changes: { from: 0, to: state.editorView.state.doc.length, insert: data.content },
+        selection: { anchor: Math.min(head, data.content.length) },
       });
     }
     state.currentFileMtime = data.modified || null;

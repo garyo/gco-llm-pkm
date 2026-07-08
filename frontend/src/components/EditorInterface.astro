@@ -801,11 +801,21 @@
       return false;
     }
 
+    // The user may have typed while the fetch was in flight; don't clobber
+    // their edits. Conflict handling will pick this up on the next event.
+    if (isDirty) return false;
+
     if (editorView) {
+      // Replacing the document mid-IME-composition corrupts the editor DOM on
+      // mobile keyboards. Skip; a later event or resume will retry.
+      if (editorView.composing) return false;
+
       const currentContent = editorView.state.doc.toString();
       if (data.content !== currentContent) {
+        const head = editorView.state.selection.main.head;
         editorView.dispatch({
-          changes: { from: 0, to: editorView.state.doc.length, insert: data.content }
+          changes: { from: 0, to: editorView.state.doc.length, insert: data.content },
+          selection: { anchor: Math.min(head, data.content.length) },
         });
       }
       currentFileMtime = data.modified || null;
@@ -1696,6 +1706,16 @@
     }
   });
 
+  // Rebuild the editor's DOM from its own state. Recovers from DOM/state
+  // desync (e.g. a mobile IME composition gone wrong) without touching the
+  // document, selection, or fold state. Cheap: only the viewport is rendered.
+  function resyncEditorView() {
+    if (!editorView) return;
+    const scrollTop = editorView.scrollDOM.scrollTop;
+    editorView.setState(editorView.state);
+    editorView.scrollDOM.scrollTop = scrollTop;
+  }
+
   // Reconnect SSE with new session (called when user starts new session or switches)
   function reconnectSSEForNewSession() {
     console.log('Reconnecting SSE for new session');
@@ -1724,5 +1744,6 @@
   (window as any).hideConflictModal = hideConflictModal;
   (window as any).cleanupAutoSaveTimers = cleanupAutoSaveTimers;
   (window as any).refreshAutoSaveSettings = refreshAutoSaveSettings;
+  (window as any).resyncEditorView = resyncEditorView;
   (window as any).reconnectSSEForNewSession = reconnectSSEForNewSession;
 </script>

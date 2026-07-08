@@ -789,6 +789,12 @@ import EditorInterface from '../components/EditorInterface.astro';
       // (in case user changed settings in settings page via same tab navigation)
       const refresh = (window as any).refreshAutoSaveSettings;
       if (refresh) refresh();
+
+      // Rebuild the editor DOM from its state on re-entry. Recovers from any
+      // DOM/state desync accumulated while editing (mobile IME quirks) while
+      // preserving document, selection, folds, and scroll position.
+      const resync = (window as any).resyncEditorView;
+      if (resync) resync();
     }
 
     // Save current tab preference

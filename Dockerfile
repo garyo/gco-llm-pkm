@@ -7,8 +7,8 @@ WORKDIR /app/frontend
 RUN npm install -g bun
 
 # Copy frontend files
-COPY frontend/package.json frontend/bun.lockb ./
-RUN bun install
+COPY frontend/package.json frontend/bun.lock* ./
+RUN bun install --frozen-lockfile
 
 COPY shared/ /app/shared/
 COPY frontend/ ./
@@ -25,8 +25,8 @@ WORKDIR /app/frontend-editor
 
 RUN npm install -g bun
 
-COPY frontend-editor/package.json frontend-editor/bun.lockb* ./
-RUN bun install
+COPY frontend-editor/package.json frontend-editor/bun.lock* ./
+RUN bun install --frozen-lockfile
 
 COPY shared/ /app/shared/
 COPY frontend-editor/ ./

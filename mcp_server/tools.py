@@ -338,6 +338,11 @@ def register_all_tools(mcp: FastMCP):
     ) -> str:
         """Write content to a PKM file. Creates parent directories if needed.
 
+        If the exact path doesn't exist but the same filename exists at the
+        toplevel or under pages/, the existing file is updated instead of
+        creating a duplicate (the result reports the actual path). Create NEW
+        pages under pages/ (e.g. 'org:pages/topic.org'), not at the toplevel.
+
         Args:
             path: File path in format 'org:relative/path.org' or 'logseq:relative/path.md'
             content: File content to write
@@ -358,7 +363,7 @@ def register_all_tools(mcp: FastMCP):
                 "write_file", {"path": path, "create_only": create_only},
                 f"status={result['status']}", duration_ms,
             )
-            msg = f"File {result['status']}: {path} ({result.get('size', 0)} bytes)"
+            msg = f"File {result['status']}: {result.get('path', path)} ({result.get('size', 0)} bytes)"
             if expected_mtime is None and result["status"] == "saved" and not create_only:
                 msg += (
                     "\n\nTip: pass expected_mtime from read_file's [mtime=...] header"

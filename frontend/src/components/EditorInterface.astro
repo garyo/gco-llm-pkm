@@ -605,11 +605,16 @@
 
       const data = await res.json();
 
+      // The server may resolve the request to a different location (pages/
+      // fallback); adopt its canonical path so saves, links, and the selector
+      // all target the real file.
+      const canonical = data.path || filepath;
+
       // Reinitialize editor with correct language mode for this file type
       if (editorView) {
         editorView.destroy();
       }
-      editorView = createEditor(editorContainer, filepath, () => {
+      editorView = createEditor(editorContainer, canonical, () => {
         isDirty = true;
         updateStatus('Modified (unsaved)');
         saveButton.disabled = false;
@@ -627,7 +632,7 @@
         });
 
         // Auto-fold property drawers for .org files
-        if (filepath.endsWith('.org')) {
+        if (canonical.endsWith('.org')) {
           // Use setTimeout to ensure the document is fully parsed
           setTimeout(() => autoFoldPropertyDrawers(editorView), 50);
         }
@@ -647,33 +652,33 @@
         }
       }
 
-      currentFile = filepath;
+      currentFile = canonical;
       currentFileMtime = data.modified || null;  // Track modification time
       isDirty = false;
       saveButton.disabled = true;
 
       // Update file display
-      updateFileDisplay(filepath);
+      updateFileDisplay(canonical);
 
       // Update file selector to show current file
       // If the file isn't in the dropdown (due to filtering), add it temporarily
       const existingOption = Array.from(fileSelector.options).find(
-        opt => opt.value === filepath
+        opt => opt.value === canonical
       );
       if (!existingOption) {
         // File not in filtered list, add it
         const option = document.createElement('option');
-        option.value = filepath;
-        option.textContent = filepath.split('/').pop() || filepath;
+        option.value = canonical;
+        option.textContent = canonical.split('/').pop() || canonical;
         // Insert after the "Select a file..." placeholder. Reference a *direct*
         // child (children[1]) — `options[1]` flattens optgroup contents, so it's
         // a child of an <optgroup>, not the <select>, and insertBefore would throw.
         fileSelector.insertBefore(option, fileSelector.children[1] || null);
       }
-      fileSelector.value = filepath;
+      fileSelector.value = canonical;
 
       const size = (data.size / 1024).toFixed(1);
-      const fileType = filepath.endsWith('.org') ? 'Org' : 'Markdown';
+      const fileType = canonical.endsWith('.org') ? 'Org' : 'Markdown';
       updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
 
       // Auto-collapse filters on mobile after loading a file

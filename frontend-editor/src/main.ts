@@ -144,31 +144,36 @@ async function loadFile(filepath: string): Promise<void> {
     updateStatus('Loading...');
     const data = await api.loadFile(filepath);
 
+    // The server may resolve the request to a different location (pages/
+    // fallback); adopt its canonical path so saves, links, and the selector
+    // all target the real file.
+    const canonical = data.path || filepath;
+
     if (state.editorView) state.editorView.destroy();
-    state.editorView = createEditor(editorContainer, filepath, onDocChanged);
-    setEditorContent(state.editorView, data.content, filepath, state.pendingScrollLine);
+    state.editorView = createEditor(editorContainer, canonical, onDocChanged);
+    setEditorContent(state.editorView, data.content, canonical, state.pendingScrollLine);
     state.pendingScrollLine = null;
 
-    state.currentFile = filepath;
+    state.currentFile = canonical;
     state.currentFileMtime = data.modified || null;
     state.isDirty = false;
     saveButton.disabled = true;
 
-    updateFileDisplay(filepath);
-    updateUrl(filepath);
+    updateFileDisplay(canonical);
+    updateUrl(canonical);
 
     // Ensure file is visible in selector
-    const existing = Array.from(fileSelector.options).find((opt) => opt.value === filepath);
+    const existing = Array.from(fileSelector.options).find((opt) => opt.value === canonical);
     if (!existing) {
       const option = document.createElement('option');
-      option.value = filepath;
-      option.textContent = filepath.split('/').pop() || filepath;
+      option.value = canonical;
+      option.textContent = canonical.split('/').pop() || canonical;
       fileSelector.insertBefore(option, fileSelector.options[1]);
     }
-    fileSelector.value = filepath;
+    fileSelector.value = canonical;
 
     const size = (data.size / 1024).toFixed(1);
-    const fileType = filepath.endsWith('.org') ? 'Org' : 'Markdown';
+    const fileType = canonical.endsWith('.org') ? 'Org' : 'Markdown';
     updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
 
     closeFilterControls();

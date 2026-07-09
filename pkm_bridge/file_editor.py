@@ -91,6 +91,52 @@ class FileEditor:
             raise ValueError(f"Path '{filepath}' escapes the '{dir_type}' directory")
         return full_path
 
+    def _resolve_with_fallback(self, filepath: str) -> tuple[Path, str]:
+        """Resolve a prefixed path, trying pages/ and toplevel variants.
+
+        Pages don't live consistently at the directory root vs pages/ (some
+        get created at toplevel), so when the exact path doesn't exist, try in
+        order: pages/ inserted before (or removed from before) the basename,
+        then the bare basename at the prefix root, then pages/<basename>.
+        The first existing candidate wins; if none exist, the original
+        resolution is returned (so writes create the file where requested).
+
+        Returns:
+            (resolved absolute Path, canonical prefixed path)
+        """
+        full_path = self._resolve_prefixed_path(filepath)
+        if full_path.exists() or ":" not in filepath:
+            return full_path, filepath
+
+        dir_type, rel_path = filepath.split(":", 1)
+        parts = rel_path.split("/")
+        name = parts[-1]
+        parent = parts[:-1]
+
+        candidates = []
+        if parent and parent[-1] == "pages":
+            candidates.append("/".join(parent[:-1] + [name]))
+        else:
+            candidates.append("/".join(parent + ["pages", name]))
+        candidates.append(name)
+        candidates.append(f"pages/{name}")
+
+        seen = {rel_path}
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            alt_filepath = f"{dir_type}:{candidate}"
+            try:
+                alt_path = self._resolve_prefixed_path(alt_filepath)
+            except ValueError:
+                continue
+            if alt_path.exists():
+                self.logger.info(f"Resolved {filepath} -> {alt_filepath} (pages/ fallback)")
+                return alt_path, alt_filepath
+
+        return full_path, filepath
+
     def list_files(self) -> List[Dict[str, str]]:
         """List all .org and .md files in allowed directories.
 
@@ -183,12 +229,14 @@ class FileEditor:
                        content is longer. Pass None to return the full file (editor path).
 
         Returns:
-            Dict with content, path, modified timestamp, size, and 'truncated' flag.
+            Dict with content, path (canonical — may differ from the request
+            when the pages/-fallback found the file elsewhere), modified
+            timestamp, size, and 'truncated' flag.
 
         Raises:
             ValueError: If file path is invalid or file doesn't exist
         """
-        full_path = self._resolve_prefixed_path(filepath)
+        full_path, filepath = self._resolve_with_fallback(filepath)
 
         if not full_path.exists():
             raise ValueError(f"File not found: {filepath}")
@@ -243,7 +291,9 @@ class FileEditor:
             FileExistsError: (via create_only)
             ConflictError: If expected_mtime is stale (caller should return 409)
         """
-        full_path = self._resolve_prefixed_path(filepath)
+        # Fallback keeps edits targeting the existing file (wherever it lives)
+        # instead of creating a duplicate at the requested location.
+        full_path, filepath = self._resolve_with_fallback(filepath)
 
         # Ensure parent directory exists
         full_path.parent.mkdir(parents=True, exist_ok=True)

@@ -83,12 +83,48 @@ export const orgLinkField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+/** Resolve a relative file: link against the current prefixed path
+ * ("org:journals/x.org" + "file:../y.org" -> "org:y.org"). Absolute targets
+ * can't be mapped into the org:/logseq: namespaces, so they're skipped.
+ * A numeric ::suffix becomes a target line; other ::suffixes are dropped. */
+function resolveFileLink(
+  target: string,
+  currentFilePath: string,
+): { path: string; line: number | null } | null {
+  let rel = target.slice('file:'.length);
+  let line: number | null = null;
+
+  const sep = rel.indexOf('::');
+  if (sep >= 0) {
+    const suffix = rel.slice(sep + 2);
+    rel = rel.slice(0, sep);
+    if (/^\d+$/.test(suffix)) line = parseInt(suffix, 10);
+  }
+
+  const colon = currentFilePath.indexOf(':');
+  if (!rel || rel.startsWith('/') || colon < 0) return null;
+
+  const prefix = currentFilePath.slice(0, colon);
+  const parts = currentFilePath.slice(colon + 1).split('/').slice(0, -1);
+  for (const seg of rel.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (parts.length === 0) return null; // escapes the prefix root
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return { path: `${prefix}:${parts.join('/')}`, line };
+}
+
 /** Open an org link target. Handles id:, attachment:, http(s):, and file: links. */
 function openOrgLinkTarget(
   target: string,
   view: EditorView,
   pos: number,
   event: MouseEvent,
+  currentFilePath: string,
 ): boolean {
   // External URLs
   if (target.startsWith('http://') || target.startsWith('https://')) {
@@ -120,6 +156,21 @@ function openOrgLinkTarget(
     return true;
   }
 
+  if (target.startsWith('file:')) {
+    const resolved = resolveFileLink(target, currentFilePath);
+    if (resolved) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.dispatchEvent(
+        new CustomEvent('editor:navigate', {
+          detail: { path: resolved.path, line: resolved.line },
+        })
+      );
+      return true;
+    }
+    return false;
+  }
+
   if (target.startsWith('attachment:')) {
     const filename = target.slice('attachment:'.length);
     const line = view.state.doc.lineAt(pos);
@@ -140,7 +191,7 @@ function openOrgLinkTarget(
  * Click handler for org links. Navigation is emitted as a window CustomEvent
  * ('editor:navigate'); each consumer app listens and routes.
  */
-export function createOrgLinkClickHandler() {
+export function createOrgLinkClickHandler(currentFilePath: string) {
   return EditorView.domEventHandlers({
     mousedown(event: MouseEvent, view: EditorView) {
       // Folded link widgets: click directly (no modifier needed) since
@@ -151,7 +202,7 @@ export function createOrgLinkClickHandler() {
         const target = widgetEl.title;
         if (target) {
           const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-          if (openOrgLinkTarget(target, view, pos ?? 0, event)) return true;
+          if (openOrgLinkTarget(target, view, pos ?? 0, event, currentFilePath)) return true;
         }
       }
 
@@ -172,7 +223,7 @@ export function createOrgLinkClickHandler() {
         const linkStart = match.index;
         const linkEnd = linkStart + match[0].length;
         if (lineOffset >= linkStart && lineOffset <= linkEnd) {
-          if (openOrgLinkTarget(match[1], view, pos, event)) return true;
+          if (openOrgLinkTarget(match[1], view, pos, event, currentFilePath)) return true;
         }
       }
       return false;

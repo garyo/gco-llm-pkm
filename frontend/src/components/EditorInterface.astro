@@ -1347,6 +1347,19 @@
     }, 100);
   }
 
+  // Handle editor:navigate events from org links inside the editor
+  // (id: and file: links dispatched by shared/editor/org-links.ts)
+  window.addEventListener('editor:navigate', ((e: CustomEvent) => {
+    const { path, line } = e.detail || {};
+    if (!path) return;
+    pushNavHistory();
+    if (line) {
+      pendingScrollLine = line;
+    }
+    fileSelector.value = path;
+    loadFile(path);
+  }) as EventListener);
+
   // Handle openFile custom events from chat (org-id link navigation)
   window.addEventListener('openFile', ((e: CustomEvent) => {
     const { path, line } = e.detail || {};

@@ -63,7 +63,7 @@ export function createEditor(
       orgFoldService,
       orgImageField,
       orgLinkField,
-      createOrgLinkClickHandler(),
+      createOrgLinkClickHandler(filepath),
     );
   }
 

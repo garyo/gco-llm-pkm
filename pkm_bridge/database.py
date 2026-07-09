@@ -144,6 +144,16 @@ def _upgrade_schema(engine) -> None:
                 ))
                 print("[DB] Added 'total_cache_read_tokens' column to conversation_sessions", flush=True)
 
+    # DocumentChunk: expression GIN index backing hybrid keyword search
+    # (context_retriever). Queries must use the identical
+    # to_tsvector('english', content) expression to hit this index.
+    if 'document_chunks' in insp.get_table_names():
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_content_fts "
+                "ON document_chunks USING gin (to_tsvector('english', content))"
+            ))
+
     # ToolExecutionLog: add was_helpful column if missing
     if 'tool_execution_logs' in insp.get_table_names():
         columns = {c['name'] for c in insp.get_columns('tool_execution_logs')}

@@ -265,10 +265,11 @@ def register_all_tools(mcp: FastMCP):
         min_similarity: float = DEFAULT_MIN_SIMILARITY,
         newer: str | None = None,
     ) -> str:
-        """Search notes using semantic similarity (understands meaning, not just keywords).
+        """Search notes with hybrid retrieval: semantic similarity plus exact keyword matching.
 
-        Use this for knowledge-base questions. Returns YAML with filename, similarity score,
-        heading path, content, and line number.
+        Use this for knowledge-base questions. Exact tokens (names, codes, filenames) are
+        matched even when semantically dissimilar. Returns YAML with filename, similarity
+        score, heading path, content, and line number, sorted by hybrid relevance.
 
         Args:
             query: Natural language search query

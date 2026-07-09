@@ -31,7 +31,8 @@ class SemanticSearchTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return """Search notes using semantic similarity (understands meaning, not just keywords).
+        return """Search notes using hybrid retrieval: semantic similarity (understands meaning)
+blended with exact keyword matching (rescues names, codes, filenames).
 
 Use this tool when auto-retrieved context is insufficient and you need MORE or DIFFERENT information.
 
@@ -49,13 +50,13 @@ Arguments:
 Returns YAML with:
 - filename: path to source file
 - file_type: 'org' or 'md'
-- similarity: cosine similarity score 0-1 (1 = perfect match)
+- similarity: cosine similarity 0-1 (keyword-only hits may score below min_similarity)
 - date: note date (if available)
 - heading_path: hierarchical context (heading structure)
 - content: matched chunk text
 - start_line: line number for jump-to-source
 
-Results are sorted by similarity (most similar first).
+Results are sorted by hybrid relevance (best first).
 """
 
     @property

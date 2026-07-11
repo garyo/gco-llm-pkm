@@ -44,6 +44,11 @@ def _get_tool_registry():
 
     from pkm_bridge.tools.files import ListFilesTool
     from pkm_bridge.tools.find_context import FindContextTool
+    from pkm_bridge.tools.note_proposals import (
+        ListNoteProposalsTool,
+        ProposeNoteOrganizationTool,
+        ResolveNoteProposalTool,
+    )
     from pkm_bridge.tools.registry import ToolRegistry
     from pkm_bridge.tools.schedule_task import ScheduleTaskTool
     from pkm_bridge.tools.search_notes import SearchNotesTool
@@ -74,6 +79,15 @@ def _get_tool_registry():
     registry.register(UseSkillTool(tool_logger, config.org_dir, config.dangerous_patterns))
     registry.register(NoteToSelfTool(tool_logger))
     registry.register(ScheduleTaskTool(tool_logger))
+
+    # Note-organization proposal tools (curation review workflow)
+    registry.register(
+        ProposeNoteOrganizationTool(tool_logger, config.org_dir, config.logseq_dir)
+    )
+    registry.register(ListNoteProposalsTool(tool_logger))
+    registry.register(
+        ResolveNoteProposalTool(tool_logger, config.org_dir, config.logseq_dir)
+    )
 
     # Optional: TickTick (reads credentials from env vars internally)
     try:
@@ -764,3 +778,102 @@ def register_all_tools(mcp: FastMCP):
         if max_turns is not None:
             params["max_turns"] = max_turns
         return _execute_tool("schedule_task", params)
+
+    # --- Note-organization proposals (curation review workflow) ---
+
+    @mcp.tool()
+    def list_note_proposals(status: str = "pending", limit: int = 10) -> str:
+        """List note-organization proposals from the background curator for review.
+
+        Pending proposals are shown in full — complete new-page drafts and exact
+        text edits — so the user can review them conversationally. Walk through
+        them one at a time and resolve each with resolve_note_proposal.
+
+        Args:
+            status: 'pending' (default), 'applied', 'rejected', or 'stale'
+            limit: Maximum proposals to return
+        """
+        return _execute_tool(
+            "list_note_proposals",
+            {"status": status, "limit": limit},
+            context={"session_id": "mcp"},
+        )
+
+    @mcp.tool()
+    def resolve_note_proposal(
+        proposal_id: int,
+        action: str,
+        reason: str | None = None,
+        title: str | None = None,
+        edits: list[dict[str, str]] | None = None,
+        page_file: str | None = None,
+        page_content: str | None = None,
+    ) -> str:
+        """Approve, reject, or modify a pending note-organization proposal.
+
+        Only use this to enact what the user explicitly decided during review.
+        'approve' applies the change to the note files immediately (refused and
+        marked stale if the files changed since the proposal was filed).
+        'reject' declines it — pass the user's reason so the curator learns.
+        'modify' replaces the proposal content with the supplied fields and
+        keeps it pending; approve afterwards to apply.
+
+        Args:
+            proposal_id: The proposal's id (from list_note_proposals)
+            action: 'approve', 'reject', or 'modify'
+            reason: Reject reason or modification summary
+            title: modify only — new title
+            edits: modify only — list of {file, find, replace} anchored edits
+            page_file: modify only — new page path (e.g. 'logseq:pages/Foo.md')
+            page_content: modify only — complete new page draft
+        """
+        params: dict[str, Any] = {"proposal_id": proposal_id, "action": action}
+        if reason is not None:
+            params["reason"] = reason
+        if title is not None:
+            params["title"] = title
+        if edits is not None:
+            params["edits"] = edits
+        if page_file is not None:
+            params["page_file"] = page_file
+        if page_content is not None:
+            params["page_content"] = page_content
+        return _execute_tool("resolve_note_proposal", params, context={"session_id": "mcp"})
+
+    @mcp.tool()
+    def propose_note_organization(
+        kind: str,
+        title: str,
+        rationale: str,
+        confidence: float = 0.5,
+        edits: list[dict[str, str]] | None = None,
+        page_file: str | None = None,
+        page_content: str | None = None,
+    ) -> str:
+        """File a note-organization proposal for later user review (edits no files).
+
+        Args:
+            kind: 'add_links', 'new_page', or 'insight' (pure observation, no file changes)
+            title: Short label for the proposal
+            rationale: Why this helps, with evidence
+            confidence: Honest 0-1 confidence
+            edits: List of {file, find, replace}; 'find' must be exact text
+                occurring exactly once in the file
+            page_file: new_page only — prefixed path for the new page
+            page_content: new_page only — complete draft content
+        """
+        params: dict[str, Any] = {
+            "kind": kind,
+            "title": title,
+            "rationale": rationale,
+            "confidence": confidence,
+        }
+        if edits is not None:
+            params["edits"] = edits
+        if page_file is not None:
+            params["page_file"] = page_file
+        if page_content is not None:
+            params["page_content"] = page_content
+        return _execute_tool(
+            "propose_note_organization", params, context={"session_id": "mcp"}
+        )

@@ -1,4 +1,4 @@
-"""File listing tool."""
+"""File listing and reading tools."""
 
 import datetime
 from pathlib import Path
@@ -118,3 +118,49 @@ class ListFilesTool(BaseTool):
             error_msg = f"Error listing files: {str(e)}"
             self.logger.error(f"{error_msg} (pattern: {pattern}, directory: {directory})")
             return error_msg
+
+
+class ReadNoteTool(BaseTool):
+    """Read a note file's content (read-only, path-contained)."""
+
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
+        super().__init__(logger)
+        from ..file_editor import FileEditor
+        self.editor = FileEditor(logger, str(org_dir), str(logseq_dir) if logseq_dir else None)
+
+    @property
+    def name(self) -> str:
+        return "read_note"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Read a note file. Accepts prefixed paths ('org:notes.org', "
+            "'logseq:pages/Foo.md') or plain relative paths. Large files are "
+            "truncated with an offset hint for paging."
+        )
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "filepath": {"type": "string", "description": "Path to the note file"},
+                "offset": {
+                    "type": "integer",
+                    "description": "Character offset for paging",
+                    "default": 0,
+                },
+            },
+            "required": ["filepath"],
+        }
+
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
+        filepath = params.get("filepath", "").strip()
+        if not filepath:
+            return "❌ Error: No filepath provided"
+        try:
+            result = self.editor.read_file(filepath, offset=int(params.get("offset", 0)))
+            return f"[{result['path']}]\n{result['content']}"
+        except ValueError as e:
+            return f"❌ Error: {e}"

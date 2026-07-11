@@ -56,6 +56,16 @@ import EditorInterface from '../components/EditorInterface.astro';
           <span id="integrations-warning-text">Re-auth</span>
         </a>
 
+        <!-- Note-organization proposals badge (hidden unless proposals are pending) -->
+        <button
+          id="proposals-badge"
+          class="hidden items-center gap-1 px-2 py-0.5 bg-emerald-400/40 hover:bg-emerald-400/60 rounded text-xs cursor-pointer"
+          title="Review pending note-organization proposals"
+        >
+          <span aria-hidden="true">💡</span>
+          <span id="proposals-badge-text">0 proposals</span>
+        </button>
+
         <!-- Editor buttons (shown only when in editor tab) -->
         <div id="editor-header-status" class="hidden items-center gap-1 sm:gap-2">
           <button
@@ -536,6 +546,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     loadHistory();
     initializeVoiceInput();
     checkIntegrationsStatus();
+    checkPendingProposals();
   }
 
   // Fetch /api/integrations/status and show a header chip if any OAuth
@@ -567,6 +578,45 @@ import EditorInterface from '../components/EditorInterface.astro';
       console.warn('Failed to check integrations status:', e);
     }
   }
+
+  // Fetch the pending note-proposal count and show the header badge if nonzero.
+  // Clicking the badge starts a fresh session that kicks off conversational review.
+  async function checkPendingProposals() {
+    try {
+      const res = await fetch('/api/note-proposals/pending-count', {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const badge = document.getElementById('proposals-badge');
+      const text = document.getElementById('proposals-badge-text');
+      if (!badge || !text) return;
+      const n = data.pending || 0;
+      if (n === 0) {
+        badge.classList.add('hidden');
+        badge.classList.remove('flex');
+        return;
+      }
+      text.textContent = n === 1 ? '1 proposal' : `${n} proposals`;
+      badge.classList.remove('hidden');
+      badge.classList.add('flex');
+    } catch (e) {
+      console.warn('Failed to check pending proposals:', e);
+    }
+  }
+
+  async function startProposalReview() {
+    switchTab('chat');
+    newSession();
+    input.value =
+      "Let's review the pending note-organization proposals. " +
+      'List them and walk me through them one at a time.';
+    await send();
+    checkPendingProposals();
+  }
+  document.getElementById('proposals-badge')?.addEventListener('click', () => {
+    startProposalReview();
+  });
 
   // Currently-streaming assistant message — text/reasoning deltas append here
   // until a tool_call (or 'done') arrives, at which point we finalize and any

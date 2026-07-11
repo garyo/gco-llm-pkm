@@ -411,6 +411,28 @@ class McpClientRegistration(Base):
         return f"<McpClientRegistration(client_id='{self.client_id}')>"
 
 
+class NoteProposal(Base):
+    """A proposed note-organization change awaiting user review (curation agent)."""
+    __tablename__ = 'note_proposals'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(20), nullable=False, index=True)  # 'add_links', 'new_page'
+    title = Column(String(200), nullable=False)  # short human-readable label
+    rationale = Column(Text, nullable=False)  # why the curator suggests this
+    payload = Column(JSON, nullable=False)  # edits/page content — see curation/apply.py
+    confidence = Column(Float, nullable=False, default=0.5)
+    status = Column(String(20), nullable=False, default='pending', index=True)
+    # 'pending', 'applied', 'rejected', 'stale'
+    resolution_note = Column(Text, nullable=True)  # reject reason / modification note
+    source = Column(String(20), nullable=False, default='curator')  # 'curator' or 'chat'
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<NoteProposal(id={self.id}, kind='{self.kind}', status='{self.status}')>"
+
+
 class AgentRunLog(Base):
     """Lightweight log of self-improvement agent runs (for admin API)."""
     __tablename__ = 'agent_run_log'

@@ -76,7 +76,12 @@ from pkm_bridge.db_repository import (
 # Import tool components
 from pkm_bridge.tools.registry import ToolRegistry
 from pkm_bridge.tools.shell import ExecuteShellTool, WriteAndExecuteScriptTool
-from pkm_bridge.tools.files import ListFilesTool
+from pkm_bridge.tools.files import ListFilesTool, ReadNoteTool
+from pkm_bridge.tools.note_proposals import (
+    ListNoteProposalsTool,
+    ProposeNoteOrganizationTool,
+    ResolveNoteProposalTool,
+)
 from pkm_bridge.tools.search_notes import SearchNotesTool
 from pkm_bridge.tools.ticktick import TickTickTool
 from pkm_bridge.tools.google_calendar import GoogleCalendarTool
@@ -382,6 +387,7 @@ write_script_tool = WriteAndExecuteScriptTool(
 tool_registry.register(write_script_tool)
 
 tool_registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
+tool_registry.register(ReadNoteTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(FindContextTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(OpenFileTool(logger, config.org_dir, config.logseq_dir))
@@ -414,6 +420,12 @@ tool_registry.register(NoteToSelfTool(logger))
 tool_registry.register(ScheduleTaskTool(logger))
 logger.info("Skill, note_to_self, and schedule_task tools registered")
 
+# Note-organization proposal tools (curation review workflow)
+tool_registry.register(ProposeNoteOrganizationTool(logger, config.org_dir, config.logseq_dir))
+tool_registry.register(ListNoteProposalsTool(logger))
+tool_registry.register(ResolveNoteProposalTool(logger, config.org_dir, config.logseq_dir))
+logger.info("Note proposal tools registered")
+
 logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.list_tools())}")
 
 # Initialize scheduled task executor and dispatcher
@@ -425,6 +437,13 @@ try:
     ensure_heartbeat_task(config.org_dir, logger)
 except Exception as e:
     logger.warning(f"Failed to ensure heartbeat task: {e}")
+
+# Ensure the note-curation task exists in DB (propose-only background curator)
+try:
+    from pkm_bridge.curation.task import ensure_curation_task
+    ensure_curation_task(logger)
+except Exception as e:
+    logger.warning(f"Failed to ensure curation task: {e}")
 
 # Initialize file editor
 from pkm_bridge.file_editor import FileEditor, ConflictError
@@ -3030,6 +3049,26 @@ def submit_feedback():
 
         logger.info(f"Explicit feedback recorded: {feedback} for query {query_id}")
         return jsonify({"status": "ok"})
+    finally:
+        db.close()
+
+
+@app.route('/api/note-proposals/pending-count', methods=['GET'])
+@limiter.limit("30 per minute")
+def get_note_proposals_pending_count():
+    """Count pending note-organization proposals (drives the chat header badge)."""
+    if config.auth_enabled:
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing authorization"}), 401
+        token = auth_header[7:]
+        if not auth_manager.verify_token(token):
+            return jsonify({"error": "Invalid token"}), 401
+
+    from pkm_bridge.curation.repository import NoteProposalRepository
+    db = get_db()
+    try:
+        return jsonify({"pending": NoteProposalRepository.count_pending(db)})
     finally:
         db.close()
 

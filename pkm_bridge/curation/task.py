@@ -104,9 +104,10 @@ def ensure_curation_task(logger: logging.Logger) -> None:
             model=model,
             tools_allowed=CURATION_TOOLS,
             enabled=True,
-            max_turns=20,
+            max_turns=30,
             max_input_tokens=300_000,
-            max_output_tokens=15_000,
+            # new_page drafts are output-heavy — give writing room
+            max_output_tokens=60_000,
             created_by="system",
         )
         logger.info(f"Created note_curation scheduled task (every {DEFAULT_CURATION_INTERVAL})")

@@ -168,18 +168,24 @@ class TaskExecutor:
                             "input": block.input,
                         })
 
-                # Tell the model where it stands in its turn budget so it can
-                # pace itself — without this it explores until the loop is cut
-                # off mid-task with its work unfiled and no final summary.
-                remaining = budget.turns_remaining
-                if remaining <= 3:
+                # Tell the model where it stands in its budgets so it can pace
+                # itself — without this it explores until the loop is cut off
+                # mid-task with its work unfiled and no final summary.
+                turns_left = budget.turns_remaining
+                out_left = budget.max_output_tokens - budget.output_tokens_used
+                if turns_left <= 3 or out_left < budget.max_output_tokens * 0.2:
                     notice = (
-                        f"[Scheduler: only {remaining} turn(s) remain. Stop exploring — "
-                        f"take your concluding actions NOW, then reply with your final "
-                        f"summary (a reply without tool calls ends the run cleanly).]"
+                        f"[Scheduler: nearly out of budget ({turns_left} turn(s), "
+                        f"~{max(out_left, 0)} output tokens left). Stop exploring — take "
+                        f"your concluding actions NOW, then reply with your final summary "
+                        f"(a reply without tool calls ends the run cleanly).]"
                     )
                 else:
-                    notice = f"[Scheduler: turn {budget.turns_used} of {budget.max_turns}.]"
+                    notice = (
+                        f"[Scheduler: turn {budget.turns_used} of {budget.max_turns}; "
+                        f"output tokens {budget.output_tokens_used} of "
+                        f"{budget.max_output_tokens}.]"
+                    )
                 tool_results.append({"type": "text", "text": notice})
 
                 messages.append({"role": "assistant", "content": response_content})

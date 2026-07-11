@@ -150,6 +150,7 @@ class TaskDispatcher:
             max_input_tokens=task.max_input_tokens,
             max_output_tokens=task.max_output_tokens,
             tools_allowed=task.tools_allowed,
+            model=task.model,
         )
 
         completed_at = datetime.utcnow()

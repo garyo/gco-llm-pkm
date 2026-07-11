@@ -34,6 +34,7 @@ class TaskExecutor:
         max_input_tokens: int = 200_000,
         max_output_tokens: int = 10_000,
         tools_allowed: Optional[List[str]] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the prompt through a Claude tool loop.
 
@@ -43,6 +44,7 @@ class TaskExecutor:
             max_input_tokens: Input token budget.
             max_output_tokens: Output token budget.
             tools_allowed: Restrict to these tool names (None = all).
+            model: Model override (None = the scheduler role default).
 
         Returns:
             Dict with keys: summary, input_tokens, output_tokens, turns_used,
@@ -70,7 +72,7 @@ class TaskExecutor:
 
         agent_summary = ""
 
-        model = get_role_model("scheduler")
+        model = model or get_role_model("scheduler")
         # Cache the static parts (system prompt + tools) so multi-turn loops
         # only pay full price for the system/tools on the first call.
         cache_enabled = supports_caching(model)

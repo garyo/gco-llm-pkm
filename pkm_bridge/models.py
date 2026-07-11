@@ -19,6 +19,7 @@ MODEL_ROLES: dict[str, str] = {
     "retrospective": os.getenv("MODEL_RETROSPECTIVE", "claude-sonnet-4-6"),
     "scheduler": os.getenv("MODEL_SCHEDULER", "claude-sonnet-4-6"),
     "self_improvement": os.getenv("MODEL_SELF_IMPROVEMENT", "claude-sonnet-4-6"),
+    "curation": os.getenv("MODEL_CURATION", "claude-sonnet-5"),
 }
 
 

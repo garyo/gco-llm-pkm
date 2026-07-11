@@ -154,6 +154,16 @@ def _upgrade_schema(engine) -> None:
                 "ON document_chunks USING gin (to_tsvector('english', content))"
             ))
 
+    # ScheduledTask: add per-task model override if missing
+    if 'scheduled_tasks' in insp.get_table_names():
+        columns = {c['name'] for c in insp.get_columns('scheduled_tasks')}
+        if 'model' not in columns:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE scheduled_tasks ADD COLUMN model VARCHAR(100)"
+                ))
+                print("[DB] Added 'model' column to scheduled_tasks", flush=True)
+
     # ToolExecutionLog: add was_helpful column if missing
     if 'tool_execution_logs' in insp.get_table_names():
         columns = {c['name'] for c in insp.get_columns('tool_execution_logs')}
@@ -349,6 +359,7 @@ class ScheduledTask(Base):
     prompt = Column(Text, nullable=False)
     schedule_type = Column(String(10), nullable=False)  # 'cron' or 'interval'
     schedule_expr = Column(String(100), nullable=False)  # "0 9 * * 1-5" or "4h"
+    model = Column(String(100), nullable=True)  # null = scheduler role default
     tools_allowed = Column(JSON, nullable=True)  # null = all tools
     is_heartbeat = Column(Boolean, default=False)
     enabled = Column(Boolean, default=True)

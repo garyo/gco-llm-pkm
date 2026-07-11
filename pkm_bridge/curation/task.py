@@ -10,6 +10,7 @@ alone for the user to tune.
 import logging
 
 from ..database import get_db
+from ..models import get_role_model
 from ..scheduler.repository import ScheduledTaskRepository
 
 CURATION_TASK_NAME = "note_curation"
@@ -68,16 +69,22 @@ honestly. If nothing worthwhile turns up, file nothing and say so.
 
 
 def ensure_curation_task(logger: logging.Logger) -> None:
-    """Create the curator task if missing; refresh its prompt/tools if present."""
+    """Create the curator task if missing; refresh its prompt/tools/model if present."""
+    model = get_role_model("curation")
     db = get_db()
     try:
         existing = ScheduledTaskRepository.get_by_name(db, CURATION_TASK_NAME)
         if existing:
-            if existing.prompt != CURATION_PROMPT or existing.tools_allowed != CURATION_TOOLS:
+            if (
+                existing.prompt != CURATION_PROMPT
+                or existing.tools_allowed != CURATION_TOOLS
+                or existing.model != model
+            ):
                 existing.prompt = CURATION_PROMPT
                 existing.tools_allowed = CURATION_TOOLS
+                existing.model = model
                 db.commit()
-                logger.info("Refreshed note_curation task prompt/tools")
+                logger.info(f"Refreshed note_curation task (model={model})")
             return
 
         ScheduledTaskRepository.create(
@@ -87,6 +94,7 @@ def ensure_curation_task(logger: logging.Logger) -> None:
             prompt=CURATION_PROMPT,
             schedule_type="interval",
             schedule_expr=DEFAULT_CURATION_INTERVAL,
+            model=model,
             tools_allowed=CURATION_TOOLS,
             enabled=True,
             max_turns=20,

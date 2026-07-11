@@ -30,7 +30,7 @@ ACTION_TOOL_NAMES = frozenset({
 })
 
 
-def _mark_last_message_for_cache(messages: List[Dict[str, Any]]) -> None:
+def mark_last_message_for_cache(messages: List[Dict[str, Any]]) -> None:
     """Move the ephemeral cache breakpoint to the end of the message history.
 
     The growing `messages` array (assistant tool_use + huge tool_result blocks)
@@ -256,7 +256,7 @@ class SelfImprovementAgent:
                 # Move the cache breakpoint to the tail of the growing history
                 # so the large tool_result blocks are re-sent from cache.
                 if caching:
-                    _mark_last_message_for_cache(messages)
+                    mark_last_message_for_cache(messages)
 
                 api_params = {
                     "model": model,

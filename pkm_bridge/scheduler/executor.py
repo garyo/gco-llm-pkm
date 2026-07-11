@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..models import get_role_model, supports_caching
+from ..self_improvement.agent import mark_last_message_for_cache
 from ..self_improvement.budget import Budget
 
 
@@ -91,6 +92,11 @@ class TaskExecutor:
 
         try:
             while budget.can_continue:
+                # Move the cache breakpoint to the tail of the growing history
+                # so the large tool_result blocks are re-sent from cache.
+                if cache_enabled:
+                    mark_last_message_for_cache(messages)
+
                 api_params: Dict[str, Any] = {
                     "model": model,
                     "max_tokens": 4096,

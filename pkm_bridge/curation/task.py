@@ -63,7 +63,10 @@ Then scan for opportunities, focusing on recently modified files
 
 File each proposal with propose_note_organization AS SOON as you have verified
 it (exact, unique anchors) — do not save them up for the end of the run, since
-your token budget may cut the run short and unfiled proposals are lost.
+your budget may cut the run short and unfiled proposals are lost. Each tool
+result includes a [Scheduler: turn N of M] notice — pace yourself against it:
+spend at most the first half of your turns surveying, then commit to your best
+candidates, verify their anchors, and file them.
 
 Quality over quantity: file at most 3 proposals per run, and only ones you are
 confident Gary will value. Write a clear title and a rationale that explains

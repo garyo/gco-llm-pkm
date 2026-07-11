@@ -168,6 +168,20 @@ class TaskExecutor:
                             "input": block.input,
                         })
 
+                # Tell the model where it stands in its turn budget so it can
+                # pace itself — without this it explores until the loop is cut
+                # off mid-task with its work unfiled and no final summary.
+                remaining = budget.turns_remaining
+                if remaining <= 3:
+                    notice = (
+                        f"[Scheduler: only {remaining} turn(s) remain. Stop exploring — "
+                        f"take your concluding actions NOW, then reply with your final "
+                        f"summary (a reply without tool calls ends the run cleanly).]"
+                    )
+                else:
+                    notice = f"[Scheduler: turn {budget.turns_used} of {budget.max_turns}.]"
+                tool_results.append({"type": "text", "text": notice})
+
                 messages.append({"role": "assistant", "content": response_content})
                 messages.append({"role": "user", "content": tool_results})
 

@@ -35,6 +35,20 @@ EDITS_SCHEMA = {
 }
 
 
+def _broadcast_proposals_changed(db) -> None:
+    """Nudge web clients (SSE) to refresh the pending-proposals badge."""
+    try:
+        from ..curation.repository import NoteProposalRepository
+        from ..events import event_manager
+
+        event_manager.broadcast(
+            "note_proposals_changed",
+            {"pending": NoteProposalRepository.count_pending(db)},
+        )
+    except Exception:
+        pass  # badge refresh is best-effort; never fail the tool for it
+
+
 def _build_payload(params: Dict[str, Any]) -> Dict[str, Any]:
     """Assemble a NoteProposal payload from flat tool params."""
     payload: Dict[str, Any] = {"edits": params.get("edits") or []}
@@ -164,6 +178,7 @@ class ProposeNoteOrganizationTool(_ProposalToolBase):
                 confidence=float(params.get("confidence", 0.5)),
                 source=source,
             )
+            _broadcast_proposals_changed(db)
             n_edits = len(payload.get("edits", []))
             return (
                 f"✅ Filed proposal #{proposal.id} [{kind}] '{title}' "
@@ -278,6 +293,7 @@ class ResolveNoteProposalTool(_ProposalToolBase):
 
             if action == "reject":
                 NoteProposalRepository.resolve(db, proposal_id, "rejected", reason or None)
+                _broadcast_proposals_changed(db)
                 return f"✅ Rejected proposal #{proposal_id}" + (f" ({reason})" if reason else "")
 
             if action == "modify":
@@ -298,6 +314,7 @@ class ResolveNoteProposalTool(_ProposalToolBase):
                 result = apply_proposal(proposal.kind, proposal.payload, self.editor, self.logger)
                 if result["status"] == "applied":
                     NoteProposalRepository.resolve(db, proposal_id, "applied")
+                    _broadcast_proposals_changed(db)
                     if not result["written"]:
                         return f"✅ Marked insight #{proposal_id} as reviewed (no file changes)"
                     files = ", ".join(result["written"])
@@ -306,6 +323,7 @@ class ResolveNoteProposalTool(_ProposalToolBase):
                 if result.get("written"):
                     note = f"partially applied ({', '.join(result['written'])}); " + note
                 NoteProposalRepository.resolve(db, proposal_id, "stale", note)
+                _broadcast_proposals_changed(db)
                 return (
                     f"⚠️ Could not apply proposal #{proposal_id} — files changed since it "
                     f"was filed. Marked stale: {note}"

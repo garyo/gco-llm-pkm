@@ -1277,6 +1277,12 @@
       handleOpenFile(data);
       return;
     }
+
+    if (type === 'note_proposals_changed') {
+      // Chat UI (index.astro) owns the proposals badge — relay to it
+      window.dispatchEvent(new CustomEvent('proposals:changed', { detail: data }));
+      return;
+    }
   }
 
   // Handle file change event

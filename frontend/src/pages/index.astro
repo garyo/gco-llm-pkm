@@ -617,6 +617,10 @@ import EditorInterface from '../components/EditorInterface.astro';
   document.getElementById('proposals-badge')?.addEventListener('click', () => {
     startProposalReview();
   });
+  // Proposal filed/resolved server-side (relayed from SSE) — refresh the badge
+  window.addEventListener('proposals:changed', () => {
+    checkPendingProposals();
+  });
 
   // Currently-streaming assistant message — text/reasoning deltas append here
   // until a tool_call (or 'done') arrives, at which point we finalize and any

@@ -1,19 +1,32 @@
 import { foldService, foldEffect } from '@codemirror/language';
 import type { EditorView } from '@codemirror/view';
 
-/** Folding service that folds :PROPERTIES: … :END: drawers. */
+/** Folding service for :PROPERTIES: … :END: drawers and #+begin_… blocks. */
 export const orgFoldService = foldService.of((state, from, _to) => {
   const line = state.doc.lineAt(from);
-  if (!line.text.match(/^[\s]*:PROPERTIES:/i)) return null;
 
-  let endLine = line.number + 1;
-  while (endLine <= state.doc.lines) {
-    const currentLine = state.doc.line(endLine);
-    if (currentLine.text.match(/^[\s]*:END:/i)) {
-      return { from: line.to, to: currentLine.from };
+  if (line.text.match(/^[\s]*:PROPERTIES:/i)) {
+    for (let n = line.number + 1; n <= state.doc.lines; n++) {
+      const currentLine = state.doc.line(n);
+      if (currentLine.text.match(/^[\s]*:END:/i)) {
+        return { from: line.to, to: currentLine.from };
+      }
     }
-    endLine++;
+    return null;
   }
+
+  const begin = line.text.match(/^\s*#\+begin_([a-zA-Z-]+)/i);
+  if (begin) {
+    const endRe = new RegExp(`^\\s*#\\+end_${begin[1]}\\s*$`, 'i');
+    for (let n = line.number + 1; n <= state.doc.lines; n++) {
+      const currentLine = state.doc.line(n);
+      if (/^\*+\s/.test(currentLine.text)) return null; // headline ends the block
+      if (endRe.test(currentLine.text)) {
+        return { from: line.to, to: currentLine.to };
+      }
+    }
+  }
+
   return null;
 });
 

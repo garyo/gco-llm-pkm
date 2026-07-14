@@ -7,8 +7,8 @@ export const orgTags = {
   propertyDrawer: Tag.define(tags.keyword),
   propertyKey: Tag.define(tags.propertyName),
   propertyValue: Tag.define(tags.string),
-  srcBlockDelimiter: Tag.define(tags.keyword),
-  srcBlockContent: Tag.define(tags.monospace),
+  blockDelimiter: Tag.define(tags.keyword),
+  blockContent: Tag.define(tags.monospace),
   heading1: Tag.define(tags.heading1),
   heading2: Tag.define(tags.heading2),
   heading3: Tag.define(tags.heading3),
@@ -25,8 +25,8 @@ export const orgHighlightStyle = HighlightStyle.define([
   { tag: orgTags.propertyDrawer, color: '#61afef', fontWeight: 'bold', fontSize: '0.85em' },
   { tag: orgTags.propertyKey, color: '#e5c07b', fontWeight: '600', fontSize: '0.85em' },
   { tag: orgTags.propertyValue, color: '#98c379', fontSize: '0.85em' },
-  { tag: orgTags.srcBlockDelimiter, color: '#c678dd', fontWeight: 'bold' },
-  { tag: orgTags.srcBlockContent, color: '#abb2bf', backgroundColor: 'rgba(0, 0, 0, 0.2)' },
+  { tag: orgTags.blockDelimiter, color: '#c678dd', fontWeight: 'bold' },
+  { tag: orgTags.blockContent, color: '#abb2bf' },
   { tag: orgTags.heading1, color: '#e06c75', fontWeight: 'bold', fontSize: '1.4em' },
   { tag: orgTags.heading2, color: '#e06c75', fontWeight: 'bold', fontSize: '1.2em' },
   { tag: orgTags.heading3, color: '#e06c75', fontWeight: 'bold', fontSize: '1.05em' },
@@ -44,8 +44,12 @@ export const orgHighlightStyle = HighlightStyle.define([
   { tag: tags.meta, color: '#5c6370', fontStyle: 'italic' },
 ]);
 
+/** Blocks whose content is verbatim — no inline org markup applies inside. */
+const VERBATIM_BLOCKS = new Set(['src', 'example', 'export']);
+
 interface OrgState {
-  inSourceBlock: boolean;
+  /** Lowercase type of the enclosing #+begin_… block, or null outside blocks. */
+  blockType: string | null;
   inPropertyDrawer: boolean;
   inCheckedItem: boolean;
   headingLevel: number;
@@ -54,7 +58,7 @@ interface OrgState {
 /** StreamLanguage definition for org-mode syntax. */
 export const orgMode = StreamLanguage.define<OrgState>({
   startState: () => ({
-    inSourceBlock: false,
+    blockType: null,
     inPropertyDrawer: false,
     inCheckedItem: false,
     headingLevel: 0,
@@ -63,8 +67,8 @@ export const orgMode = StreamLanguage.define<OrgState>({
     'org-propertyDrawer': orgTags.propertyDrawer,
     'org-propertyKey': orgTags.propertyKey,
     'org-propertyValue': orgTags.propertyValue,
-    'org-srcBlockDelimiter': orgTags.srcBlockDelimiter,
-    'org-srcBlockContent': orgTags.srcBlockContent,
+    'org-blockDelimiter': orgTags.blockDelimiter,
+    'org-blockContent': orgTags.blockContent,
     'org-heading1': orgTags.heading1,
     'org-heading2': orgTags.heading2,
     'org-heading3': orgTags.heading3,
@@ -131,23 +135,25 @@ export const orgMode = StreamLanguage.define<OrgState>({
       }
     }
 
-    // Source block delimiters
-    if (stream.sol() && stream.match(/^[\s]*#\+begin_src/i)) {
-      state.inSourceBlock = true;
-      stream.skipToEnd();
-      return 'org-srcBlockDelimiter';
+    // Block delimiters (#+begin_quote, #+begin_src, …)
+    if (stream.sol()) {
+      const begin = stream.match(/^[\s]*#\+begin_([a-zA-Z-]+)/i) as RegExpMatchArray | false;
+      if (begin) {
+        state.blockType = begin[1].toLowerCase();
+        stream.skipToEnd();
+        return 'org-blockDelimiter';
+      }
+      if (stream.match(/^[\s]*#\+end_[a-zA-Z-]+/i)) {
+        state.blockType = null;
+        stream.skipToEnd();
+        return 'org-blockDelimiter';
+      }
     }
 
-    if (stream.sol() && stream.match(/^[\s]*#\+end_src/i)) {
-      state.inSourceBlock = false;
+    // Verbatim block content; other block types keep normal inline markup
+    if (state.blockType && VERBATIM_BLOCKS.has(state.blockType)) {
       stream.skipToEnd();
-      return 'org-srcBlockDelimiter';
-    }
-
-    // Inside source block
-    if (state.inSourceBlock) {
-      stream.skipToEnd();
-      return 'org-srcBlockContent';
+      return 'org-blockContent';
     }
 
     // Headings
@@ -184,8 +190,8 @@ export const orgMode = StreamLanguage.define<OrgState>({
       return 'org-headingTags';
     }
 
-    // Bold
-    if (stream.match(/\*\*[^\*]+\*\*/)) return 'strong';
+    // Bold: *text*, no whitespace just inside the stars
+    if (stream.match(/\*(?:[^\s*][^*]*[^\s*]|[^\s*])\*/)) return 'strong';
 
     // Italic
     if (stream.match(/\/[^\/]+\//)) return 'emphasis';

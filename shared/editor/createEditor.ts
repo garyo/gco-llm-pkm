@@ -5,6 +5,7 @@ import { emacs } from '@replit/codemirror-emacs';
 import { syntaxHighlighting } from '@codemirror/language';
 import { orgMode, orgHighlightStyle } from './org-mode';
 import { orgFoldService, autoFoldPropertyDrawers } from './org-fold';
+import { orgBlocks } from './org-blocks';
 import { orgImageField } from './org-images';
 import { orgLinkField, createOrgLinkClickHandler } from './org-links';
 
@@ -61,6 +62,7 @@ export function createEditor(
     extensions.push(
       syntaxHighlighting(orgHighlightStyle),
       orgFoldService,
+      orgBlocks,
       orgImageField,
       orgLinkField,
       createOrgLinkClickHandler(filepath),

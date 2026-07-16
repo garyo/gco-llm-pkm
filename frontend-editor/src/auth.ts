@@ -1,21 +1,24 @@
 import { STORAGE_KEYS } from './types';
 import { fetchWithTimeout } from './utils';
 
-/** Check if the stored JWT token is valid. Returns true if authenticated. */
+/** Check if the stored JWT token is valid. Returns true if authenticated.
+ * Always asks the server: with auth disabled it reports valid even without
+ * a token, and the response body (not just HTTP status) is authoritative. */
 export async function checkAuth(): Promise<boolean> {
   const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
-  if (!token) return false;
 
   try {
     const res = await fetchWithTimeout('/verify-token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     }, 5000);
 
-    return res.ok;
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.valid === true;
   } catch {
     return false;
   }

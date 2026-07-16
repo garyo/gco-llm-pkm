@@ -633,6 +633,11 @@ async function bootstrap(): Promise<void> {
   if (target) {
     state.pendingScrollLine = target.line;
     await loadFile(target.path);
+  } else if (params.id) {
+    updateStatus(`Could not resolve org ID: ${params.id}`, true);
+  } else {
+    // Nothing requested; today's journal beats a blank editor.
+    await openTodayJournal();
   }
 }
 

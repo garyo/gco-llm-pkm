@@ -225,6 +225,7 @@
   // State
   let editorView: EditorView | null = null;
   let currentFile: string | null = null;
+  let fileLoadRequested = false;  // Any explicit load suppresses the default today-journal open
   let isDirty = false;
   let allFiles: any[] = [];
   let currentFileMtime: number | null = null;  // Track file modification time
@@ -578,6 +579,7 @@
 
   // Load file content
   async function loadFile(filepath: string) {
+    fileLoadRequested = true;
     // Check for unsaved changes
     if (isDirty && currentFile) {
       if (!confirm('You have unsaved changes. Discard them?')) {
@@ -1574,7 +1576,13 @@
         if (!editorView) {
           // Don't initialize editor until a file is loaded
           // This way we can set the correct language mode
-          loadFileList();
+          loadFileList().then(() => {
+            // Chat-initiated opens arrive ~150ms after the tab switch; give
+            // them a moment, then default to today's journal over a blank editor.
+            setTimeout(() => {
+              if (!fileLoadRequested) openTodayJournal();
+            }, 250);
+          });
         }
         observer.disconnect();
       }

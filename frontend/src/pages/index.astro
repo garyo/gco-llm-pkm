@@ -950,11 +950,6 @@ import EditorInterface from '../components/EditorInterface.astro';
   // the stored token (a bad token will still 401 out via handle401()) --
   // only an explicit `valid: false` from the server drops straight to login.
   async function verifyToken(retriesLeft: number = 2) {
-    if (!authToken) {
-      showLogin();
-      return;
-    }
-
     try {
       const res = await fetchWithTimeout('/verify-token', {
         method: 'POST',
@@ -978,7 +973,9 @@ import EditorInterface from '../components/EditorInterface.astro';
         setTimeout(() => verifyToken(retriesLeft - 1), delayMs);
         return;
       }
-      showApp();
+      // Optimistic launch only makes sense with a stored token to fall back on
+      if (authToken) showApp();
+      else showLogin();
     }
   }
 

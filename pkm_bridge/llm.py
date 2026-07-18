@@ -133,6 +133,9 @@ def _sanitize_for_anthropic(messages: list[dict]) -> list[dict]:
       includes but Anthropic's API rejects. This matters for sessions whose
       stored history was serialized by an older code path before the
       serializer learned about `__api_exclude__`.
+    - Drops null `citations` keys: model_dump() emits them on every block, and
+      some server-tool result blocks (code_execution_tool_result from web
+      search's dynamic filtering) reject the key entirely on replay.
     """
     cleaned: list[dict] = []
     for msg in messages:
@@ -143,8 +146,11 @@ def _sanitize_for_anthropic(messages: list[dict]) -> list[dict]:
                 if isinstance(b, dict):
                     if b.get("type") == "reasoning":
                         continue
-                    if any(k in b for k in _API_REJECTED_BLOCK_FIELDS):
-                        b = {k: v for k, v in b.items() if k not in _API_REJECTED_BLOCK_FIELDS}
+                    drop = [k for k in _API_REJECTED_BLOCK_FIELDS if k in b]
+                    if "citations" in b and b["citations"] is None:
+                        drop.append("citations")
+                    if drop:
+                        b = {k: v for k, v in b.items() if k not in drop}
                 new_content.append(b)
             cleaned.append({**msg, "content": new_content})
         else:
@@ -152,10 +158,35 @@ def _sanitize_for_anthropic(messages: list[dict]) -> list[dict]:
     return cleaned
 
 
+def _web_search_result_preview(content: Any) -> tuple[bool, str]:
+    """Summarize a web_search_tool_result's content for the UI.
+
+    On success `content` is a list of web_search_result blocks; on error it is
+    a single object carrying `error_code`. Returns (ok, one-line preview).
+    """
+    if isinstance(content, list):
+        titles = [getattr(r, "title", "") or getattr(r, "url", "") for r in content]
+        titles = [t for t in titles if t]
+        if not titles:
+            return True, "no results"
+        preview = "; ".join(titles[:5])
+        if len(titles) > 5:
+            preview += f" (+{len(titles) - 5} more)"
+        return True, f"{len(titles)} results: {preview}"
+    error_code = getattr(content, "error_code", None) or "unknown_error"
+    return False, f"search error: {error_code}"
+
+
 def _anthropic_tools_to_openai(tools: list[dict]) -> list[dict]:
-    """Convert Anthropic tool format to OpenAI function-calling format."""
+    """Convert Anthropic tool format to OpenAI function-calling format.
+
+    Anthropic server tools (web_search, etc.) have no input_schema and no
+    client-side equivalent — skip them rather than sending a broken function.
+    """
     openai_tools = []
     for tool in tools:
+        if "input_schema" not in tool:
+            continue
         t = {
             "type": "function",
             "function": {
@@ -707,6 +738,31 @@ class LLMClient:
         with self.anthropic_client.messages.stream(**params) as stream:
             for event in stream:
                 etype = getattr(event, "type", None)
+                if etype == "content_block_stop":
+                    # Surface server-executed tools (web_search) as they finish,
+                    # in the same event shapes the client tool loop emits, so
+                    # the UI renders them like any other tool call.
+                    block = getattr(event, "content_block", None)
+                    if block is None:
+                        continue
+                    btype = getattr(block, "type", None)
+                    if btype == "server_tool_use":
+                        yield {
+                            "type": "tool_call",
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input,
+                        }
+                    elif btype == "web_search_tool_result":
+                        ok, preview = _web_search_result_preview(block.content)
+                        yield {
+                            "type": "tool_result",
+                            "id": block.tool_use_id,
+                            "name": "web_search",
+                            "ok": ok,
+                            "preview": preview,
+                        }
+                    continue
                 if etype != "content_block_delta":
                     continue
                 delta = getattr(event, "delta", None)

@@ -146,6 +146,41 @@ def supports_thinking(model: str) -> bool:
     return is_anthropic(model)
 
 
+# Anthropic models that support dynamic filtering (web_search_20260209 runs
+# searches through code execution, filtering results before they hit context).
+# Older Claude models (Haiku 4.5, Sonnet 4.5, ...) get the basic tool version.
+_WEB_SEARCH_FILTERING_PREFIXES = (
+    "claude-fable",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+)
+
+# Anthropic charges $10 per 1,000 web searches, on top of token costs.
+WEB_SEARCH_COST_PER_SEARCH = 0.01
+
+
+def web_search_tool(model: str) -> dict[str, Any] | None:
+    """Return the Anthropic server-side web search tool definition for `model`.
+
+    Returns None for non-Anthropic models (the server tool only exists on
+    Anthropic's API) or when disabled via WEB_SEARCH_ENABLED=0.
+    """
+    if not is_anthropic(model) or os.getenv("WEB_SEARCH_ENABLED", "1") == "0":
+        return None
+    if model.startswith(_WEB_SEARCH_FILTERING_PREFIXES):
+        tool_type = "web_search_20260209"
+    else:
+        tool_type = "web_search_20250305"
+    return {
+        "type": tool_type,
+        "name": "web_search",
+        "max_uses": int(os.getenv("WEB_SEARCH_MAX_USES", "5")),
+    }
+
+
 def supports_caching(model: str) -> bool:
     """Models that support prompt caching via cache_control hints.
 
@@ -251,6 +286,7 @@ def get_anthropic_cost(
     cache_write_tokens: int = 0,
     cache_read_tokens: int = 0,
     on_date: date | None = None,
+    web_search_requests: int = 0,
 ) -> float:
     """Calculate cost for an Anthropic model call. Returns cost in dollars."""
     rates = get_cost_rates(model, on_date)
@@ -259,4 +295,4 @@ def get_anthropic_cost(
         + (cache_write_tokens * rates["cache_write"])
         + (cache_read_tokens * rates["cache_read"])
         + (output_tokens * rates["output"])
-    ) / 1_000_000
+    ) / 1_000_000 + (web_search_requests * WEB_SEARCH_COST_PER_SEARCH)

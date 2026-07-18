@@ -45,6 +45,7 @@ from flask import Flask, Response, request, jsonify, render_template, send_from_
 from pkm_bridge.llm import LLMClient
 from pkm_bridge.models import (
     get_anthropic_cost, get_available_models, get_role_model, is_anthropic,
+    web_search_tool,
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -1052,6 +1053,12 @@ def query():
             # Get tools in Anthropic format (adapter translates for non-Anthropic)
             tools = tool_registry.get_anthropic_tools()
 
+            # Anthropic server-side web search — executed by the API, not by us.
+            # Lets the model answer time-sensitive queries with cited sources.
+            web_tool = web_search_tool(model)
+            if web_tool:
+                tools = tools + [web_tool]
+
             # Build API call parameters (LLMClient handles provider-specific details)
             api_params: Dict[str, Any] = {
                 "model": model,
@@ -1097,19 +1104,49 @@ def query():
             total_output_tokens = 0
             total_cache_write_tokens = 0
             total_cache_read_tokens = 0
+            total_web_searches = 0
 
             def accumulate_usage(resp):
-                nonlocal total_input_tokens, total_output_tokens, total_cache_write_tokens, total_cache_read_tokens
+                nonlocal total_input_tokens, total_output_tokens, \
+                    total_cache_write_tokens, total_cache_read_tokens, total_web_searches
                 usage = resp.usage
                 total_input_tokens += getattr(usage, 'input_tokens', 0)
                 total_output_tokens += getattr(usage, 'output_tokens', 0)
                 total_cache_write_tokens += getattr(usage, 'cache_creation_input_tokens', 0)
                 total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0)
+                server_use = getattr(usage, 'server_tool_use', None)
+                total_web_searches += getattr(server_use, 'web_search_requests', 0) or 0
 
             accumulate_usage(response)
 
             # Tool loop
-            while response.stop_reason == "tool_use":
+            while response.stop_reason in ("tool_use", "pause_turn"):
+                if response.stop_reason == "pause_turn":
+                    # A server-side tool turn (web search) paused mid-execution.
+                    # Re-send the assistant message unchanged — the API detects
+                    # the trailing server_tool_use block and resumes the turn.
+                    # No cache re-mark here: server tool blocks must go back
+                    # verbatim, without added cache_control annotations.
+                    history.append({
+                        "role": "assistant",
+                        "content": serialize_message_content(response.content),
+                    })
+                    api_messages.append({
+                        "role": "assistant",
+                        "content": serialize_message_content(
+                            response.content, strip_thinking=False
+                        ),
+                    })
+                    api_params["messages"] = api_messages
+                    api_call_count += 1
+                    yield _ndjson({"type": "keepalive", "ts": time.time()})
+                    with timer(f"LLM API call #{api_call_count} ({model}, pause_turn resume)"):
+                        response = yield from _forward_llm_deltas(
+                            llm_client.complete_stream(**api_params)
+                        )
+                    accumulate_usage(response)
+                    continue
+
                 tool_results = []
                 for block in response.content:
                     if getattr(block, "type", None) == "tool_use":
@@ -1216,6 +1253,12 @@ def query():
                             "content": result
                         })
 
+                if not tool_results:
+                    # tool_use with no executable client tools (shouldn't happen,
+                    # but an empty tool_result message would 400) — stop looping.
+                    logger.warning("stop_reason=tool_use with no client tool blocks; ending loop")
+                    break
+
                 # Persist a thinking-stripped copy to the full history; send the
                 # raw assistant content (thinking blocks intact) to the API, since
                 # the interleaved-thinking beta requires them replayed verbatim
@@ -1269,7 +1312,8 @@ def query():
             history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
             system_blocks = len(system_prompt_blocks)
 
-            logger.info(f"Token usage ({api_call_count} API calls): {total_input_tokens} input, {total_cache_write_tokens} cache write, {total_cache_read_tokens} cache read, {total_output_tokens} output")
+            logger.info(f"Token usage ({api_call_count} API calls): {total_input_tokens} input, {total_cache_write_tokens} cache write, {total_cache_read_tokens} cache read, {total_output_tokens} output"
+                        + (f", {total_web_searches} web searches" if total_web_searches else ""))
             logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
 
             # Warn if conversation is getting large
@@ -1320,6 +1364,7 @@ def query():
                 request_cost = get_anthropic_cost(
                     model, total_input_tokens, total_output_tokens,
                     total_cache_write_tokens, total_cache_read_tokens,
+                    web_search_requests=total_web_searches,
                 )
             else:
                 # For non-Anthropic, try LiteLLM cost; cache tokens are always 0

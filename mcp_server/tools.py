@@ -750,33 +750,35 @@ def register_all_tools(mcp: FastMCP):
         prompt: str | None = None,
         schedule_type: str | None = None,
         schedule_expr: str | None = None,
-        enabled: bool | None = None,
         max_turns: int | None = None,
     ) -> str:
         """Manage scheduled tasks (cron jobs that run Claude with specific prompts).
 
         Args:
-            action: 'list', 'create', 'update', 'delete', or 'run_now'
-            name: Task name (required for create/update/delete/run_now)
-            prompt: Task prompt (required for create)
-            schedule_type: 'cron' or 'interval' (required for create)
-            schedule_expr: Cron expression or interval spec (required for create)
-            enabled: Enable/disable the task
-            max_turns: Maximum turns for task execution
+            action: 'list', 'create', 'update', 'delete', or 'toggle'
+            name: Task name (required for create/update/delete/toggle)
+            prompt: Task prompt (required for create; optional for update)
+            schedule_type: 'cron' or 'interval' (required for create; optional for update)
+            schedule_expr: Cron expression or interval spec (required for create;
+                optional for update)
+            max_turns: Maximum turns for task execution (create/update)
         """
         params: dict[str, Any] = {"action": action}
         if name is not None:
             params["name"] = name
+        fields: dict[str, Any] = {}
         if prompt is not None:
-            params["prompt"] = prompt
+            fields["prompt"] = prompt
         if schedule_type is not None:
-            params["schedule_type"] = schedule_type
+            fields["schedule_type"] = schedule_type
         if schedule_expr is not None:
-            params["schedule_expr"] = schedule_expr
-        if enabled is not None:
-            params["enabled"] = enabled
+            fields["schedule_expr"] = schedule_expr
         if max_turns is not None:
-            params["max_turns"] = max_turns
+            fields["max_turns"] = max_turns
+        if action == "update":
+            params["updates"] = fields
+        else:
+            params.update(fields)
         return _execute_tool("schedule_task", params)
 
     # --- Note-organization proposals (curation review workflow) ---

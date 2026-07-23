@@ -7,7 +7,7 @@ Enforces daily global token budgets.
 import logging
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Optional
 
 from ..database import get_db
@@ -24,6 +24,17 @@ DEFAULT_DAILY_INPUT_LIMIT = 2_000_000
 DEFAULT_DAILY_OUTPUT_LIMIT = 200_000
 
 
+def prompt_with_date(prompt: str, tz: Optional[tzinfo]) -> str:
+    """Prefix a task prompt with the current local date and time.
+
+    Scheduled tasks run with no chat context, so without this the model
+    guesses the date from tool output (and often gets the year wrong).
+    """
+    now = datetime.now(tz) if tz else datetime.now().astimezone()
+    date_line = now.strftime("Current date and time: %A, %B %d, %Y, %H:%M %Z.")
+    return f"{date_line}\n\n{prompt}"
+
+
 class TaskDispatcher:
     """Finds due scheduled tasks and runs them serially."""
 
@@ -32,10 +43,12 @@ class TaskDispatcher:
         executor: TaskExecutor,
         logger: logging.Logger,
         org_dir: Optional[str] = None,
+        timezone: Optional[tzinfo] = None,
     ):
         self.executor = executor
         self.logger = logger
         self.org_dir = org_dir
+        self.timezone = timezone
         self._lock = threading.Lock()
 
     @property
@@ -125,6 +138,7 @@ class TaskDispatcher:
             loaded = load_heartbeat_prompt(self.org_dir)
             if loaded:
                 prompt = loaded
+        prompt = prompt_with_date(prompt, self.timezone)
 
         # Create run log entry
         run = ScheduledTaskRunRepository.create(

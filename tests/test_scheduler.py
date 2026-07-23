@@ -201,6 +201,32 @@ def test_default_heartbeat_prompt_is_nonempty():
 
 
 # ---------------------------------------------------------------------------
+# Dispatcher prompt date injection
+# ---------------------------------------------------------------------------
+
+from zoneinfo import ZoneInfo
+
+from pkm_bridge.scheduler.dispatcher import prompt_with_date
+
+
+def test_prompt_with_date_prefixes_current_date():
+    from datetime import datetime
+
+    tz = ZoneInfo("America/New_York")
+    result = prompt_with_date("Do the thing.", tz)
+    first_line, _, rest = result.partition("\n\n")
+    assert first_line.startswith("Current date and time: ")
+    assert str(datetime.now(tz).year) in first_line
+    assert rest == "Do the thing."
+
+
+def test_prompt_with_date_no_timezone_falls_back_to_local():
+    result = prompt_with_date("Task", None)
+    assert result.startswith("Current date and time: ")
+    assert result.endswith("Task")
+
+
+# ---------------------------------------------------------------------------
 # Budget (reuse existing Budget class)
 # ---------------------------------------------------------------------------
 

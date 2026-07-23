@@ -431,7 +431,9 @@ logger.info(f"Registered {len(tool_registry)} tools: {', '.join(tool_registry.li
 
 # Initialize scheduled task executor and dispatcher
 task_executor = TaskExecutor(llm_client, tool_registry, logger)
-task_dispatcher = TaskDispatcher(task_executor, logger, org_dir=str(config.org_dir))
+task_dispatcher = TaskDispatcher(
+    task_executor, logger, org_dir=str(config.org_dir), timezone=config.timezone
+)
 
 # Ensure heartbeat task exists in DB
 try:

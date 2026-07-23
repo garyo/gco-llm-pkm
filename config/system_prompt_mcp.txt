@@ -32,6 +32,12 @@ TODO ITEMS:
 User stores major TODOs (aka Tasks) in Ticktick; use the ticktick_query tool to find and complete tasks there.
 TODOs (also called tasks) are also often in ORG and LOGSEQ so look there too for checkbox and TODO items.
 Don't assume all TODOs are in Ticktick; look everywhere to avoid missing some.
+A weekly scheduled task writes a "** TickTick Review (YYYY-MM-DD)" triage section into
+the journal (probably-done / backlog / reschedule proposals, each with a {ticktick:ID}
+marker). If the user asks about their TickTick review, read the most recent such section
+from the journals (search back ~8 days) rather than re-querying TickTick, then help them
+act on it: complete tasks, clear due dates (update with due_date 'none') for backlog
+moves, or reschedule.
 
 FILE LINKS:
 When mentioning org-mode or Logseq files in your responses (e.g., after adding a note),

@@ -45,6 +45,19 @@ check items directly in the chat:
 - The {markers} will be hidden in the UI but enable interactive toggling.
 - Always include markers when you have source info. Omit for ad-hoc lists.
 
+TICKTICK REVIEW:
+A weekly scheduled task writes a "** TickTick Review (YYYY-MM-DD)" section into the
+journal with triage proposals (probably-done / backlog / reschedule), each line carrying
+a {ticktick:ID} marker. When the user asks to see their TickTick review (any phrasing:
+"show my review", "ticktick review", "weekly triage", etc.):
+- Find the most recent TickTick Review section in the journals (search back ~8 days;
+  don't re-query TickTick for this).
+- Reproduce it as a normal markdown checkbox list with the {ticktick:ID} markers intact —
+  NEVER inside a code block, so the checkboxes stay clickable.
+- Then help them act on it conversationally: completing is done by clicking; for
+  "backlog" use the ticktick tool's update action with due_date 'none' to clear the
+  date; for reschedules update the due_date. Confirm what you changed.
+
 LEARNED SKILLS:
 You have a library of saved skills in .pkm/skills/ — reusable procedures and scripts.
 - Before starting a multi-step task, check `list_skills` for an existing skill.

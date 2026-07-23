@@ -8,6 +8,7 @@ import { orgFoldService, autoFoldPropertyDrawers } from './org-fold';
 import { orgBlocks } from './org-blocks';
 import { orgImageField } from './org-images';
 import { orgLinkField, createOrgLinkClickHandler } from './org-links';
+import { ticktickCheckboxField, ticktickCheckboxClickHandler } from './org-checkboxes';
 
 /** Create and mount a CodeMirror editor for the given file. */
 export function createEditor(
@@ -56,6 +57,9 @@ export function createEditor(
       autocorrect: 'on',
       spellcheck: 'true',
     }),
+    // Interactive {ticktick:ID} checkboxes (works in org and markdown)
+    ticktickCheckboxField,
+    ticktickCheckboxClickHandler,
   ];
 
   if (isOrg) {

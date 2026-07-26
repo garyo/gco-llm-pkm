@@ -1,8 +1,8 @@
 """Base class for all tools."""
 
-from abc import ABC, abstractmethod
-from typing import Dict, Any
 import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict
 
 
 class BaseTool(ABC):
@@ -66,7 +66,7 @@ class BaseTool(ABC):
         return {
             "name": self.name,
             "description": self.description,
-            "input_schema": self.input_schema
+            "input_schema": self.input_schema,
         }
 
     def __repr__(self) -> str:

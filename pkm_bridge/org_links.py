@@ -5,11 +5,7 @@ import subprocess
 from pathlib import Path
 
 
-
-
-def resolve_attachment_path(
-    org_dir: Path, org_id: str, filename: str
-) -> Path | None:
+def resolve_attachment_path(org_dir: Path, org_id: str, filename: str) -> Path | None:
     """Resolve an org-attach attachment to its filesystem path.
 
     Emacs org-attach stores files at:
@@ -123,9 +119,12 @@ def resolve_org_id_to_file(
         "rg",
         "--json",
         "-i",
-        "--type-add", "org:*.org",
-        "--type", "org",
-        "--max-count", "1",
+        "--type-add",
+        "org:*.org",
+        "--type",
+        "org",
+        "--max-count",
+        "1",
         f":ID:\\s+{re.escape(uuid)}",
     ] + search_dirs
 
@@ -135,6 +134,7 @@ def resolve_org_id_to_file(
             if not line:
                 continue
             import json
+
             data = json.loads(line)
             if data.get("type") == "match":
                 match_data = data["data"]
@@ -193,7 +193,7 @@ def rewrite_org_links_to_markdown(
 
         # Handle attachment: links
         if target.startswith("attachment:"):
-            filename = target[len("attachment:"):]
+            filename = target[len("attachment:") :]
             if not heading_id:
                 # Can't resolve without heading ID, leave as-is
                 return m.group(0)

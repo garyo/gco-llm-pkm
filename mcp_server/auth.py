@@ -96,6 +96,7 @@ class PKMOAuthProvider(
         """Load persisted client registrations from PostgreSQL."""
         try:
             from pkm_bridge.database import McpClientRegistration, get_db, init_db
+
             init_db()
             db = get_db()
             try:
@@ -117,19 +118,24 @@ class PKMOAuthProvider(
         """Persist a client registration to PostgreSQL (upsert)."""
         try:
             from pkm_bridge.database import McpClientRegistration, get_db
+
             db = get_db()
             try:
-                existing = db.query(McpClientRegistration).filter_by(
-                    client_id=client_info.client_id
-                ).first()
+                existing = (
+                    db.query(McpClientRegistration)
+                    .filter_by(client_id=client_info.client_id)
+                    .first()
+                )
                 json_data = client_info.model_dump_json()
                 if existing:
                     existing.client_info_json = json_data
                 else:
-                    db.add(McpClientRegistration(
-                        client_id=client_info.client_id,
-                        client_info_json=json_data,
-                    ))
+                    db.add(
+                        McpClientRegistration(
+                            client_id=client_info.client_id,
+                            client_info_json=json_data,
+                        )
+                    )
                 db.commit()
             finally:
                 db.close()
@@ -206,7 +212,9 @@ class PKMOAuthProvider(
             return None
 
         if payload.get("type") != expected_type:
-            logger.debug(f"Token type mismatch: expected {expected_type}, got {payload.get('type')}")
+            logger.debug(
+                f"Token type mismatch: expected {expected_type}, got {payload.get('type')}"
+            )
             return None
 
         # Reject tokens minted for a different audience/issuer outright (e.g. a
@@ -235,9 +243,7 @@ class PKMOAuthProvider(
             client_info.client_id not in self.clients
             and len(self.clients) >= MAX_CLIENT_REGISTRATIONS
         ):
-            logger.warning(
-                f"Rejecting client registration: at cap of {MAX_CLIENT_REGISTRATIONS}"
-            )
+            logger.warning(f"Rejecting client registration: at cap of {MAX_CLIENT_REGISTRATIONS}")
             raise RegistrationError(
                 error="invalid_client_metadata",
                 error_description="Server has reached its maximum number of registered clients",
@@ -255,9 +261,7 @@ class PKMOAuthProvider(
         self.pending_auth[state] = {
             "redirect_uri": str(params.redirect_uri),
             "code_challenge": params.code_challenge,
-            "redirect_uri_provided_explicitly": str(
-                params.redirect_uri_provided_explicitly
-            ),
+            "redirect_uri_provided_explicitly": str(params.redirect_uri_provided_explicitly),
             "client_id": client.client_id,
             "scopes": " ".join(params.scopes) if params.scopes else "",
             "resource": params.resource,
@@ -269,7 +273,8 @@ class PKMOAuthProvider(
         """Show the login form."""
         state = request.query_params.get("state", "")
         safe_state = html.escape(state)
-        return HTMLResponse(f"""<!DOCTYPE html>
+        return HTMLResponse(
+            f"""<!DOCTYPE html>
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -303,7 +308,8 @@ class PKMOAuthProvider(
         </form>
     </div>
 </body>
-</html>""")
+</html>"""
+        )
 
     async def handle_login_callback(self, request: Request) -> Response:
         """Validate password, create auth code, redirect back to client."""
@@ -347,9 +353,7 @@ class PKMOAuthProvider(
             resource=state_data.get("resource"),
         )
 
-        redirect_url = construct_redirect_uri(
-            state_data["redirect_uri"], code=code, state=state
-        )
+        redirect_url = construct_redirect_uri(state_data["redirect_uri"], code=code, state=state)
         logger.info("User authenticated, redirecting with auth code")
         return RedirectResponse(url=redirect_url, status_code=302)
 

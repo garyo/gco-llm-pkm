@@ -13,10 +13,10 @@ This script reads config/user_context.txt and stores it in the database.
 Run this once to migrate from file-based to database-based user context.
 """
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from pkm_bridge.database import init_db, get_db
+from pkm_bridge.database import get_db, init_db
 from pkm_bridge.db_repository import UserSettingsRepository
 
 
@@ -49,18 +49,18 @@ def migrate_user_context():
     # Check if context already exists in database
     db = get_db()
     try:
-        existing_context = UserSettingsRepository.get_user_context(db, user_id='default')
+        existing_context = UserSettingsRepository.get_user_context(db, user_id="default")
 
         if existing_context:
             print(f"⚠ User context already exists in database ({len(existing_context)} characters)")
             response = input("  Overwrite with file content? [y/N]: ")
-            if response.lower() != 'y':
+            if response.lower() != "y":
                 print("  Migration cancelled.")
                 db.close()
                 return False
 
         # Save to database
-        UserSettingsRepository.save_user_context(db, user_context, user_id='default')
+        UserSettingsRepository.save_user_context(db, user_context, user_id="default")
         print("✓ User context saved to database")
 
     except Exception as e:
@@ -72,8 +72,8 @@ def migrate_user_context():
 
     # Optionally rename the file
     response = input("\nRename config/user_context.txt to user_context.txt.bak? [Y/n]: ")
-    if response.lower() != 'n':
-        backup_file = user_context_file.with_suffix('.txt.bak')
+    if response.lower() != "n":
+        backup_file = user_context_file.with_suffix(".txt.bak")
         try:
             user_context_file.rename(backup_file)
             print(f"✓ Renamed {user_context_file.name} to {backup_file.name}")
@@ -85,7 +85,7 @@ def migrate_user_context():
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("=" * 60)
     print("User Context Migration Script")
     print("=" * 60)

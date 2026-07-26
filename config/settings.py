@@ -1,11 +1,12 @@
 """Configuration management for PKM Bridge Server."""
 
 import os
-from pathlib import Path
-from typing import List, Optional, Set
-from dotenv import load_dotenv
 from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
 from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
 
 # Dangerous command patterns (blacklist) blocked before running shell commands
 # or saving skills. Real security comes from Docker isolation, limited filesystem
@@ -14,41 +15,36 @@ from zoneinfo import ZoneInfo
 # auto-proposed skills) can reuse the same defaults instead of disabling validation.
 DEFAULT_DANGEROUS_PATTERNS = [
     # Destructive operations from root
-    r'rm\s+(-[rf]+\s+)?/',
-    r'rm\s+-[rf]*\s+\*\s*$',
+    r"rm\s+(-[rf]+\s+)?/",
+    r"rm\s+-[rf]*\s+\*\s*$",
     # Recursive/force rm of a relative directory, e.g. "rm -rf journals/"
     # (requires the recursive flag and a trailing slash so plain
     # "rm -f note.org" single-file deletes are not blocked).
-    r'\brm\s+-\w*r\w*\s+\S+/',
+    r"\brm\s+-\w*r\w*\s+\S+/",
     # find ... -delete
-    r'\bfind\b.*-delete\b',
+    r"\bfind\b.*-delete\b",
     # truncate to zero bytes
-    r'\btruncate\s+-s\s?0\b',
+    r"\btruncate\s+-s\s?0\b",
     # dd writing to a file/device
-    r'\bdd\b.*\bof=',
+    r"\bdd\b.*\bof=",
     # secure-erase / filesystem creation tools
-    r'\bshred\b',
-    r'\bmkfs\b',
-
+    r"\bshred\b",
+    r"\bmkfs\b",
     # Fork bombs
-    r':\(\)\s*\{.*\:',
-    r'fork\s*\(',
-
+    r":\(\)\s*\{.*\:",
+    r"fork\s*\(",
     # Download and execute
-    r'curl.*\|.*\b(sh|bash)\b',
-    r'wget.*\|.*\b(sh|bash)\b',
-
+    r"curl.*\|.*\b(sh|bash)\b",
+    r"wget.*\|.*\b(sh|bash)\b",
     # Network sockets (if network access is not needed)
-    r'/dev/(tcp|udp)/',
-
+    r"/dev/(tcp|udp)/",
     # Kernel/system tampering
-    r'/proc/sys/',
-    r'/sys/class/',
-
+    r"/proc/sys/",
+    r"/sys/class/",
     # Package managers (prevent Claude from installing things)
-    r'\b(apt|yum|dnf|pacman|brew)\s+install',
-    r'\bpip\s+install',
-    r'\bnpm\s+install\s+-g',
+    r"\b(apt|yum|dnf|pacman|brew)\s+install",
+    r"\bpip\s+install",
+    r"\bnpm\s+install\s+-g",
 ]
 
 
@@ -68,10 +64,10 @@ class Config:
             load_dotenv(env_file)
         else:
             # Prefer .env.local (local dev) over .env (Docker/production)
-            if Path('.env.local').exists():
-                load_dotenv('.env.local')
+            if Path(".env.local").exists():
+                load_dotenv(".env.local")
             else:
-                load_dotenv('.env')
+                load_dotenv(".env")
 
         # API Configuration
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -123,12 +119,13 @@ class Config:
             if not self.jwt_secret or self.jwt_secret == "change-this-to-a-random-secret-key":
                 raise ValueError(
                     "JWT_SECRET must be set to a secure random value. "
-                    "Generate one with: python3 -c \"import secrets; print(secrets.token_hex(32))\""
+                    'Generate one with: python3 -c "import secrets; print(secrets.token_hex(32))"'
                 )
             if not self.password_hash:
                 raise ValueError(
                     "PASSWORD_HASH must be set. "
-                    "Generate one with: python3 -c \"import hashlib; print(hashlib.sha256(b'your-password').hexdigest())\""
+                    "Generate one with: python3 -c "
+                    "\"import hashlib; print(hashlib.sha256(b'your-password').hexdigest())\""
                 )
 
         # System Prompt
@@ -136,7 +133,9 @@ class Config:
         if not self.system_prompt_file.exists():
             raise ValueError(f"System prompt file not found: {self.system_prompt_file}")
 
-    def get_system_prompt(self, user_context: Optional[str] = None, user_timezone: Optional[str] = None) -> str:
+    def get_system_prompt(
+        self, user_context: Optional[str] = None, user_timezone: Optional[str] = None
+    ) -> str:
         """Load and render the system prompt template with configuration values.
 
         Loads system_prompt.txt and optionally user_context (from database or file).
@@ -145,7 +144,8 @@ class Config:
         Args:
             user_context: Optional user context string. If None, will try to load from file.
             user_timezone: Optional timezone string from client (e.g., 'America/New_York').
-                          If provided, uses client's timezone. Otherwise falls back to server config.
+                          If provided, uses client's timezone. Otherwise falls back to
+                          server config.
 
         Returns:
             Rendered system prompt string.
@@ -161,8 +161,7 @@ class Config:
         # Insert user context if available
         if user_context:
             template = template.replace(
-                "# USER CONTEXT loaded from user_context.txt (if present)",
-                user_context
+                "# USER CONTEXT loaded from user_context.txt (if present)", user_context
             )
 
         # Replace placeholders (use .replace() instead of .format() to avoid
@@ -191,7 +190,8 @@ class Config:
         Args:
             user_context: Optional user context string. If None, will try to load from file.
             user_timezone: Optional timezone string from client (e.g., 'America/New_York').
-                          If provided, uses client's timezone. Otherwise falls back to server config.
+                          If provided, uses client's timezone. Otherwise falls back to
+                          server config.
             learned_rules: Optional list of LearnedRule objects to inject into the prompt.
 
         Returns:
@@ -211,35 +211,32 @@ class Config:
 
         # Remove user context placeholder from base template
         template = template.replace(
-            "# USER CONTEXT loaded from user_context.txt (if present)\n\n",
-            ""
+            "# USER CONTEXT loaded from user_context.txt (if present)\n\n", ""
         )
 
         blocks = []
 
         # Block 1: Static base instructions (cached - most stable)
-        blocks.append({
-            "type": "text",
-            "text": template.strip(),
-            "cache_control": {"type": "ephemeral"}
-        })
+        blocks.append(
+            {"type": "text", "text": template.strip(), "cache_control": {"type": "ephemeral"}}
+        )
 
         # Block 2: User context (cached - changes occasionally)
         if user_context:
-            blocks.append({
-                "type": "text",
-                "text": f"\n\n# USER CONTEXT\n\n{user_context.strip()}",
-                "cache_control": {"type": "ephemeral"}
-            })
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": f"\n\n# USER CONTEXT\n\n{user_context.strip()}",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            )
 
         # Block 3: Learned patterns (cached - changes at most daily)
         rules_text = self.get_learned_patterns_block(learned_rules)
         if rules_text:
-            blocks.append({
-                "type": "text",
-                "text": rules_text,
-                "cache_control": {"type": "ephemeral"}
-            })
+            blocks.append(
+                {"type": "text", "text": rules_text, "cache_control": {"type": "ephemeral"}}
+            )
 
         # Block N: Current date/time (NOT cached - refreshed every request)
         # Get current time in user's timezone
@@ -259,16 +256,18 @@ class Config:
         else:
             now = datetime.now()
 
-        timestring = now.strftime('%A, %B %d, %Y, %H:%M:%S %Z')
-        blocks.append({
-            "type": "text",
-            "text": (
-                f"\n\nThe CURRENT date/time right now is {now.isoformat()} or {timestring}. "
-                "This timestamp is refreshed on every message and is always accurate. "
-                "Always use this value for time-related questions — it supersedes any "
-                "time previously mentioned in the conversation."
-            )
-        })
+        timestring = now.strftime("%A, %B %d, %Y, %H:%M:%S %Z")
+        blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    f"\n\nThe CURRENT date/time right now is {now.isoformat()} or {timestring}. "
+                    "This timestamp is refreshed on every message and is always accurate. "
+                    "Always use this value for time-related questions — it supersedes any "
+                    "time previously mentioned in the conversation."
+                ),
+            }
+        )
 
         return blocks
 
@@ -309,38 +308,41 @@ class Config:
         Budget: max ~1500 tokens (~6KB).
         """
         # Exclude prompt_amendment rules (review-only, not auto-injected)
-        EXCLUDED_TYPES = {'prompt_amendment'}
+        EXCLUDED_TYPES = {"prompt_amendment"}
 
         sections = {
-            'retrieval': [],
-            'vocabulary': [],
-            'preference': [],
-            'embedding_gap': [],
-            'tool_strategy': [],
-            'approved_amendment': [],
-            'general': [],
+            "retrieval": [],
+            "vocabulary": [],
+            "preference": [],
+            "embedding_gap": [],
+            "tool_strategy": [],
+            "approved_amendment": [],
+            "general": [],
         }
 
         for rule in rules:
-            rule_type = getattr(rule, 'rule_type', 'general')
-            rule_text = getattr(rule, 'rule_text', '')
+            rule_type = getattr(rule, "rule_type", "general")
+            rule_text = getattr(rule, "rule_text", "")
             if rule_type in EXCLUDED_TYPES:
                 continue
             if rule_type in sections:
                 sections[rule_type].append(f"- {rule_text}")
             else:
-                sections['general'].append(f"- {rule_text}")
+                sections["general"].append(f"- {rule_text}")
 
-        parts = ["\n\n# LEARNED PATTERNS\nBased on analysis of past sessions, these patterns improve retrieval:\n"]
+        parts = [
+            "\n\n# LEARNED PATTERNS\n"
+            "Based on analysis of past sessions, these patterns improve retrieval:\n"
+        ]
 
         section_headers = {
-            'retrieval': '## Retrieval Hints',
-            'vocabulary': '## Vocabulary',
-            'preference': '## Preferences',
-            'embedding_gap': '## Embedding Gaps',
-            'tool_strategy': '## Tool Strategy',
-            'approved_amendment': '## Approved Amendments',
-            'general': '## General Insights',
+            "retrieval": "## Retrieval Hints",
+            "vocabulary": "## Vocabulary",
+            "preference": "## Preferences",
+            "embedding_gap": "## Embedding Gaps",
+            "tool_strategy": "## Tool Strategy",
+            "approved_amendment": "## Approved Amendments",
+            "general": "## General Insights",
         }
 
         for key, header in section_headers.items():

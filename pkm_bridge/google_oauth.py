@@ -5,6 +5,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from urllib.parse import urlencode
+
 import requests
 
 
@@ -22,13 +23,11 @@ class GoogleOAuth:
     # Default scopes (Google Calendar - backward compatible)
     DEFAULT_SCOPES = [
         "https://www.googleapis.com/auth/calendar",  # Full calendar access
-        "https://www.googleapis.com/auth/calendar.events"  # Events access
+        "https://www.googleapis.com/auth/calendar.events",  # Events access
     ]
 
     def __init__(
-        self,
-        scopes: list[str] | None = None,
-        redirect_uri_env: str = 'GOOGLE_REDIRECT_URI'
+        self, scopes: list[str] | None = None, redirect_uri_env: str = "GOOGLE_REDIRECT_URI"
     ):
         """Initialize OAuth handler with credentials from environment.
 
@@ -36,8 +35,8 @@ class GoogleOAuth:
             scopes: OAuth scopes to request. Defaults to Calendar scopes.
             redirect_uri_env: Environment variable name for redirect URI.
         """
-        self.client_id = os.getenv('GOOGLE_CLIENT_ID')
-        self.client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
+        self.client_id = os.getenv("GOOGLE_CLIENT_ID")
+        self.client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
         self.redirect_uri = os.getenv(redirect_uri_env)
         self.scopes = scopes or self.DEFAULT_SCOPES
 
@@ -61,21 +60,18 @@ class GoogleOAuth:
             state = secrets.token_urlsafe(32)
 
         params = {
-            'client_id': self.client_id,
-            'redirect_uri': self.redirect_uri,
-            'response_type': 'code',
-            'scope': ' '.join(self.scopes),  # Space-delimited scopes
-            'access_type': 'offline',  # Request refresh token
-            'state': state,
-            'prompt': 'consent'  # Force consent to ensure refresh token
+            "client_id": self.client_id,
+            "redirect_uri": self.redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(self.scopes),  # Space-delimited scopes
+            "access_type": "offline",  # Request refresh token
+            "state": state,
+            "prompt": "consent",  # Force consent to ensure refresh token
         }
 
         url = f"{self.AUTHORIZE_URL}?{urlencode(params)}"
 
-        return {
-            'url': url,
-            'state': state
-        }
+        return {"url": url, "state": state}
 
     def exchange_code(self, code: str) -> Dict[str, any]:
         """Exchange authorization code for access token.
@@ -95,11 +91,11 @@ class GoogleOAuth:
             requests.HTTPError: If token exchange fails
         """
         data = {
-            'code': code,
-            'client_id': self.client_id,
-            'client_secret': self.client_secret,
-            'redirect_uri': self.redirect_uri,
-            'grant_type': 'authorization_code'
+            "code": code,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "redirect_uri": self.redirect_uri,
+            "grant_type": "authorization_code",
         }
 
         response = requests.post(self.TOKEN_URL, data=data)
@@ -108,15 +104,15 @@ class GoogleOAuth:
         token_data = response.json()
 
         # Calculate expiration time
-        expires_in = token_data.get('expires_in', 3600)
+        expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         return {
-            'access_token': token_data['access_token'],
-            'refresh_token': token_data.get('refresh_token'),
-            'expires_at': expires_at,
-            'token_type': token_data.get('token_type', 'Bearer'),
-            'scope': token_data.get('scope', ' '.join(self.scopes))
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data.get("refresh_token"),
+            "expires_at": expires_at,
+            "token_type": token_data.get("token_type", "Bearer"),
+            "scope": token_data.get("scope", " ".join(self.scopes)),
         }
 
     def refresh_token(self, refresh_token: str) -> Dict[str, any]:
@@ -132,10 +128,10 @@ class GoogleOAuth:
             requests.HTTPError: If token refresh fails
         """
         data = {
-            'refresh_token': refresh_token,
-            'client_id': self.client_id,
-            'client_secret': self.client_secret,
-            'grant_type': 'refresh_token'
+            "refresh_token": refresh_token,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "refresh_token",
         }
 
         response = requests.post(self.TOKEN_URL, data=data)
@@ -144,15 +140,17 @@ class GoogleOAuth:
         token_data = response.json()
 
         # Calculate expiration time
-        expires_in = token_data.get('expires_in', 3600)
+        expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         return {
-            'access_token': token_data['access_token'],
-            'refresh_token': token_data.get('refresh_token', refresh_token),  # Use old if not provided
-            'expires_at': expires_at,
-            'token_type': token_data.get('token_type', 'Bearer'),
-            'scope': token_data.get('scope', ' '.join(self.scopes))
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data.get(
+                "refresh_token", refresh_token
+            ),  # Use old if not provided
+            "expires_at": expires_at,
+            "token_type": token_data.get("token_type", "Bearer"),
+            "scope": token_data.get("scope", " ".join(self.scopes)),
         }
 
     def is_token_expired(self, expires_at: datetime, buffer_seconds: int = 300) -> bool:

@@ -22,8 +22,8 @@ Future Enhancement:
 - Trade-off: ~90s processing time and $0.06 cost per large tool result
 """
 
-from typing import List, Dict, Any, Optional
 import json
+from typing import Any, Dict, List
 
 # Configuration constants for tool result filtering
 MIN_AGE_FOR_FILTERING = 5  # Filter tool results older than this many turns
@@ -71,7 +71,7 @@ class HistoryManager:
         Returns:
             Estimated token count
         """
-        content = message.get('content', '')
+        content = message.get("content", "")
 
         # Handle string content
         if isinstance(content, str):
@@ -111,7 +111,7 @@ class HistoryManager:
         Returns:
             Truncated text with marker showing what was removed
         """
-        lines = text.split('\n')
+        lines = text.split("\n")
         total_lines = len(lines)
 
         # Calculate target lines from target tokens
@@ -131,16 +131,20 @@ class HistoryManager:
 
         removed_count = total_lines - len(recent_lines) - len(oldest_lines)
 
-        result = '\n'.join(recent_lines)
+        result = "\n".join(recent_lines)
         if removed_count > 0:
-            result += f"\n\n[... removed {removed_count} lines (~{removed_count * 10} tokens) ...]\n\n"
+            result += (
+                f"\n\n[... removed {removed_count} lines (~{removed_count * 10} tokens) ...]\n\n"
+            )
         if oldest_lines:
-            result += '\n'.join(oldest_lines)
+            result += "\n".join(oldest_lines)
 
         return result
 
     @staticmethod
-    def truncate_tool_result(content: List[Dict[str, Any]], max_tokens: int = 1000) -> List[Dict[str, Any]]:
+    def truncate_tool_result(
+        content: List[Dict[str, Any]], max_tokens: int = 1000
+    ) -> List[Dict[str, Any]]:
         """Truncate large tool results in message content.
 
         Uses smart line-based truncation that preserves both recent and
@@ -155,14 +159,14 @@ class HistoryManager:
         """
         result = []
         for item in content:
-            if isinstance(item, dict) and item.get('type') == 'tool_result':
-                tool_content = item.get('content', '')
+            if isinstance(item, dict) and item.get("type") == "tool_result":
+                tool_content = item.get("content", "")
                 if isinstance(tool_content, str):
                     # Ensure content is never empty (API requirement)
                     if not tool_content.strip():
-                        tool_content = '[Empty result]'
+                        tool_content = "[Empty result]"
                         item = item.copy()
-                        item['content'] = tool_content
+                        item["content"] = tool_content
 
                     tokens = HistoryManager.estimate_tokens(tool_content)
                     if tokens > max_tokens:
@@ -170,9 +174,9 @@ class HistoryManager:
                         truncated = HistoryManager.smart_truncate_lines(tool_content, max_tokens)
                         # Ensure truncation didn't create empty result
                         if not truncated.strip():
-                            truncated = '[Truncated to empty]'
+                            truncated = "[Truncated to empty]"
                         item = item.copy()
-                        item['content'] = truncated
+                        item["content"] = truncated
                 result.append(item)
             else:
                 result.append(item)
@@ -186,13 +190,11 @@ class HistoryManager:
         of content blocks that carries no `tool_result` (a `tool_result` block
         answers a prior assistant `tool_use`, so it can't lead the history).
         """
-        if message.get('role') != 'user':
+        if message.get("role") != "user":
             return False
-        content = message.get('content')
+        content = message.get("content")
         if isinstance(content, list):
-            return not any(
-                isinstance(b, dict) and b.get('type') == 'tool_result' for b in content
-            )
+            return not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
         return True
 
     def truncate_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -229,8 +231,7 @@ class HistoryManager:
 
         # Count conversation turns (pairs of user + assistant messages)
         user_assistant_indices = [
-            i for i, msg in enumerate(history)
-            if msg.get('role') in ['user', 'assistant']
+            i for i, msg in enumerate(history) if msg.get("role") in ["user", "assistant"]
         ]
 
         # Calculate the cutoff index for "old" messages (those eligible for filtering)
@@ -239,7 +240,11 @@ class HistoryManager:
         if total_turns > MIN_AGE_FOR_FILTERING:
             # Find the index of the message that's MIN_AGE_FOR_FILTERING turns from the end
             turns_to_keep = MIN_AGE_FOR_FILTERING * 2  # Each turn is 2 messages (user + assistant)
-            filter_cutoff_index = user_assistant_indices[-turns_to_keep] if turns_to_keep < len(user_assistant_indices) else 0
+            filter_cutoff_index = (
+                user_assistant_indices[-turns_to_keep]
+                if turns_to_keep < len(user_assistant_indices)
+                else 0
+            )
         else:
             # Not enough turns - don't filter anything
             filter_cutoff_index = len(history)
@@ -250,12 +255,12 @@ class HistoryManager:
             # Check if this message is old enough to be filtered
             is_old_enough = i < filter_cutoff_index
 
-            if is_old_enough and msg.get('role') == 'user' and isinstance(msg.get('content'), list):
+            if is_old_enough and msg.get("role") == "user" and isinstance(msg.get("content"), list):
                 # Check if any tool results are large enough to filter
                 has_large_tool_results = False
-                for item in msg.get('content', []):
-                    if isinstance(item, dict) and item.get('type') == 'tool_result':
-                        tokens = self.estimate_tokens(str(item.get('content', '')))
+                for item in msg.get("content", []):
+                    if isinstance(item, dict) and item.get("type") == "tool_result":
+                        tokens = self.estimate_tokens(str(item.get("content", "")))
                         if tokens > MIN_TOKENS_FOR_FILTERING:
                             has_large_tool_results = True
                             break
@@ -265,9 +270,8 @@ class HistoryManager:
                     # LLM-based filtering (USE_LLM_FILTERING) is not implemented yet;
                     # see the module docstring / filter_tool_result_with_llm.
                     msg = msg.copy()
-                    msg['content'] = self.truncate_tool_result(
-                        msg['content'],
-                        max_tokens=TARGET_TOKENS_AFTER_FILTERING
+                    msg["content"] = self.truncate_tool_result(
+                        msg["content"], max_tokens=TARGET_TOKENS_AFTER_FILTERING
                     )
 
             filtered_history.append(msg)
@@ -304,7 +308,10 @@ class HistoryManager:
             removed_count = len(history) - len(new_history)
             original_tokens = sum(self.estimate_message_tokens(msg) for msg in history)
             new_tokens = sum(self.estimate_message_tokens(msg) for msg in new_history)
-            print(f"[HISTORY] Truncated {removed_count} messages: {original_tokens} → {new_tokens} tokens")
+            print(
+                f"[HISTORY] Truncated {removed_count} messages: "
+                f"{original_tokens} → {new_tokens} tokens"
+            )
 
         return new_history
 
@@ -321,19 +328,20 @@ class HistoryManager:
         message_count = len(history)
 
         # Count conversation turns (user/assistant pairs)
-        turn_count = len([m for m in history if m.get('role') in ['user', 'assistant']]) // 2
+        turn_count = len([m for m in history if m.get("role") in ["user", "assistant"]]) // 2
 
         # Find largest messages
         messages_by_size = sorted(
-            [(i, self.estimate_message_tokens(msg), msg.get('role', 'unknown'))
-             for i, msg in enumerate(history)],
+            [
+                (i, self.estimate_message_tokens(msg), msg.get("role", "unknown"))
+                for i, msg in enumerate(history)
+            ],
             key=lambda x: x[1],
-            reverse=True
+            reverse=True,
         )
 
         largest_messages = [
-            {"index": i, "tokens": tokens, "role": role}
-            for i, tokens, role in messages_by_size[:5]
+            {"index": i, "tokens": tokens, "role": role} for i, tokens, role in messages_by_size[:5]
         ]
 
         return {
@@ -342,7 +350,8 @@ class HistoryManager:
             "turn_count": turn_count,
             "largest_messages": largest_messages,
             "over_budget": total_tokens > self.max_tokens,
-            "budget_usage": f"{total_tokens}/{self.max_tokens} ({100*total_tokens//self.max_tokens}%)"
+            "budget_usage": f"{total_tokens}/{self.max_tokens} "
+            f"({100*total_tokens//self.max_tokens}%)",
         }
 
     @staticmethod

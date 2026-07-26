@@ -47,13 +47,13 @@ class FileEditor:
         for allowed_dir in self.allowed_dirs:
             try:
                 full_path = (allowed_dir / filepath).resolve()
-                
+
                 # Check it's actually within the allowed directory
                 if full_path.is_relative_to(allowed_dir):
                     return full_path
             except (ValueError, RuntimeError):
                 continue
-        
+
         raise ValueError(f"Path '{filepath}' is not within allowed directories")
 
     def _resolve_prefixed_path(self, filepath: str) -> Path:
@@ -153,29 +153,31 @@ class FileEditor:
                     rel_path = file_path.relative_to(self.org_dir)
 
                     # Skip dotfiles (hidden files, Syncthing temp files, etc.)
-                    if any(part.startswith('.') for part in rel_path.parts):
+                    if any(part.startswith(".") for part in rel_path.parts):
                         continue
 
                     parts_lower = [part.lower() for part in rel_path.parts]
 
                     # Classify: journals, pages (default), or other (bak)
-                    if 'bak' in parts_lower:
-                        file_type = 'other'
-                    elif 'journals' in parts_lower:
-                        file_type = 'journal'
-                    elif 'assets' in parts_lower:
-                        file_type = 'other'
+                    if "bak" in parts_lower:
+                        file_type = "other"
+                    elif "journals" in parts_lower:
+                        file_type = "journal"
+                    elif "assets" in parts_lower:
+                        file_type = "other"
                     else:
-                        file_type = 'page'
+                        file_type = "page"
 
-                    files.append({
-                        'path': str(rel_path),
-                        'full_path': f"org:{rel_path}",
-                        'name': file_path.name,
-                        'dir': 'org',
-                        'type': file_type,
-                        'modified': file_path.stat().st_mtime
-                    })
+                    files.append(
+                        {
+                            "path": str(rel_path),
+                            "full_path": f"org:{rel_path}",
+                            "name": file_path.name,
+                            "dir": "org",
+                            "type": file_type,
+                            "modified": file_path.stat().st_mtime,
+                        }
+                    )
 
         # Scan Logseq directory for .md files
         if self.logseq_dir and self.logseq_dir.exists():
@@ -184,33 +186,35 @@ class FileEditor:
                     rel_path = file_path.relative_to(self.logseq_dir)
 
                     # Skip dotfiles (hidden files, Syncthing temp files, etc.)
-                    if any(part.startswith('.') for part in rel_path.parts):
+                    if any(part.startswith(".") for part in rel_path.parts):
                         continue
 
                     parts_lower = [part.lower() for part in rel_path.parts]
 
                     # Classify: journals (*/journals/), pages (*/pages/), or other
-                    if 'bak' in parts_lower:
-                        file_type = 'other'
-                    elif 'version-files' in parts_lower:
-                        file_type = 'other'
-                    elif 'sync-conflict' in str(rel_path):
-                        file_type = 'other'
-                    elif 'journals' in parts_lower:
-                        file_type = 'journal'
-                    elif 'pages' in parts_lower:
-                        file_type = 'page'
+                    if "bak" in parts_lower:
+                        file_type = "other"
+                    elif "version-files" in parts_lower:
+                        file_type = "other"
+                    elif "sync-conflict" in str(rel_path):
+                        file_type = "other"
+                    elif "journals" in parts_lower:
+                        file_type = "journal"
+                    elif "pages" in parts_lower:
+                        file_type = "page"
                     else:
-                        file_type = 'other'
+                        file_type = "other"
 
-                    files.append({
-                        'path': str(rel_path),
-                        'full_path': f"logseq:{rel_path}",
-                        'name': file_path.name,
-                        'dir': 'logseq',
-                        'type': file_type,
-                        'modified': file_path.stat().st_mtime
-                    })
+                    files.append(
+                        {
+                            "path": str(rel_path),
+                            "full_path": f"logseq:{rel_path}",
+                            "name": file_path.name,
+                            "dir": "logseq",
+                            "type": file_type,
+                            "modified": file_path.stat().st_mtime,
+                        }
+                    )
 
         return files
 
@@ -259,11 +263,11 @@ class FileEditor:
             )
 
         return {
-            'content': content,
-            'path': filepath,
-            'modified': full_path.stat().st_mtime,
-            'size': full_path.stat().st_size,
-            'truncated': truncated,
+            "content": content,
+            "path": filepath,
+            "modified": full_path.stat().st_mtime,
+            "size": full_path.stat().st_size,
+            "truncated": truncated,
         }
 
     def write_file(
@@ -311,31 +315,31 @@ class FileEditor:
         if create_only:
             # Use exclusive create mode - atomically fails if file exists
             try:
-                with open(full_path, 'x', encoding='utf-8') as f:
+                with open(full_path, "x", encoding="utf-8") as f:
                     f.write(content)
                 self.logger.info(f"Created file: {filepath} ({len(content)} bytes)")
                 return {
-                    'status': 'saved',
-                    'path': filepath,
-                    'modified': full_path.stat().st_mtime,
-                    'size': len(content)
+                    "status": "saved",
+                    "path": filepath,
+                    "modified": full_path.stat().st_mtime,
+                    "size": len(content),
                 }
             except FileExistsError:
                 self.logger.info(f"File already exists (create_only): {filepath}")
                 return {
-                    'status': 'exists',
-                    'path': filepath,
-                    'modified': full_path.stat().st_mtime,
-                    'size': full_path.stat().st_size
+                    "status": "exists",
+                    "path": filepath,
+                    "modified": full_path.stat().st_mtime,
+                    "size": full_path.stat().st_size,
                 }
         else:
             self._atomic_write(full_path, content)
             self.logger.info(f"Saved file: {filepath} ({len(content)} bytes)")
             return {
-                'status': 'saved',
-                'path': filepath,
-                'modified': full_path.stat().st_mtime,
-                'size': len(content)
+                "status": "saved",
+                "path": filepath,
+                "modified": full_path.stat().st_mtime,
+                "size": len(content),
             }
 
     @staticmethod
@@ -346,9 +350,7 @@ class FileEditor:
         readers observe either the old or the new file, never a truncated one.
         """
         directory = full_path.parent
-        fd, tmp_name = tempfile.mkstemp(
-            dir=directory, prefix=f".{full_path.name}.", suffix=".tmp"
-        )
+        fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{full_path.name}.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)

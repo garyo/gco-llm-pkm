@@ -4,11 +4,10 @@ Provides a simple interface for batch embedding with error handling,
 retries, and cost tracking.
 """
 
-import time
-from typing import List, Optional
-from dataclasses import dataclass
 import logging
-
+import time
+from dataclasses import dataclass
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EmbeddingResult:
     """Result of an embedding operation."""
+
     embeddings: List[List[float]]
     total_tokens: int
     cost: float  # USD
@@ -40,11 +40,11 @@ class VoyageClient:
         # Lazy import voyageai to avoid import errors if not installed
         try:
             import voyageai
+
             self.client = voyageai.Client(api_key=api_key)
         except ImportError:
             raise ImportError(
-                "voyageai package not installed. "
-                "Install with: pip install voyageai"
+                "voyageai package not installed. " "Install with: pip install voyageai"
             )
 
     def embed(
@@ -52,7 +52,7 @@ class VoyageClient:
         texts: List[str],
         input_type: str = "document",
         batch_size: int = 128,
-        max_retries: int = 3
+        max_retries: int = 3,
     ) -> EmbeddingResult:
         """Embed a list of texts.
 
@@ -70,18 +70,14 @@ class VoyageClient:
 
         # Process in batches
         for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
+            batch = texts[i : i + batch_size]
 
             # Retry logic
             for attempt in range(max_retries):
                 try:
                     logger.debug(f"Embedding batch {i//batch_size + 1} ({len(batch)} texts)")
 
-                    result = self.client.embed(
-                        texts=batch,
-                        model=self.model,
-                        input_type=input_type
-                    )
+                    result = self.client.embed(texts=batch, model=self.model, input_type=input_type)
 
                     # Extract embeddings and token count
                     all_embeddings.extend(result.embeddings)
@@ -91,7 +87,7 @@ class VoyageClient:
 
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff
+                        wait_time = 2**attempt  # Exponential backoff
                         logger.warning(
                             f"Embedding failed (attempt {attempt + 1}/{max_retries}): {e}. "
                             f"Retrying in {wait_time}s..."
@@ -104,22 +100,11 @@ class VoyageClient:
         # Calculate cost
         cost = (total_tokens / 1_000_000) * self.PRICE_PER_MILLION_TOKENS
 
-        logger.info(
-            f"Embedded {len(texts)} texts. "
-            f"Tokens: {total_tokens:,}, Cost: ${cost:.4f}"
-        )
+        logger.info(f"Embedded {len(texts)} texts. " f"Tokens: {total_tokens:,}, Cost: ${cost:.4f}")
 
-        return EmbeddingResult(
-            embeddings=all_embeddings,
-            total_tokens=total_tokens,
-            cost=cost
-        )
+        return EmbeddingResult(embeddings=all_embeddings, total_tokens=total_tokens, cost=cost)
 
-    def embed_single(
-        self,
-        text: str,
-        input_type: str = "document"
-    ) -> List[float]:
+    def embed_single(self, text: str, input_type: str = "document") -> List[float]:
         """Embed a single text (convenience method).
 
         Args:

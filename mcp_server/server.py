@@ -76,6 +76,7 @@ def create_server() -> FastMCP:
 
     # Register login routes if OAuth is enabled
     if oauth_provider:
+
         @mcp.custom_route("/login", methods=["GET"])
         async def login_page(request):
             return await oauth_provider.handle_login(request)
@@ -107,6 +108,7 @@ def main():
     app = mcp.streamable_http_app()
 
     import uvicorn
+
     uvicorn.run(app, host=host, port=port)
 
 

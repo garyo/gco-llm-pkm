@@ -35,7 +35,8 @@ Gmail search syntax examples:
   is:unread label:important
   has:attachment filename:pdf
 
-Connection status: Check /auth/google-gmail/status. If not connected, user needs to visit /auth/google-gmail/authorize."""
+Connection status: Check /auth/google-gmail/status. If not connected, user needs to visit
+/auth/google-gmail/authorize."""
 
     @property
     def input_schema(self) -> Dict[str, Any]:
@@ -85,7 +86,7 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
 
         try:
             db = get_db()
-            token = OAuthRepository.get_token(db, 'google_gmail')
+            token = OAuthRepository.get_token(db, "google_gmail")
 
             if not token:
                 return None
@@ -96,13 +97,13 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
                     new_token_data = self.oauth_handler.refresh_token(token.refresh_token)
                     OAuthRepository.save_token(
                         db=db,
-                        service='google_gmail',
-                        access_token=new_token_data['access_token'],
-                        refresh_token=new_token_data.get('refresh_token'),
-                        expires_at=new_token_data['expires_at'],
-                        scope=new_token_data.get('scope'),
+                        service="google_gmail",
+                        access_token=new_token_data["access_token"],
+                        refresh_token=new_token_data.get("refresh_token"),
+                        expires_at=new_token_data["expires_at"],
+                        scope=new_token_data.get("scope"),
                     )
-                    token = OAuthRepository.get_token(db, 'google_gmail')
+                    token = OAuthRepository.get_token(db, "google_gmail")
                     self.logger.info("Gmail token refreshed successfully")
                 except Exception as e:
                     self.logger.error(f"Failed to refresh Gmail token: {e}")
@@ -119,7 +120,7 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
             return None
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
-        action = params.get('action')
+        action = params.get("action")
         if not action:
             return "Error: 'action' parameter is required"
 
@@ -128,15 +129,15 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
             return "Gmail not connected. Please connect via /auth/google-gmail/authorize"
 
         try:
-            max_results = min(params.get('max_results', 20), 50)
+            max_results = min(params.get("max_results", 20), 50)
 
             if action == "search":
-                query = params.get('query', '')
-                label_ids = params.get('label_ids')
+                query = params.get("query", "")
+                label_ids = params.get("label_ids")
                 results = client.list_messages(
                     query=query, label_ids=label_ids, max_results=max_results
                 )
-                messages = results.get('messages', [])
+                messages = results.get("messages", [])
 
                 if not messages:
                     return f"No messages found{f' for query: {query}' if query else ''}."
@@ -144,19 +145,19 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
                 # Fetch full details for each message
                 summaries = []
                 for msg_stub in messages:
-                    msg = client.get_message(msg_stub['id'])
+                    msg = client.get_message(msg_stub["id"])
                     summaries.append(client.format_message_summary(msg, include_body=False))
 
                 header = f"Messages ({len(summaries)})"
                 if query:
                     header += f" matching '{query}'"
-                if results.get('nextPageToken'):
+                if results.get("nextPageToken"):
                     header += " (more available)"
 
                 return header + ":\n\n" + "\n---\n".join(summaries)
 
             elif action == "get_message":
-                message_id = params.get('message_id')
+                message_id = params.get("message_id")
                 if not message_id:
                     return "Error: message_id is required for get_message"
 
@@ -164,9 +165,9 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
                 return client.format_message_summary(msg, include_body=True)
 
             elif action == "list_threads":
-                query = params.get('query', '')
+                query = params.get("query", "")
                 results = client.list_threads(query=query, max_results=max_results)
-                threads = results.get('threads', [])
+                threads = results.get("threads", [])
 
                 if not threads:
                     return f"No threads found{f' for query: {query}' if query else ''}."
@@ -174,13 +175,13 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
                 # Fetch snippet for each thread
                 lines = []
                 for t in threads:
-                    thread = client.get_thread(t['id'])
-                    msgs = thread.get('messages', [])
+                    thread = client.get_thread(t["id"])
+                    msgs = thread.get("messages", [])
                     if msgs:
                         first = msgs[0]
-                        headers = first.get('payload', {}).get('headers', [])
-                        subject = client.extract_header(headers, 'Subject') or '(no subject)'
-                        from_addr = client.extract_header(headers, 'From')
+                        headers = first.get("payload", {}).get("headers", [])
+                        subject = client.extract_header(headers, "Subject") or "(no subject)"
+                        from_addr = client.extract_header(headers, "From")
                         lines.append(
                             f"Thread ID: {t['id']} | {len(msgs)} message(s)\n"
                             f"  Subject: {subject}\n"
@@ -190,25 +191,23 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
                 header = f"Threads ({len(threads)})"
                 if query:
                     header += f" matching '{query}'"
-                if results.get('nextPageToken'):
+                if results.get("nextPageToken"):
                     header += " (more available)"
 
                 return header + ":\n\n" + "\n\n".join(lines)
 
             elif action == "get_thread":
-                thread_id = params.get('thread_id')
+                thread_id = params.get("thread_id")
                 if not thread_id:
                     return "Error: thread_id is required for get_thread"
 
                 thread = client.get_thread(thread_id)
-                msgs = thread.get('messages', [])
+                msgs = thread.get("messages", [])
 
                 if not msgs:
                     return f"Thread {thread_id} has no messages."
 
-                summaries = [
-                    client.format_message_summary(m, include_body=True) for m in msgs
-                ]
+                summaries = [client.format_message_summary(m, include_body=True) for m in msgs]
                 return f"Thread ({len(msgs)} messages):\n\n" + "\n---\n".join(summaries)
 
             elif action == "list_labels":
@@ -218,16 +217,19 @@ Connection status: Check /auth/google-gmail/status. If not connected, user needs
 
                 lines = [f"Gmail labels ({len(labels)}):"]
                 for label in labels:
-                    name = label.get('name', 'Unknown')
-                    label_id = label.get('id', '')
-                    label_type = label.get('type', '')
+                    name = label.get("name", "Unknown")
+                    label_id = label.get("id", "")
+                    label_type = label.get("type", "")
                     lines.append(f"  {name} (ID: {label_id}, type: {label_type})")
 
-                return '\n'.join(lines)
+                return "\n".join(lines)
 
             else:
                 return f"Error: Unknown action: {action}"
 
         except Exception as e:
             self.logger.error(f"Gmail error ({action}): {e}", exc_info=True)
-            return f"Gmail '{action}' failed: {type(e).__name__}: {e}. Check that Gmail is connected via OAuth."
+            return (
+                f"Gmail '{action}' failed: {type(e).__name__}: {e}. "
+                "Check that Gmail is connected via OAuth."
+            )

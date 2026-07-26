@@ -68,7 +68,7 @@ class ContextRetriever:
         query: str,
         limit: int = 12,
         min_similarity: float = DEFAULT_MIN_SIMILARITY,
-        newer: Optional[str] = None
+        newer: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve relevant chunks via hybrid semantic + keyword search.
 
@@ -98,10 +98,7 @@ class ContextRetriever:
         # than returning nothing.
         query_embedding = None
         try:
-            query_embedding = self.voyage_client.embed_single(
-                query,
-                input_type="query"
-            )
+            query_embedding = self.voyage_client.embed_single(query, input_type="query")
         except Exception as e:
             logger.error(f"Failed to embed query (keyword-only fallback): {e}")
 
@@ -120,42 +117,37 @@ class ContextRetriever:
             # Dense candidates (cosine_distance = 1 - cosine_similarity)
             vector_rows = []
             if query_embedding is not None:
-                vector_rows = db.query(
-                    DocumentChunk,
-                    Document,
-                    DocumentChunk.embedding.cosine_distance(query_embedding).label('distance')
-                ).join(
-                    Document,
-                    DocumentChunk.document_id == Document.id
-                ).filter(
-                    DocumentChunk.embedding.isnot(None),
-                    *date_filters
-                ).order_by(
-                    'distance'
-                ).limit(pool).all()
+                vector_rows = (
+                    db.query(
+                        DocumentChunk,
+                        Document,
+                        DocumentChunk.embedding.cosine_distance(query_embedding).label("distance"),
+                    )
+                    .join(Document, DocumentChunk.document_id == Document.id)
+                    .filter(DocumentChunk.embedding.isnot(None), *date_filters)
+                    .order_by("distance")
+                    .limit(pool)
+                    .all()
+                )
 
             # Keyword candidates. websearch_to_tsquery is built for raw user
             # input (ANDs terms, tolerates quotes/operators); the expression
             # must match idx_chunks_content_fts exactly to use the GIN index.
-            tsvector = func.to_tsvector('english', DocumentChunk.content)
-            tsquery = func.websearch_to_tsquery('english', query)
+            tsvector = func.to_tsvector("english", DocumentChunk.content)
+            tsquery = func.websearch_to_tsquery("english", query)
             distance_col = (
                 DocumentChunk.embedding.cosine_distance(query_embedding)
-                if query_embedding is not None else null()
-            ).label('distance')
-            keyword_rows = db.query(
-                DocumentChunk,
-                Document,
-                distance_col
-            ).join(
-                Document,
-                DocumentChunk.document_id == Document.id
-            ).filter(
-                tsvector.op('@@')(tsquery),
-                *date_filters
-            ).order_by(
-                func.ts_rank_cd(tsvector, tsquery).desc()
-            ).limit(pool).all()
+                if query_embedding is not None
+                else null()
+            ).label("distance")
+            keyword_rows = (
+                db.query(DocumentChunk, Document, distance_col)
+                .join(Document, DocumentChunk.document_id == Document.id)
+                .filter(tsvector.op("@@")(tsquery), *date_filters)
+                .order_by(func.ts_rank_cd(tsvector, tsquery).desc())
+                .limit(pool)
+                .all()
+            )
 
             # Collect candidates; rank order within each list feeds RRF.
             candidates: Dict[int, Dict[str, Any]] = {}
@@ -193,13 +185,13 @@ class ContextRetriever:
     def _chunk_dict(chunk: DocumentChunk, doc: Document, similarity: float) -> Dict[str, Any]:
         """Result dict for one retrieved chunk."""
         return {
-            'content': chunk.content,
-            'heading_path': chunk.heading_path,
-            'filename': doc.file_path,
-            'date': doc.date_extracted,
-            'similarity': round(similarity, 3),
-            'start_line': chunk.start_line,
-            'chunk_type': chunk.chunk_type
+            "content": chunk.content,
+            "heading_path": chunk.heading_path,
+            "filename": doc.file_path,
+            "date": doc.date_extracted,
+            "similarity": round(similarity, 3),
+            "start_line": chunk.start_line,
+            "chunk_type": chunk.chunk_type,
         }
 
     def format_as_context_block(self, chunks: List[Dict[str, Any]]) -> str:
@@ -218,8 +210,9 @@ class ContextRetriever:
             "# RETRIEVED NOTE CONTEXT",
             "",
             "The following note excerpts are semantically relevant to the user's query.",
-            "These have been automatically retrieved from the user's PKM system based on semantic similarity.",
-            ""
+            "These have been automatically retrieved from the user's PKM system "
+            "based on semantic similarity.",
+            "",
         ]
 
         for i, chunk in enumerate(chunks, 1):
@@ -227,21 +220,22 @@ class ContextRetriever:
             lines.append(f"## Excerpt {i} (similarity: {chunk['similarity']:.2f})")
 
             # Metadata
-            if chunk.get('date'):
+            if chunk.get("date"):
                 lines.append(f"**Date:** {chunk['date']}")
 
             # Filename (make it more readable)
             from pathlib import Path
-            filename = Path(chunk['filename']).name
+
+            filename = Path(chunk["filename"]).name
             lines.append(f"**File:** {filename}")
 
-            if chunk.get('heading_path'):
+            if chunk.get("heading_path"):
                 lines.append(f"**Context:** {chunk['heading_path']}")
 
             lines.append("")
 
             # Content
-            lines.append(chunk['content'])
+            lines.append(chunk["content"])
             lines.append("")
             lines.append("---")
             lines.append("")
@@ -249,10 +243,7 @@ class ContextRetriever:
         return "\n".join(lines)
 
     def retrieve_and_format(
-        self,
-        query: str,
-        limit: int = 12,
-        min_similarity: float = DEFAULT_MIN_SIMILARITY
+        self, query: str, limit: int = 12, min_similarity: float = DEFAULT_MIN_SIMILARITY
     ) -> str:
         """Convenience method: retrieve and format in one call.
 
@@ -286,8 +277,8 @@ class ContextRetriever:
         from pkm_bridge.embeddings.embedding_service import find_note_files
 
         # Get directory paths from environment
-        org_dir = Path(os.getenv('ORG_DIR', ''))
-        logseq_dir = Path(os.getenv('LOGSEQ_DIR', ''))
+        org_dir = Path(os.getenv("ORG_DIR", ""))
+        logseq_dir = Path(os.getenv("LOGSEQ_DIR", ""))
 
         directories = [d for d in [org_dir, logseq_dir] if d.exists()]
         if not directories:
@@ -306,7 +297,7 @@ class ContextRetriever:
         # Filter for recent journal files only
         for file_path in all_files:
             # Check if this is a journal file (contains /journals/ in path)
-            if '/journals/' not in str(file_path):
+            if "/journals/" not in str(file_path):
                 continue
 
             # Check if file is recent enough (by mtime)
@@ -314,30 +305,32 @@ class ContextRetriever:
                 continue
 
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
 
                 # Extract date from filename
                 # Org: YYYY-MM-DD.org
                 # Logseq: YYYY_MM_DD.md
-                if file_path.suffix == '.org':
+                if file_path.suffix == ".org":
                     date_str = file_path.stem  # Already in YYYY-MM-DD format
-                    file_type = 'org'
+                    file_type = "org"
                 else:  # .md
-                    date_str = file_path.stem.replace('_', '-')  # Convert YYYY_MM_DD to YYYY-MM-DD
-                    file_type = 'md'
+                    date_str = file_path.stem.replace("_", "-")  # Convert YYYY_MM_DD to YYYY-MM-DD
+                    file_type = "md"
 
-                journals.append({
-                    'date': date_str,
-                    'file_path': str(file_path),
-                    'content': content,
-                    'file_type': file_type
-                })
+                journals.append(
+                    {
+                        "date": date_str,
+                        "file_path": str(file_path),
+                        "content": content,
+                        "file_type": file_type,
+                    }
+                )
             except Exception as e:
                 logger.warning(f"Failed to read {file_path}: {e}")
 
         # Sort by date, newest first
-        journals.sort(key=lambda x: x['date'], reverse=True)
+        journals.sort(key=lambda x: x["date"], reverse=True)
 
         logger.info(f"Retrieved {len(journals)} journal entries from last {days} days (from files)")
         return journals
@@ -361,18 +354,18 @@ class ContextRetriever:
             "",
             "The following are your most recent daily journal entries.",
             "These provide temporal context for recent activities and thoughts.",
-            ""
+            "",
         ]
 
         for journal in journals:
             # Format date nicely
-            date_str = journal['date']
-            filename = Path(journal['file_path']).name
+            date_str = journal["date"]
+            filename = Path(journal["file_path"]).name
 
             lines.append(f"## {date_str}")
             lines.append(f"**File:** {filename}")
             lines.append("")
-            lines.append(journal['content'])
+            lines.append(journal["content"])
             lines.append("")
             lines.append("---")
             lines.append("")

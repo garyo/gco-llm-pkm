@@ -160,22 +160,23 @@ class InspectRulesTool(BaseTool):
                     since_reinforced = (now - r.last_reinforced_at).days
                 else:
                     since_reinforced = age_days
-                result.append({
-                    "id": r.id,
-                    "type": r.rule_type,
-                    "text": r.rule_text,
-                    "data": r.rule_data,
-                    "confidence": round(r.confidence, 2),
-                    "hit_count": r.hit_count,
-                    "is_active": r.is_active,
-                    "age_days": age_days,
-                    "days_since_reinforced": since_reinforced,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
-                    "last_reinforced_at": (
-                        r.last_reinforced_at.isoformat()
-                        if r.last_reinforced_at else None
-                    ),
-                })
+                result.append(
+                    {
+                        "id": r.id,
+                        "type": r.rule_type,
+                        "text": r.rule_text,
+                        "data": r.rule_data,
+                        "confidence": round(r.confidence, 2),
+                        "hit_count": r.hit_count,
+                        "is_active": r.is_active,
+                        "age_days": age_days,
+                        "days_since_reinforced": since_reinforced,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                        "last_reinforced_at": (
+                            r.last_reinforced_at.isoformat() if r.last_reinforced_at else None
+                        ),
+                    }
+                )
             return json.dumps(result, indent=2)
         finally:
             db.close()
@@ -244,17 +245,19 @@ class InspectFeedbackTool(BaseTool):
                 if fb.api_call_count > 3:
                     signals.append(f"LONG_CHAIN({fb.api_call_count})")
 
-                result.append({
-                    "query_id": fb.query_id,
-                    "user_message": fb.user_message[:200],
-                    "signals": signals,
-                    "had_rag": fb.had_rag_context,
-                    "total_tool_calls": fb.total_tool_calls,
-                    "explicit_feedback": fb.explicit_feedback,
-                    "feedback_note": fb.feedback_note,
-                    "processed": fb.processed,
-                    "created_at": fb.created_at.isoformat() if fb.created_at else None,
-                })
+                result.append(
+                    {
+                        "query_id": fb.query_id,
+                        "user_message": fb.user_message[:200],
+                        "signals": signals,
+                        "had_rag": fb.had_rag_context,
+                        "total_tool_calls": fb.total_tool_calls,
+                        "explicit_feedback": fb.explicit_feedback,
+                        "feedback_note": fb.feedback_note,
+                        "processed": fb.processed,
+                        "created_at": fb.created_at.isoformat() if fb.created_at else None,
+                    }
+                )
             return json.dumps(result, indent=2)
         finally:
             db.close()
@@ -322,11 +325,8 @@ class InspectConversationsTool(BaseTool):
                 if not stripped:
                     continue
 
-                ts = session.updated_at.strftime('%Y-%m-%d %H:%M')
-                session_text = (
-                    f"\n### Session {session.session_id[:8]}..."
-                    f" ({ts})\n"
-                )
+                ts = session.updated_at.strftime("%Y-%m-%d %H:%M")
+                session_text = f"\n### Session {session.session_id[:8]}..." f" ({ts})\n"
                 for msg in stripped[:20]:  # Limit messages per session
                     session_text += f"**{msg['role'].upper()}**: {msg['text'][:300]}\n"
                 parts.append(session_text)
@@ -492,8 +492,7 @@ class ReadMemoryTool(BaseTool):
             return "No memory files yet."
         return (
             "*Older dated sections collapsed to headings. "
-            "Read a specific category for full detail.*\n\n"
-            + "\n\n---\n\n".join(parts)
+            "Read a specific category for full detail.*\n\n" + "\n\n---\n\n".join(parts)
         )
 
 
@@ -529,8 +528,7 @@ class WriteSkillTool(BaseTool):
                 "skill_name": {
                     "type": "string",
                     "description": (
-                        "Kebab-case name (e.g., 'weekly-review'). "
-                        "[a-z0-9-], 2-50 chars."
+                        "Kebab-case name (e.g., 'weekly-review'). " "[a-z0-9-], 2-50 chars."
                     ),
                 },
                 "skill_type": {
@@ -893,9 +891,7 @@ class WriteMemoryTool(BaseTool):
         content = params["content"]
         mode = params.get("mode", "append")
 
-        write_memory_file(
-            category, content, self.org_dir, append=(mode == "append")
-        )
+        write_memory_file(category, content, self.org_dir, append=(mode == "append"))
 
         msg = f"{'Appended to' if mode == 'append' else 'Replaced'} memory/{category}.md"
         self._run_log.append(msg)
@@ -998,17 +994,18 @@ class WriteRulesSnapshotTool(BaseTool):
             rules = LearnedRuleRepository.get_active(db)
             snapshot: list[dict] = []
             for r in rules:
-                snapshot.append({
-                    "id": r.id,
-                    "type": r.rule_type,
-                    "text": r.rule_text,
-                    "confidence": round(r.confidence, 2),
-                    "hits": r.hit_count,
-                    "last_reinforced": (
-                        r.last_reinforced_at.isoformat()
-                        if r.last_reinforced_at else None
-                    ),
-                })
+                snapshot.append(
+                    {
+                        "id": r.id,
+                        "type": r.rule_type,
+                        "text": r.rule_text,
+                        "confidence": round(r.confidence, 2),
+                        "hits": r.hit_count,
+                        "last_reinforced": (
+                            r.last_reinforced_at.isoformat() if r.last_reinforced_at else None
+                        ),
+                    }
+                )
 
             pkm_dir = get_pkm_dir(self.org_dir)
             filepath = pkm_dir / "rules-snapshot.yaml"

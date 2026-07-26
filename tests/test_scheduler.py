@@ -7,7 +7,6 @@ All tests run without a real database connection (mocked).
 
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -144,7 +143,13 @@ def test_tool_name(tool):
 def test_tool_schema_has_action(tool):
     schema = tool.input_schema
     assert "action" in schema["properties"]
-    assert set(schema["properties"]["action"]["enum"]) == {"create", "list", "update", "delete", "toggle"}
+    assert set(schema["properties"]["action"]["enum"]) == {
+        "create",
+        "list",
+        "update",
+        "delete",
+        "toggle",
+    }
 
 
 def test_tool_unknown_action(tool):
@@ -170,7 +175,7 @@ def test_tool_create_missing_fields(tool):
 # Heartbeat
 # ---------------------------------------------------------------------------
 
-from pkm_bridge.scheduler.heartbeat import load_heartbeat_prompt, DEFAULT_HEARTBEAT_PROMPT
+from pkm_bridge.scheduler.heartbeat import DEFAULT_HEARTBEAT_PROMPT, load_heartbeat_prompt
 
 
 def test_load_heartbeat_prompt_missing(tmp_path):

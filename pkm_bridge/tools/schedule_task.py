@@ -36,39 +36,43 @@ class ScheduleTaskTool(BaseTool):
                 "action": {
                     "type": "string",
                     "enum": ["create", "list", "update", "delete", "toggle"],
-                    "description": "The action to perform"
+                    "description": "The action to perform",
                 },
                 "name": {
                     "type": "string",
-                    "description": "Task name (required for create, used to identify for update/delete/toggle)"
+                    "description": "Task name (required for create, used to identify for "
+                    "update/delete/toggle)",
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt sent to Claude when the task runs (required for create)"
+                    "description": "The prompt sent to Claude when the task runs "
+                    "(required for create)",
                 },
                 "schedule_type": {
                     "type": "string",
                     "enum": ["cron", "interval"],
-                    "description": "Schedule type (required for create)"
+                    "description": "Schedule type (required for create)",
                 },
                 "schedule_expr": {
                     "type": "string",
-                    "description": "Cron expression or interval (e.g. '0 9 * * 1-5' or '4h')"
+                    "description": "Cron expression or interval (e.g. '0 9 * * 1-5' or '4h')",
                 },
                 "description": {
                     "type": "string",
-                    "description": "Optional human-readable description"
+                    "description": "Optional human-readable description",
                 },
                 "task_id": {
                     "type": "integer",
-                    "description": "Task ID (alternative to name for update/delete/toggle)"
+                    "description": "Task ID (alternative to name for update/delete/toggle)",
                 },
                 "updates": {
                     "type": "object",
-                    "description": "Fields to update (for 'update' action): prompt, schedule_type, schedule_expr, description, max_turns, max_input_tokens, max_output_tokens"
+                    "description": "Fields to update (for 'update' action): prompt, "
+                    "schedule_type, schedule_expr, description, max_turns, "
+                    "max_input_tokens, max_output_tokens",
                 },
             },
-            "required": ["action"]
+            "required": ["action"],
         }
 
     def execute(self, params: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
@@ -89,7 +93,10 @@ class ScheduleTaskTool(BaseTool):
                 return f"Unknown action: '{action}'. Use create, list, update, delete, or toggle."
         except Exception as e:
             self.logger.error(f"schedule_task error ({action}): {e}", exc_info=True)
-            return f"Error in schedule_task '{action}': {type(e).__name__}: {e}. Try 'list' action to see existing tasks."
+            return (
+                f"Error in schedule_task '{action}': {type(e).__name__}: {e}. "
+                "Try 'list' action to see existing tasks."
+            )
 
     def _get_task(self, params: Dict[str, Any]):
         """Find a task by ID or name. Returns (db, task, identifier_desc)."""
@@ -177,10 +184,16 @@ class ScheduleTaskTool(BaseTool):
 
         db, task, ident = self._get_task(params)
         if not db:
-            return "Error: provide 'task_id' or 'name' to identify the task. Use 'list' action to see all tasks."
+            return (
+                "Error: provide 'task_id' or 'name' to identify the task. "
+                "Use 'list' action to see all tasks."
+            )
         if not task:
             db.close()
-            return f"Error: task not found ({ident}). Use 'list' action to see all tasks with their IDs and names."
+            return (
+                f"Error: task not found ({ident}). "
+                "Use 'list' action to see all tasks with their IDs and names."
+            )
 
         try:
             updates = params.get("updates", {})
@@ -188,12 +201,21 @@ class ScheduleTaskTool(BaseTool):
                 return "Error: provide 'updates' dict with fields to change."
 
             allowed_fields = {
-                'prompt', 'schedule_type', 'schedule_expr', 'description',
-                'max_turns', 'max_input_tokens', 'max_output_tokens', 'name',
+                "prompt",
+                "schedule_type",
+                "schedule_expr",
+                "description",
+                "max_turns",
+                "max_input_tokens",
+                "max_output_tokens",
+                "name",
             }
             filtered = {k: v for k, v in updates.items() if k in allowed_fields}
             if not filtered:
-                return f"Error: no valid fields to update. Allowed: {', '.join(sorted(allowed_fields))}"
+                return (
+                    "Error: no valid fields to update. "
+                    f"Allowed: {', '.join(sorted(allowed_fields))}"
+                )
 
             updated = ScheduledTaskRepository.update(db, task.id, **filtered)
             return f"Updated task '{updated.name}' (id={updated.id})."
@@ -205,10 +227,16 @@ class ScheduleTaskTool(BaseTool):
 
         db, task, ident = self._get_task(params)
         if not db:
-            return "Error: provide 'task_id' or 'name' to identify the task. Use 'list' action to see all tasks."
+            return (
+                "Error: provide 'task_id' or 'name' to identify the task. "
+                "Use 'list' action to see all tasks."
+            )
         if not task:
             db.close()
-            return f"Error: task not found ({ident}). Use 'list' action to see all tasks with their IDs and names."
+            return (
+                f"Error: task not found ({ident}). "
+                "Use 'list' action to see all tasks with their IDs and names."
+            )
 
         try:
             if task.is_heartbeat:
@@ -224,10 +252,16 @@ class ScheduleTaskTool(BaseTool):
 
         db, task, ident = self._get_task(params)
         if not db:
-            return "Error: provide 'task_id' or 'name' to identify the task. Use 'list' action to see all tasks."
+            return (
+                "Error: provide 'task_id' or 'name' to identify the task. "
+                "Use 'list' action to see all tasks."
+            )
         if not task:
             db.close()
-            return f"Error: task not found ({ident}). Use 'list' action to see all tasks with their IDs and names."
+            return (
+                f"Error: task not found ({ident}). "
+                "Use 'list' action to see all tasks with their IDs and names."
+            )
 
         try:
             new_state = not task.enabled

@@ -2,14 +2,15 @@
 
 import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 from .base import BaseTool
 
 
 class ListFilesTool(BaseTool):
     """List files in PKM directories with optional stats."""
 
-    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path | None = None):
         """Initialize file listing tool.
 
         Args:
@@ -38,9 +39,17 @@ class ListFilesTool(BaseTool):
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Glob pattern ('*.org', '**/*.org')"},
-                "show_stats": {"type": "boolean", "description": "Show sizes & mtimes", "default": False},
-                "directory": {"type": "string", "description": "Which directory: 'both' (default), 'org-mode', or 'logseq'", "default": "both"},
-            }
+                "show_stats": {
+                    "type": "boolean",
+                    "description": "Show sizes & mtimes",
+                    "default": False,
+                },
+                "directory": {
+                    "type": "string",
+                    "description": "Which directory: 'both' (default), 'org-mode', or 'logseq'",
+                    "default": "both",
+                },
+            },
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
@@ -57,6 +66,7 @@ class ListFilesTool(BaseTool):
         directory = params.get("directory", "both")
 
         try:
+
             def list_from_dir(base_dir: Path, dir_label: str):
                 if "**" in pattern:
                     files = list(base_dir.rglob(pattern.replace("**", "*")))
@@ -64,7 +74,11 @@ class ListFilesTool(BaseTool):
                     files = list(base_dir.glob(pattern))
 
                 # Hide dotfiles and .git
-                files = [f for f in files if '.git' not in f.parts and not any(part.startswith('.') for part in f.parts)]
+                files = [
+                    f
+                    for f in files
+                    if ".git" not in f.parts and not any(part.startswith(".") for part in f.parts)
+                ]
                 if not files:
                     return []
 
@@ -87,8 +101,12 @@ class ListFilesTool(BaseTool):
                         size = f.stat().st_size
                         size_str = f"{size:,} bytes" if size < 1024 else f"{size/1024:.1f} KB"
                         mtime = f.stat().st_mtime
-                        mtime_str = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-                        output.append(f"[{dir_label}] {rel_path} ({size_str}, modified {mtime_str})")
+                        mtime_str = datetime.datetime.fromtimestamp(mtime).strftime(
+                            "%Y-%m-%d %H:%M"
+                        )
+                        output.append(
+                            f"[{dir_label}] {rel_path} ({size_str}, modified {mtime_str})"
+                        )
                     else:
                         output.append(f"[{dir_label}] {rel_path}")
 
@@ -123,9 +141,10 @@ class ListFilesTool(BaseTool):
 class ReadNoteTool(BaseTool):
     """Read a note file's content (read-only, path-contained)."""
 
-    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path | None = None):
         super().__init__(logger)
         from ..file_editor import FileEditor
+
         self.editor = FileEditor(logger, str(org_dir), str(logseq_dir) if logseq_dir else None)
 
     @property

@@ -9,12 +9,13 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from .database import get_db, ConversationSession, LearnedRule, QueryFeedback
+from .database import ConversationSession, LearnedRule, get_db
 from .db_repository import (
-    QueryFeedbackRepository, QueryFeedbackExplicitRepository,
-    LearnedRuleRepository, ToolExecutionLogExtendedRepository,
+    LearnedRuleRepository,
+    QueryFeedbackExplicitRepository,
+    QueryFeedbackRepository,
+    ToolExecutionLogExtendedRepository,
 )
-
 from .models import get_role_model
 
 RETROSPECTIVE_PROMPT = """\
@@ -44,7 +45,8 @@ to identify patterns that can improve future retrieval and response quality.
 
 Analyze the feedback signals AND the actual conversations above. Look for:
 
-1. **Retrieval rules**: When the user asks about topic X, what additional context should be retrieved?
+1. **Retrieval rules**: When the user asks about topic X, what additional context should be
+   retrieved?
    - Look for cases where RAG missed relevant context and Claude had to search manually.
    - Look for topic associations the system should know about.
 
@@ -79,8 +81,9 @@ Analyze the feedback signals AND the actual conversations above. Look for:
     opportunities. If two or more skills do essentially the same thing, recommend which to
     keep and which to remove. Include these in the "skill_consolidations" field of your response.
 
-9. **Prompt amendments**: If you identify a change that should be made to the base system instructions
-   (not just a rule), propose it with rule_type "prompt_amendment" and rule_data containing
+9. **Prompt amendments**: If you identify a change that should be made to the base system
+   instructions (not just a rule), propose it with rule_type "prompt_amendment" and rule_data
+   containing
    {{"action": "add|modify|remove", "section": "...", "proposed_text": "..."}}.
    These require human approval before taking effect.
 
@@ -98,7 +101,8 @@ Respond with ONLY a JSON object (no markdown fencing):
 {{
   "rules": [
     {{
-      "rule_type": "retrieval|vocabulary|preference|embedding_gap|general|tool_strategy|prompt_amendment",
+      "rule_type":
+        "retrieval|vocabulary|preference|embedding_gap|general|tool_strategy|prompt_amendment",
       "rule_text": "human-readable description of the rule",
       "rule_data": {{}},
       "confidence": 0.5
@@ -134,45 +138,47 @@ def _strip_conversation_blocks(history: List[Dict[str, Any]]) -> List[Dict[str, 
     """
     stripped = []
     for msg in history:
-        role = msg.get('role', '')
-        content = msg.get('content', '')
+        role = msg.get("role", "")
+        content = msg.get("content", "")
 
-        if role == 'user':
+        if role == "user":
             if isinstance(content, str):
                 stripped.append({"role": "user", "text": content})
             elif isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict):
-                        if item.get('type') == 'tool_result':
+                        if item.get("type") == "tool_result":
                             # Include condensed tool result
-                            result_content = item.get('content', '')
+                            result_content = item.get("content", "")
                             if isinstance(result_content, str):
                                 result_preview = result_content[:200]
                             else:
                                 result_preview = str(result_content)[:200]
-                            stripped.append({"role": "system", "text": f"[RESULT: {result_preview}]"})
+                            stripped.append(
+                                {"role": "system", "text": f"[RESULT: {result_preview}]"}
+                            )
                     elif isinstance(item, str):
                         stripped.append({"role": "user", "text": item})
-        elif role == 'assistant':
+        elif role == "assistant":
             if isinstance(content, str):
                 stripped.append({"role": "assistant", "text": content})
             elif isinstance(content, list):
                 text_parts = []
                 for item in content:
                     if isinstance(item, dict):
-                        if item.get('type') == 'text':
-                            text_parts.append(item.get('text', ''))
-                        elif item.get('type') == 'tool_use':
+                        if item.get("type") == "text":
+                            text_parts.append(item.get("text", ""))
+                        elif item.get("type") == "tool_use":
                             # Include condensed tool call
-                            tool_name = item.get('name', '?')
-                            tool_input = item.get('input', {})
+                            tool_name = item.get("name", "?")
+                            tool_input = item.get("input", {})
                             # Summarize params
                             params_summary = str(tool_input)[:150]
                             text_parts.append(f"[TOOL: {tool_name}({params_summary})]")
                     elif isinstance(item, str):
                         text_parts.append(item)
                 if text_parts:
-                    stripped.append({"role": "assistant", "text": ' '.join(text_parts)})
+                    stripped.append({"role": "assistant", "text": " ".join(text_parts)})
 
     return stripped
 
@@ -198,7 +204,7 @@ def _format_feedback_summary(feedbacks) -> str:
 
         signal_str = ", ".join(signals) if signals else "OK"
         lines.append(
-            f"- Query: \"{fb.user_message[:120]}\" | "
+            f'- Query: "{fb.user_message[:120]}" | '
             f"RAG: {'yes' if fb.had_rag_context else 'no'} ({fb.rag_context_chars} chars) | "
             f"Tools: {fb.total_tool_calls} | Signals: {signal_str}"
         )
@@ -214,7 +220,8 @@ def _format_existing_rules(rules) -> str:
     lines = []
     for rule in rules:
         lines.append(
-            f"- [{rule.rule_type}] (conf={rule.confidence:.2f}, hits={rule.hit_count}) {rule.rule_text}"
+            f"- [{rule.rule_type}] (conf={rule.confidence:.2f}, hits={rule.hit_count})"
+            f" {rule.rule_text}"
         )
     return "\n".join(lines)
 
@@ -315,9 +322,11 @@ class SessionRetrospective:
                 if not rule_text:
                     continue
 
-                existing = db.query(LearnedRule).filter_by(
-                    rule_type=rule_type, rule_text=rule_text
-                ).first()
+                existing = (
+                    db.query(LearnedRule)
+                    .filter_by(rule_type=rule_type, rule_text=rule_text)
+                    .first()
+                )
 
                 if existing:
                     result["rules_reinforced"] += 1
@@ -371,9 +380,13 @@ class SessionRetrospective:
     def _load_recent_conversations(self, db) -> str:
         """Load and format recent session conversations for analysis."""
         cutoff = datetime.utcnow() - timedelta(hours=24)
-        sessions = db.query(ConversationSession).filter(
-            ConversationSession.updated_at >= cutoff
-        ).order_by(ConversationSession.updated_at.desc()).limit(10).all()
+        sessions = (
+            db.query(ConversationSession)
+            .filter(ConversationSession.updated_at >= cutoff)
+            .order_by(ConversationSession.updated_at.desc())
+            .limit(10)
+            .all()
+        )
 
         if not sessions:
             return "No recent conversations."
@@ -389,7 +402,10 @@ class SessionRetrospective:
             if not stripped:
                 continue
 
-            session_text = f"\n### Session {session.session_id[:8]}... ({session.updated_at.strftime('%Y-%m-%d %H:%M')})\n"
+            session_text = (
+                f"\n### Session {session.session_id[:8]}..."
+                f" ({session.updated_at.strftime('%Y-%m-%d %H:%M')})\n"
+            )
             for msg in stripped:
                 line = f"**{msg['role'].upper()}**: {msg['text'][:500]}\n"
                 session_text += line
@@ -409,6 +425,7 @@ class SessionRetrospective:
             return "No journal context available."
 
         from pathlib import Path
+
         journal_dir = Path(org_dir).expanduser()
 
         # Look for recent journal files
@@ -421,7 +438,7 @@ class SessionRetrospective:
                     mtime = datetime.fromtimestamp(f.stat().st_mtime)
                     if mtime >= cutoff:
                         # Read first few lines for topic hints
-                        with open(f, 'r', encoding='utf-8', errors='replace') as fh:
+                        with open(f, "r", encoding="utf-8", errors="replace") as fh:
                             preview = fh.read(500)
                         recent_files.append(f"- {f.name}: {preview[:200]}...")
                 except (OSError, IOError):
@@ -440,10 +457,14 @@ class SessionRetrospective:
         cutoff = datetime.utcnow() - timedelta(minutes=30)
         # Get sessions updated in the last 24h but idle for 30+ min
         recent_cutoff = datetime.utcnow() - timedelta(hours=24)
-        sessions = db.query(ConversationSession).filter(
-            ConversationSession.updated_at >= recent_cutoff,
-            ConversationSession.updated_at < cutoff,
-        ).all()
+        sessions = (
+            db.query(ConversationSession)
+            .filter(
+                ConversationSession.updated_at >= recent_cutoff,
+                ConversationSession.updated_at < cutoff,
+            )
+            .all()
+        )
 
         count = 0
         for session in sessions:
@@ -452,18 +473,16 @@ class SessionRetrospective:
 
             # Check if the last message is from the user
             last_msg = session.history[-1]
-            if last_msg.get('role') != 'user':
+            if last_msg.get("role") != "user":
                 continue
 
             # Find the last query feedback for this session
-            recent = QueryFeedbackRepository.get_recent_for_session(
-                db, session.session_id, limit=1
-            )
+            recent = QueryFeedbackRepository.get_recent_for_session(db, session.session_id, limit=1)
             if recent:
                 prev = recent[0]
                 if not prev.explicit_feedback:
                     QueryFeedbackExplicitRepository.mark_satisfaction(
-                        db, prev.query_id, 'abandoned'
+                        db, prev.query_id, "abandoned"
                     )
                     count += 1
 
@@ -487,21 +506,21 @@ class SessionRetrospective:
 
         lines = []
         for _, query_logs in list(grouped.items())[:50]:  # Limit to 50 queries
-            user_msg = query_logs[0].user_message[:100] if query_logs else '?'
-            tool_chain = ' -> '.join(
+            user_msg = query_logs[0].user_message[:100] if query_logs else "?"
+            tool_chain = " -> ".join(
                 f"{log.tool_name}({'ok' if log.exit_code in (None, 0) else f'err:{log.exit_code}'})"
                 for log in query_logs
             )
-            helpful_status = ''
+            helpful_status = ""
             for log in query_logs:
                 if log.was_helpful is True:
-                    helpful_status = ' [HELPFUL]'
+                    helpful_status = " [HELPFUL]"
                     break
                 elif log.was_helpful is False:
-                    helpful_status = ' [UNHELPFUL]'
+                    helpful_status = " [UNHELPFUL]"
                     break
 
-            lines.append(f"- \"{user_msg}\" => {tool_chain}{helpful_status}")
+            lines.append(f'- "{user_msg}" => {tool_chain}{helpful_status}')
 
         return "\n".join(lines)
 
@@ -512,15 +531,16 @@ class SessionRetrospective:
             return "No skills directory available."
 
         from pathlib import Path
+
         from .tools.skills import _parse_skill_file
 
-        skills_dir = Path(org_dir).expanduser() / '.pkm' / 'skills'
+        skills_dir = Path(org_dir).expanduser() / ".pkm" / "skills"
         if not skills_dir.exists():
             return "No skills saved yet."
 
         skills = []
         for filepath in sorted(skills_dir.iterdir()):
-            if filepath.suffix not in ('.sh', '.md'):
+            if filepath.suffix not in (".sh", ".md"):
                 continue
             parsed = _parse_skill_file(filepath)
             if not parsed:
@@ -532,12 +552,12 @@ class SessionRetrospective:
 
         lines = [f"Total: {len(skills)} skills\n"]
         for s in skills:
-            name = s.get('name', s.get('_file', '?'))
-            stype = s.get('_type', '?')
-            desc = s.get('description', '')
-            tags = ', '.join(s.get('tags', []))
-            use_count = s.get('use_count', 0)
-            body_preview = s.get('_body', '')[:150].replace('\n', ' ')
+            name = s.get("name", s.get("_file", "?"))
+            stype = s.get("_type", "?")
+            desc = s.get("description", "")
+            tags = ", ".join(s.get("tags", []))
+            use_count = s.get("use_count", 0)
+            body_preview = s.get("_body", "")[:150].replace("\n", " ")
             lines.append(
                 f"- **{name}** ({stype}): {desc}"
                 + (f" [tags: {tags}]" if tags else "")
@@ -561,7 +581,8 @@ class SessionRetrospective:
             return 0
 
         from pathlib import Path
-        skills_dir = Path(org_dir).expanduser() / '.pkm' / 'skills'
+
+        skills_dir = Path(org_dir).expanduser() / ".pkm" / "skills"
         if not skills_dir.exists():
             return 0
 
@@ -572,18 +593,14 @@ class SessionRetrospective:
             reason = consolidation.get("reason", "")
 
             # Only remove if the "keep" skill actually exists
-            keep_exists = any(
-                (skills_dir / f'{keep}{ext}').exists() for ext in ('.sh', '.md')
-            )
+            keep_exists = any((skills_dir / f"{keep}{ext}").exists() for ext in (".sh", ".md"))
             if not keep_exists:
-                self.logger.warning(
-                    f"Skill consolidation: '{keep}' (to keep) not found, skipping"
-                )
+                self.logger.warning(f"Skill consolidation: '{keep}' (to keep) not found, skipping")
                 continue
 
             for skill_name in remove_list:
-                for ext in ('.sh', '.md'):
-                    filepath = skills_dir / f'{skill_name}{ext}'
+                for ext in (".sh", ".md"):
+                    filepath = skills_dir / f"{skill_name}{ext}"
                     if filepath.exists():
                         filepath.unlink()
                         self.logger.info(
@@ -620,26 +637,29 @@ class SessionRetrospective:
 
         count = 0
         for skill in proposed_skills:
-            skill_name = skill.get('skill_name', '')
+            skill_name = skill.get("skill_name", "")
             if not skill_name:
                 continue
 
             # Check if skill already exists
-            skills_dir = Path(org_dir).expanduser() / '.pkm' / 'skills'
-            if (skills_dir / f'{skill_name}.sh').exists() or \
-               (skills_dir / f'{skill_name}.md').exists():
+            skills_dir = Path(org_dir).expanduser() / ".pkm" / "skills"
+            if (skills_dir / f"{skill_name}.sh").exists() or (
+                skills_dir / f"{skill_name}.md"
+            ).exists():
                 self.logger.debug(f"Skill '{skill_name}' already exists, skipping")
                 continue
 
             try:
-                result = save_tool.execute({
-                    'skill_name': skill_name,
-                    'skill_type': skill.get('skill_type', 'recipe'),
-                    'description': skill.get('description', ''),
-                    'content': skill.get('content', ''),
-                    'trigger': skill.get('trigger', ''),
-                    'tags': ['auto-proposed'],
-                })
+                result = save_tool.execute(
+                    {
+                        "skill_name": skill_name,
+                        "skill_type": skill.get("skill_type", "recipe"),
+                        "description": skill.get("description", ""),
+                        "content": skill.get("content", ""),
+                        "trigger": skill.get("trigger", ""),
+                        "tags": ["auto-proposed"],
+                    }
+                )
                 self.logger.info(f"Retrospective proposed skill: {result}")
                 count += 1
             except Exception as e:

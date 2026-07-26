@@ -2,7 +2,8 @@
 
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 from .base import BaseTool
 from .utils import run_command_with_error_handling
 
@@ -10,7 +11,7 @@ from .utils import run_command_with_error_handling
 class SearchNotesTool(BaseTool):
     """Search all notes in PKM directories."""
 
-    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path | None = None):
         """Initialize search_notes tool.
 
         Args:
@@ -50,10 +51,18 @@ Directories:
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "Regex pattern to search for"},
-                "context": {"type": "number", "default": 3, "description": "Lines of context to return on each side of each match"},
-                "limit": {"type": "number", "default": 10000, "description": "Approx character limit of returned results (max 200000)"},
+                "context": {
+                    "type": "number",
+                    "default": 3,
+                    "description": "Lines of context to return on each side of each match",
+                },
+                "limit": {
+                    "type": "number",
+                    "default": 10000,
+                    "description": "Approx character limit of returned results (max 200000)",
+                },
             },
-            "required": ["pattern"]
+            "required": ["pattern"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
@@ -72,7 +81,7 @@ Directories:
         org_dir = params.get("org_dir", self.org_dir)
         logseq_dir = params.get("logseq_dir", self.logseq_dir)
 
-        self.logger.info(f"Searching for \"{pattern}\", context={context}, limit={limit}")
+        self.logger.info(f'Searching for "{pattern}", context={context}, limit={limit}')
 
         try:
             start_time = time.time()
@@ -84,7 +93,7 @@ Directories:
             if logseq_dir:
                 logseq_path = Path(logseq_dir)
                 for workspace in sorted(logseq_path.iterdir()):
-                    if workspace.is_dir() and not workspace.name.startswith('.'):
+                    if workspace.is_dir() and not workspace.name.startswith("."):
                         journals = workspace / "journals"
                         pages = workspace / "pages"
                         if journals.is_dir():
@@ -100,9 +109,7 @@ Directories:
             self.logger.debug(f"Searching {len(search_dirs)} dirs: {cmd}")
 
             stdout, stderr, returncode = run_command_with_error_handling(
-                cmd,
-                timeout=15,
-                logger=self.logger
+                cmd, timeout=15, logger=self.logger
             )
 
             self.logger.debug(f"... returns {len(stdout)}b, exit code {returncode}")
@@ -131,7 +138,11 @@ Directories:
             elapsed = time.time() - start_time
             self.logger.debug(f"Search completed in {elapsed:.3f}s, {total_size} bytes")
 
-            return ''.join(output_parts) if output_parts else f"[No matches found for pattern '{pattern}']"
+            return (
+                "".join(output_parts)
+                if output_parts
+                else f"[No matches found for pattern '{pattern}']"
+            )
 
         except Exception as e:
             error_msg = f"❌ Error executing search: {str(e)}"

@@ -6,8 +6,8 @@ and self-corrections to improve LLM comprehension.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
 import logging
+from typing import TYPE_CHECKING
 
 from .models import get_role_model
 
@@ -54,7 +54,8 @@ class VoicePreprocessor:
         try:
             logger.debug(f"Preprocessing voice transcription: {transcription[:100]}...")
 
-            system_prompt = """You clean up voice transcriptions by removing disfluencies and false starts while preserving the speaker's intent.
+            system_prompt = """You clean up voice transcriptions by removing disfluencies and
+false starts while preserving the speaker's intent.
 
 Output ONLY the cleaned text. No explanations or commentary."""
 
@@ -73,10 +74,7 @@ Cleaned version:"""
                 model=get_role_model("voice"),
                 max_tokens=PREPROCESSING_MAX_TOKENS,
                 system=system_prompt,
-                messages=[{
-                    "role": "user",
-                    "content": user_prompt
-                }],
+                messages=[{"role": "user", "content": user_prompt}],
             )
 
             cleaned = response.content[0].text.strip()
@@ -87,7 +85,9 @@ Cleaned version:"""
                 return transcription
 
             # Log the cleaning with both versions for review
-            reduction = 100 - (100 * len(cleaned) // len(transcription)) if len(transcription) > 0 else 0
+            reduction = (
+                100 - (100 * len(cleaned) // len(transcription)) if len(transcription) > 0 else 0
+            )
             logger.info(f"🎤 Voice preprocessing ({reduction}% reduction):")
             logger.info(f"   Original: {transcription}")
             logger.info(f"   Cleaned:  {cleaned}")

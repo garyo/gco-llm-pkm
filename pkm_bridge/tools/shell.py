@@ -1,11 +1,12 @@
 """Shell command execution tools."""
 
+import re
 import subprocess
 import time
-import re
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
 from .base import BaseTool
 
 
@@ -68,7 +69,9 @@ def confine_working_dir(working_dir: str | None, org_dir: Path, logseq_dir: Path
 class ExecuteShellTool(BaseTool):
     """Execute shell commands and pipelines in PKM environment."""
 
-    def __init__(self, logger, dangerous_patterns: List[str], org_dir: Path, logseq_dir: Path|None = None):
+    def __init__(
+        self, logger, dangerous_patterns: List[str], org_dir: Path, logseq_dir: Path | None = None
+    ):
         """Initialize shell execution tool.
 
         Args:
@@ -143,10 +146,16 @@ Security notes:
         return {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command or pipeline to execute"},
-                "working_dir": {"type": "string", "description": f"Working directory (defaults to {self.org_dir})"}
+                "command": {
+                    "type": "string",
+                    "description": "Shell command or pipeline to execute",
+                },
+                "working_dir": {
+                    "type": "string",
+                    "description": f"Working directory (defaults to {self.org_dir})",
+                },
             },
-            "required": ["command"]
+            "required": ["command"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
@@ -175,11 +184,11 @@ Security notes:
             result = subprocess.run(
                 command,
                 shell=True,
-                executable='/bin/bash',  # Use bash for brace expansion, process substitution, etc.
+                executable="/bin/bash",  # Use bash for brace expansion, process substitution, etc.
                 cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
             )
             elapsed = time.time() - start_time
 
@@ -232,7 +241,9 @@ Security notes:
 class WriteAndExecuteScriptTool(BaseTool):
     """Write a shell script to /tmp and execute it."""
 
-    def __init__(self, logger, dangerous_patterns: List[str], org_dir: Path, logseq_dir: Path|None = None):
+    def __init__(
+        self, logger, dangerous_patterns: List[str], org_dir: Path, logseq_dir: Path | None = None
+    ):
         """Initialize script execution tool.
 
         Args:
@@ -282,18 +293,19 @@ Security notes:
             "properties": {
                 "script_content": {
                     "type": "string",
-                    "description": "Shell script content (without shebang - added automatically)"
+                    "description": "Shell script content (without shebang - added automatically)",
                 },
                 "description": {
                     "type": "string",
-                    "description": "Brief description of what this script does (for audit log)"
+                    "description": "Brief description of what this script does (for audit log)",
                 },
                 "working_dir": {
                     "type": "string",
-                    "description": f"Working directory for script execution (defaults to {self.org_dir})"
-                }
+                    "description": "Working directory for script execution "
+                    f"(defaults to {self.org_dir})",
+                },
             },
-            "required": ["script_content", "description"]
+            "required": ["script_content", "description"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
@@ -312,13 +324,11 @@ Security notes:
         # Validate against blacklist
         is_valid, error = validate_command(script_content, self.dangerous_patterns)
         if not is_valid:
-            self.logger.warning(
-                f"[SCRIPT_BLOCKED] description={description}, reason={error}"
-            )
+            self.logger.warning(f"[SCRIPT_BLOCKED] description={description}, reason={error}")
             return f"❌ {error}"
 
         # Create script file
-        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         script_path = f"/tmp/script-{timestamp}.sh"
 
         # Add shebang and safety options
@@ -328,7 +338,7 @@ Security notes:
 
         # Write script
         try:
-            with open(script_path, 'w') as f:
+            with open(script_path, "w") as f:
                 f.write(full_script)
             Path(script_path).chmod(0o755)
         except Exception as e:
@@ -338,8 +348,7 @@ Security notes:
 
         # Log for audit
         self.logger.info(
-            f"[SCRIPT_EXEC] description={description}, "
-            f"path={script_path}, cwd={working_dir}"
+            f"[SCRIPT_EXEC] description={description}, " f"path={script_path}, cwd={working_dir}"
         )
         self.logger.info(f"[SCRIPT_CONTENT]\n{full_script}")
 
@@ -351,7 +360,7 @@ Security notes:
                 cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=120  # Longer timeout for scripts
+                timeout=120,  # Longer timeout for scripts
             )
             elapsed = time.time() - start_time
 

@@ -5,6 +5,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from urllib.parse import urlencode
+
 import requests
 
 
@@ -17,9 +18,9 @@ class TickTickOAuth:
 
     def __init__(self):
         """Initialize OAuth handler with credentials from environment."""
-        self.client_id = os.getenv('TICKTICK_CLIENT_ID')
-        self.client_secret = os.getenv('TICKTICK_CLIENT_SECRET')
-        self.redirect_uri = os.getenv('TICKTICK_REDIRECT_URI')
+        self.client_id = os.getenv("TICKTICK_CLIENT_ID")
+        self.client_secret = os.getenv("TICKTICK_CLIENT_SECRET")
+        self.redirect_uri = os.getenv("TICKTICK_REDIRECT_URI")
 
         if not all([self.client_id, self.client_secret, self.redirect_uri]):
             raise ValueError(
@@ -41,19 +42,16 @@ class TickTickOAuth:
             state = secrets.token_urlsafe(32)
 
         params = {
-            'client_id': self.client_id,
-            'scope': 'tasks:read tasks:write',
-            'response_type': 'code',
-            'redirect_uri': self.redirect_uri,
-            'state': state
+            "client_id": self.client_id,
+            "scope": "tasks:read tasks:write",
+            "response_type": "code",
+            "redirect_uri": self.redirect_uri,
+            "state": state,
         }
 
         url = f"{self.AUTHORIZE_URL}?{urlencode(params)}"
 
-        return {
-            'url': url,
-            'state': state
-        }
+        return {"url": url, "state": state}
 
     def exchange_code(self, code: str) -> Dict[str, any]:
         """Exchange authorization code for access token.
@@ -71,32 +69,26 @@ class TickTickOAuth:
         Raises:
             requests.HTTPError: If token exchange fails
         """
-        data = {
-            'code': code,
-            'grant_type': 'authorization_code',
-            'redirect_uri': self.redirect_uri
-        }
+        data = {"code": code, "grant_type": "authorization_code", "redirect_uri": self.redirect_uri}
 
         # Send credentials via HTTP Basic Auth
         response = requests.post(
-            self.TOKEN_URL,
-            data=data,
-            auth=(self.client_id, self.client_secret)
+            self.TOKEN_URL, data=data, auth=(self.client_id, self.client_secret)
         )
         response.raise_for_status()
 
         token_data = response.json()
 
         # Calculate expiration time
-        expires_in = token_data.get('expires_in', 3600)
+        expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         return {
-            'access_token': token_data['access_token'],
-            'refresh_token': token_data.get('refresh_token'),
-            'expires_at': expires_at,
-            'token_type': token_data.get('token_type', 'Bearer'),
-            'scope': token_data.get('scope', 'tasks:read tasks:write')
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data.get("refresh_token"),
+            "expires_at": expires_at,
+            "token_type": token_data.get("token_type", "Bearer"),
+            "scope": token_data.get("scope", "tasks:read tasks:write"),
         }
 
     def refresh_token(self, refresh_token: str) -> Dict[str, any]:
@@ -111,31 +103,28 @@ class TickTickOAuth:
         Raises:
             requests.HTTPError: If token refresh fails
         """
-        data = {
-            'refresh_token': refresh_token,
-            'grant_type': 'refresh_token'
-        }
+        data = {"refresh_token": refresh_token, "grant_type": "refresh_token"}
 
         # Send credentials via HTTP Basic Auth
         response = requests.post(
-            self.TOKEN_URL,
-            data=data,
-            auth=(self.client_id, self.client_secret)
+            self.TOKEN_URL, data=data, auth=(self.client_id, self.client_secret)
         )
         response.raise_for_status()
 
         token_data = response.json()
 
         # Calculate expiration time
-        expires_in = token_data.get('expires_in', 3600)
+        expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         return {
-            'access_token': token_data['access_token'],
-            'refresh_token': token_data.get('refresh_token', refresh_token),  # Use old if not provided
-            'expires_at': expires_at,
-            'token_type': token_data.get('token_type', 'Bearer'),
-            'scope': token_data.get('scope', 'tasks:read tasks:write')
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data.get(
+                "refresh_token", refresh_token
+            ),  # Use old if not provided
+            "expires_at": expires_at,
+            "token_type": token_data.get("token_type", "Bearer"),
+            "scope": token_data.get("scope", "tasks:read tasks:write"),
         }
 
     def is_token_expired(self, expires_at: datetime, buffer_seconds: int = 300) -> bool:

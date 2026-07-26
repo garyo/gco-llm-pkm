@@ -6,14 +6,15 @@ but creates multiple overlapping chunks per file.
 """
 
 import re
-from pathlib import Path
-from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class Chunk:
     """Represents a semantically coherent chunk of text."""
+
     content: str
     chunk_type: str  # 'heading', 'content', 'bullet'
     heading_path: Optional[str]  # Hierarchical context
@@ -47,9 +48,9 @@ class NoteChunker:
         Returns:
             List of Chunk objects
         """
-        if file_path.suffix == '.org':
+        if file_path.suffix == ".org":
             return self.chunk_org_file(file_path)
-        elif file_path.suffix == '.md':
+        elif file_path.suffix == ".md":
             return self.chunk_markdown_file(file_path)
         else:
             raise ValueError(f"Unsupported file type: {file_path.suffix}")
@@ -72,7 +73,7 @@ class NoteChunker:
         """
         chunks = []
 
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         # Parse heading structure
@@ -82,31 +83,27 @@ class NoteChunker:
 
         for line_num, line in enumerate(lines, 1):
             # Match org heading (*, **, ***, etc.)
-            heading_match = re.match(r'^(\*+)\s+(.+)$', line)
+            heading_match = re.match(r"^(\*+)\s+(.+)$", line)
 
             if heading_match:
                 # Save previous section if exists
                 if current_content:
-                    chunks.extend(self._create_org_chunk(
-                        heading_stack,
-                        current_content,
-                        current_section_start
-                    ))
+                    chunks.extend(
+                        self._create_org_chunk(
+                            heading_stack, current_content, current_section_start
+                        )
+                    )
 
                 # Update heading stack
                 level = len(heading_match.group(1))
                 heading_text = heading_match.group(2).strip()
 
                 # Pop headings at same or deeper level
-                while heading_stack and heading_stack[-1]['level'] >= level:
+                while heading_stack and heading_stack[-1]["level"] >= level:
                     heading_stack.pop()
 
                 # Push new heading
-                heading_stack.append({
-                    'level': level,
-                    'text': heading_text,
-                    'line': line_num
-                })
+                heading_stack.append({"level": level, "text": heading_text, "line": line_num})
 
                 # Reset content for new section
                 current_content = [line]
@@ -117,19 +114,14 @@ class NoteChunker:
 
         # Don't forget last section
         if current_content:
-            chunks.extend(self._create_org_chunk(
-                heading_stack,
-                current_content,
-                current_section_start
-            ))
+            chunks.extend(
+                self._create_org_chunk(heading_stack, current_content, current_section_start)
+            )
 
         return chunks
 
     def _create_org_chunk(
-        self,
-        heading_stack: List[Dict[str, Any]],
-        content_lines: List[str],
-        start_line: int
+        self, heading_stack: List[Dict[str, Any]], content_lines: List[str], start_line: int
     ) -> List[Chunk]:
         """Create chunk(s) from an org section.
 
@@ -151,17 +143,17 @@ class NoteChunker:
         in_drawer = False
 
         for offset, line in enumerate(content_lines):
-            if line.strip().startswith(':PROPERTIES:'):
+            if line.strip().startswith(":PROPERTIES:"):
                 in_drawer = True
                 continue
-            if line.strip().startswith(':END:'):
+            if line.strip().startswith(":END:"):
                 in_drawer = False
                 continue
             if not in_drawer:
                 filtered_content.append((line, start_line + offset))
 
         # Join content
-        content_text = ''.join(line for line, _ in filtered_content).strip()
+        content_text = "".join(line for line, _ in filtered_content).strip()
 
         # Skip if too small
         token_count = self.estimate_tokens(content_text)
@@ -171,27 +163,24 @@ class NoteChunker:
         # Build heading path
         heading_path = None
         if heading_stack:
-            heading_path = '\n'.join([
-                ('*' * h['level']) + ' ' + h['text']
-                for h in heading_stack
-            ])
+            heading_path = "\n".join([("*" * h["level"]) + " " + h["text"] for h in heading_stack])
 
         if token_count <= self.max_tokens:
-            return [Chunk(
-                content=content_text,
-                chunk_type='heading',
-                heading_path=heading_path,
-                start_line=start_line,
-                token_count=token_count
-            )]
+            return [
+                Chunk(
+                    content=content_text,
+                    chunk_type="heading",
+                    heading_path=heading_path,
+                    start_line=start_line,
+                    token_count=token_count,
+                )
+            ]
 
         # Too large: split on paragraph boundaries
         return self._split_oversized_section(filtered_content, heading_path)
 
     def _split_oversized_section(
-        self,
-        filtered_content: List[tuple[str, int]],
-        heading_path: Optional[str]
+        self, filtered_content: List[tuple[str, int]], heading_path: Optional[str]
     ) -> List[Chunk]:
         """Split an oversized org section into paragraph-bounded chunks.
 
@@ -208,36 +197,40 @@ class NoteChunker:
         current_start = filtered_content[0][1] if filtered_content else 0
 
         for line, line_num in filtered_content:
-            is_blank = line.strip() == ''
+            is_blank = line.strip() == ""
             if is_blank and current_lines:
-                candidate = ''.join(current_lines + [line])
+                candidate = "".join(current_lines + [line])
                 if self.estimate_tokens(candidate) > self.max_tokens:
-                    text = ''.join(current_lines).strip()
+                    text = "".join(current_lines).strip()
                     tc = self.estimate_tokens(text)
                     if tc >= self.min_tokens:
-                        chunks.append(Chunk(
-                            content=text,
-                            chunk_type='heading',
-                            heading_path=heading_path,
-                            start_line=current_start,
-                            token_count=tc
-                        ))
+                        chunks.append(
+                            Chunk(
+                                content=text,
+                                chunk_type="heading",
+                                heading_path=heading_path,
+                                start_line=current_start,
+                                token_count=tc,
+                            )
+                        )
                     current_lines = []
                     current_start = line_num + 1
                     continue
             current_lines.append(line)
 
         if current_lines:
-            text = ''.join(current_lines).strip()
+            text = "".join(current_lines).strip()
             tc = self.estimate_tokens(text)
             if tc >= self.min_tokens:
-                chunks.append(Chunk(
-                    content=text,
-                    chunk_type='heading',
-                    heading_path=heading_path,
-                    start_line=current_start,
-                    token_count=tc
-                ))
+                chunks.append(
+                    Chunk(
+                        content=text,
+                        chunk_type="heading",
+                        heading_path=heading_path,
+                        start_line=current_start,
+                        token_count=tc,
+                    )
+                )
 
         return chunks
 
@@ -257,7 +250,7 @@ class NoteChunker:
         """
         chunks = []
 
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         # Parse heading and bullet structure
@@ -267,24 +260,21 @@ class NoteChunker:
 
         for line_num, line in enumerate(lines, 1):
             # Match markdown heading (# ## ### etc.)
-            heading_match = re.match(r'^(#+)\s+(.+)$', line)
+            heading_match = re.match(r"^(#+)\s+(.+)$", line)
 
             # Match bullet (-, *, or numbered)
-            bullet_match = re.match(r'^(\s*)([-*]|\d+\.)\s+', line)
+            bullet_match = re.match(r"^(\s*)([-*]|\d+\.)\s+", line)
 
             if heading_match:
                 # Save previous chunk
                 if current_chunk_lines:
                     chunk = self._create_markdown_chunk(
-                        current_heading_stack,
-                        current_chunk_lines,
-                        current_start_line
+                        current_heading_stack, current_chunk_lines, current_start_line
                     )
                     if chunk:
                         chunks.append(chunk)
 
                 # Update heading stack
-                level = len(heading_match.group(1))
                 heading_text = heading_match.group(2).strip()
 
                 # Reset for new section
@@ -302,12 +292,10 @@ class NoteChunker:
                 current_chunk_lines.append(line)
 
                 # Split if chunk gets too large
-                chunk_text = ''.join(current_chunk_lines)
+                chunk_text = "".join(current_chunk_lines)
                 if self.estimate_tokens(chunk_text) > self.max_tokens:
                     chunk = self._create_markdown_chunk(
-                        current_heading_stack,
-                        current_chunk_lines,
-                        current_start_line
+                        current_heading_stack, current_chunk_lines, current_start_line
                     )
                     if chunk:
                         chunks.append(chunk)
@@ -319,9 +307,7 @@ class NoteChunker:
         # Don't forget last chunk
         if current_chunk_lines:
             chunk = self._create_markdown_chunk(
-                current_heading_stack,
-                current_chunk_lines,
-                current_start_line
+                current_heading_stack, current_chunk_lines, current_start_line
             )
             if chunk:
                 chunks.append(chunk)
@@ -349,34 +335,38 @@ class NoteChunker:
         if token_count <= self.max_tokens:
             if token_count < self.min_tokens:
                 return []
-            return [Chunk(
-                content=full_text,
-                chunk_type='email',
-                heading_path=heading_path,
-                start_line=0,
-                token_count=token_count,
-            )]
+            return [
+                Chunk(
+                    content=full_text,
+                    chunk_type="email",
+                    heading_path=heading_path,
+                    start_line=0,
+                    token_count=token_count,
+                )
+            ]
 
         # Split body on paragraph boundaries
-        paragraphs = re.split(r'\n\s*\n', body)
+        paragraphs = re.split(r"\n\s*\n", body)
         chunks: List[Chunk] = []
-        current_body = ''
+        current_body = ""
 
         for para in paragraphs:
-            candidate = current_body + ('\n\n' if current_body else '') + para
+            candidate = current_body + ("\n\n" if current_body else "") + para
             candidate_full = header + candidate
 
             if self.estimate_tokens(candidate_full) > self.max_tokens and current_body:
                 chunk_text = header + current_body
                 tc = self.estimate_tokens(chunk_text)
                 if tc >= self.min_tokens:
-                    chunks.append(Chunk(
-                        content=chunk_text,
-                        chunk_type='email',
-                        heading_path=heading_path,
-                        start_line=0,
-                        token_count=tc,
-                    ))
+                    chunks.append(
+                        Chunk(
+                            content=chunk_text,
+                            chunk_type="email",
+                            heading_path=heading_path,
+                            start_line=0,
+                            token_count=tc,
+                        )
+                    )
                 current_body = para
             else:
                 current_body = candidate
@@ -386,21 +376,20 @@ class NoteChunker:
             chunk_text = header + current_body
             tc = self.estimate_tokens(chunk_text)
             if tc >= self.min_tokens:
-                chunks.append(Chunk(
-                    content=chunk_text,
-                    chunk_type='email',
-                    heading_path=heading_path,
-                    start_line=0,
-                    token_count=tc,
-                ))
+                chunks.append(
+                    Chunk(
+                        content=chunk_text,
+                        chunk_type="email",
+                        heading_path=heading_path,
+                        start_line=0,
+                        token_count=tc,
+                    )
+                )
 
         return chunks
 
     def _create_markdown_chunk(
-        self,
-        heading_stack: List[str],
-        content_lines: List[str],
-        start_line: int
+        self, heading_stack: List[str], content_lines: List[str], start_line: int
     ) -> Optional[Chunk]:
         """Create a chunk from a markdown section.
 
@@ -412,7 +401,7 @@ class NoteChunker:
         Returns:
             Chunk object or None if content too small
         """
-        content_text = ''.join(content_lines).strip()
+        content_text = "".join(content_lines).strip()
 
         # Skip if too small
         token_count = self.estimate_tokens(content_text)
@@ -422,12 +411,12 @@ class NoteChunker:
         # Build heading path
         heading_path = None
         if heading_stack:
-            heading_path = ' > '.join(heading_stack)
+            heading_path = " > ".join(heading_stack)
 
         return Chunk(
             content=content_text,
-            chunk_type='bullet',
+            chunk_type="bullet",
             heading_path=heading_path,
             start_line=start_line,
-            token_count=token_count
+            token_count=token_count,
         )

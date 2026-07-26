@@ -6,61 +6,62 @@ user follow-up corrections, and satisfaction signals.
 """
 
 import re
-from typing import List, Optional
+from typing import List
 
 from .database import get_db
 from .db_repository import (
-    QueryFeedbackRepository,
-    QueryFeedbackExplicitRepository,
-    ToolExecutionLogExtendedRepository,
     LearnedRuleRepository,
+    QueryFeedbackExplicitRepository,
+    QueryFeedbackRepository,
+    ToolExecutionLogExtendedRepository,
 )
 
 # Search tools that indicate Claude is looking for information beyond RAG
-SEARCH_TOOL_NAMES = {'search_notes', 'find_context', 'semantic_search'}
+SEARCH_TOOL_NAMES = {"search_notes", "find_context", "semantic_search"}
 
 # Patterns indicating user dissatisfaction in follow-up messages
 CORRECTION_PATTERNS = [
-    r'\bno\b[,.]?\s*(?:that|those|this)',
-    r'\bwrong\b',
-    r'\bnot what i (?:meant|asked|wanted)\b',
-    r'\bactually i was asking about\b',
+    r"\bno\b[,.]?\s*(?:that|those|this)",
+    r"\bwrong\b",
+    r"\bnot what i (?:meant|asked|wanted)\b",
+    r"\bactually i was asking about\b",
     r"\bcouldn'?t find\b",
     r"\bdidn'?t find\b",
     r"\bthat'?s not (?:it|right|correct)\b",
-    r'\btry again\b',
-    r'\bi (?:meant|mean)\b',
-    r'\bnot (?:quite|exactly|really)\b',
+    r"\btry again\b",
+    r"\bi (?:meant|mean)\b",
+    r"\bnot (?:quite|exactly|really)\b",
 ]
-CORRECTION_RE = re.compile('|'.join(CORRECTION_PATTERNS), re.IGNORECASE)
+CORRECTION_RE = re.compile("|".join(CORRECTION_PATTERNS), re.IGNORECASE)
 
 # Short negation responses (entire message is just a negation)
 SHORT_NEGATION_RE = re.compile(
-    r'^\s*(?:no\.?|nope\.?|nah\.?|wrong\.?|incorrect\.?)\s*$',
+    r"^\s*(?:no\.?|nope\.?|nah\.?|wrong\.?|incorrect\.?)\s*$",
     re.IGNORECASE,
 )
 
 # Patterns indicating user satisfaction
 SATISFACTION_PATTERNS = [
-    r'(?<!\bno\s)\bthanks?\b',
-    r'(?<!\bno\s)\bthank you\b',
-    r'\bperfect\b',
-    r'\bexactly\b',
+    r"(?<!\bno\s)\bthanks?\b",
+    r"(?<!\bno\s)\bthank you\b",
+    r"\bperfect\b",
+    r"\bexactly\b",
     r"\bthat'?s it\b",
-    r'\bgreat\b',
-    r'\bawesome\b',
-    r'\bexcellent\b',
-    r'\bnice\b',
-    r'\bgot it\b',
-    r'\bwonderful\b',
-    r'\byep\b',
-    r'\byes,?\s*that',
+    r"\bgreat\b",
+    r"\bawesome\b",
+    r"\bexcellent\b",
+    r"\bnice\b",
+    r"\bgot it\b",
+    r"\bwonderful\b",
+    r"\byep\b",
+    r"\byes,?\s*that",
 ]
-SATISFACTION_RE = re.compile('|'.join(SATISFACTION_PATTERNS), re.IGNORECASE)
+SATISFACTION_RE = re.compile("|".join(SATISFACTION_PATTERNS), re.IGNORECASE)
 
 # Short affirmation responses (entire message)
 SHORT_AFFIRMATION_RE = re.compile(
-    r'^\s*(?:thanks?\.?|thank you\.?|perfect\.?|great\.?|awesome\.?|nice\.?|yes\.?|yep\.?|ok\.?|cool\.?)\s*$',
+    r"^\s*(?:thanks?\.?|thank you\.?|perfect\.?|great\.?|awesome\.?"
+    r"|nice\.?|yes\.?|yep\.?|ok\.?|cool\.?)\s*$",
     re.IGNORECASE,
 )
 
@@ -115,7 +116,10 @@ def capture_feedback(
                 retrieval_miss=retrieval_miss,
             )
             if retrieval_miss:
-                logger.info(f"Feedback: retrieval miss detected (RAG present but {len(search_tools_used)} search tools used)")
+                logger.info(
+                    f"Feedback: retrieval miss detected "
+                    f"(RAG present but {len(search_tools_used)} search tools used)"
+                )
         finally:
             db.close()
     except Exception as e:
@@ -163,13 +167,19 @@ def check_previous_correction(
                     try:
                         LearnedRuleRepository.merge_or_create(
                             db,
-                            rule_type='preference',
-                            rule_text=f"User corrected: '{prev.user_message[:80]}' -> '{user_message[:120]}'",
-                            rule_data={"source": "hot_correction", "original_query": prev.user_message[:200]},
+                            rule_type="preference",
+                            rule_text=f"User corrected: '{prev.user_message[:80]}'"
+                            f" -> '{user_message[:120]}'",
+                            rule_data={
+                                "source": "hot_correction",
+                                "original_query": prev.user_message[:200],
+                            },
                             confidence=0.3,
                             source_query_ids=[prev.query_id],
                         )
-                        logger.info(f"Feedback: created hot correction rule for query {prev.query_id}")
+                        logger.info(
+                            f"Feedback: created hot correction rule for query {prev.query_id}"
+                        )
                     except Exception as rule_err:
                         logger.warning(f"Failed to create hot rule: {rule_err}")
 
@@ -177,7 +187,9 @@ def check_previous_correction(
                 # Mark as positive implicit (don't overwrite explicit feedback)
                 marked = QueryFeedbackExplicitRepository.mark_satisfaction(db, prev.query_id)
                 if marked:
-                    logger.info(f"Feedback: marked previous query {prev.query_id} as positive_implicit")
+                    logger.info(
+                        f"Feedback: marked previous query {prev.query_id} as positive_implicit"
+                    )
 
                 # Mark tool executions as helpful (Phase 4)
                 count = ToolExecutionLogExtendedRepository.mark_helpful(db, prev.query_id)

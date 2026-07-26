@@ -1,11 +1,20 @@
 """Repository pattern for database operations."""
 
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import SQLAlchemyError
+from typing import Any, Dict, List, Optional
 
-from .database import OAuthToken, ConversationSession, UserSettings, ToolExecutionLog, QueryFeedback, LearnedRule, SessionNote, AgentRunLog
+from sqlalchemy.orm import Session
+
+from .database import (
+    AgentRunLog,
+    ConversationSession,
+    LearnedRule,
+    OAuthToken,
+    QueryFeedback,
+    SessionNote,
+    ToolExecutionLog,
+    UserSettings,
+)
 
 
 class OAuthRepository:
@@ -19,14 +28,11 @@ class OAuthRepository:
         refresh_token: Optional[str] = None,
         expires_at: Optional[datetime] = None,
         scope: Optional[str] = None,
-        user_id: str = 'default'
+        user_id: str = "default",
     ) -> OAuthToken:
         """Save or update OAuth token for a service."""
         # Check if token exists
-        token = db.query(OAuthToken).filter_by(
-            user_id=user_id,
-            service=service
-        ).first()
+        token = db.query(OAuthToken).filter_by(user_id=user_id, service=service).first()
 
         if token:
             # Update existing token
@@ -44,7 +50,7 @@ class OAuthRepository:
                 access_token=access_token,
                 refresh_token=refresh_token,
                 expires_at=expires_at,
-                scope=scope
+                scope=scope,
             )
             db.add(token)
 
@@ -53,20 +59,14 @@ class OAuthRepository:
         return token
 
     @staticmethod
-    def get_token(db: Session, service: str, user_id: str = 'default') -> Optional[OAuthToken]:
+    def get_token(db: Session, service: str, user_id: str = "default") -> Optional[OAuthToken]:
         """Get OAuth token for a service."""
-        return db.query(OAuthToken).filter_by(
-            user_id=user_id,
-            service=service
-        ).first()
+        return db.query(OAuthToken).filter_by(user_id=user_id, service=service).first()
 
     @staticmethod
-    def delete_token(db: Session, service: str, user_id: str = 'default') -> bool:
+    def delete_token(db: Session, service: str, user_id: str = "default") -> bool:
         """Delete OAuth token for a service."""
-        token = db.query(OAuthToken).filter_by(
-            user_id=user_id,
-            service=service
-        ).first()
+        token = db.query(OAuthToken).filter_by(user_id=user_id, service=service).first()
 
         if token:
             db.delete(token)
@@ -87,17 +87,11 @@ class SessionRepository:
 
     @staticmethod
     def create_session(
-        db: Session,
-        session_id: str,
-        system_prompt: Optional[str] = None,
-        user_id: str = 'default'
+        db: Session, session_id: str, system_prompt: Optional[str] = None, user_id: str = "default"
     ) -> ConversationSession:
         """Create a new conversation session."""
         session = ConversationSession(
-            session_id=session_id,
-            user_id=user_id,
-            history=[],
-            system_prompt=system_prompt
+            session_id=session_id, user_id=user_id, history=[], system_prompt=system_prompt
         )
         db.add(session)
         db.commit()
@@ -107,31 +101,21 @@ class SessionRepository:
     @staticmethod
     def get_session(db: Session, session_id: str) -> Optional[ConversationSession]:
         """Get conversation session by ID."""
-        return db.query(ConversationSession).filter_by(
-            session_id=session_id
-        ).first()
+        return db.query(ConversationSession).filter_by(session_id=session_id).first()
 
     @staticmethod
     def get_or_create_session(
-        db: Session,
-        session_id: str,
-        system_prompt: Optional[str] = None,
-        user_id: str = 'default'
+        db: Session, session_id: str, system_prompt: Optional[str] = None, user_id: str = "default"
     ) -> ConversationSession:
         """Get existing session or create new one."""
         session = SessionRepository.get_session(db, session_id)
         if not session:
-            session = SessionRepository.create_session(
-                db, session_id, system_prompt, user_id
-            )
+            session = SessionRepository.create_session(db, session_id, system_prompt, user_id)
         return session
 
     @staticmethod
     def append_message(
-        db: Session,
-        session_id: str,
-        role: str,
-        content: Any
+        db: Session, session_id: str, role: str, content: Any
     ) -> ConversationSession:
         """Append a message to session history."""
         session = SessionRepository.get_session(db, session_id)
@@ -143,10 +127,7 @@ class SessionRepository:
             session.history = []
 
         # Append message
-        session.history.append({
-            "role": role,
-            "content": content
-        })
+        session.history.append({"role": role, "content": content})
         session.updated_at = datetime.utcnow()
 
         db.commit()
@@ -155,9 +136,7 @@ class SessionRepository:
 
     @staticmethod
     def update_history(
-        db: Session,
-        session_id: str,
-        history: List[Dict[str, Any]]
+        db: Session, session_id: str, history: List[Dict[str, Any]]
     ) -> ConversationSession:
         """Replace entire session history."""
         session = SessionRepository.get_session(db, session_id)
@@ -174,9 +153,7 @@ class SessionRepository:
     @staticmethod
     def delete_session(db: Session, session_id: str) -> bool:
         """Delete a conversation session."""
-        session = db.query(ConversationSession).filter_by(
-            session_id=session_id
-        ).first()
+        session = db.query(ConversationSession).filter_by(session_id=session_id).first()
 
         if session:
             db.delete(session)
@@ -211,18 +188,21 @@ class SessionRepository:
         return session
 
     @staticmethod
-    def get_all_sessions(db: Session, user_id: str = 'default') -> List[ConversationSession]:
+    def get_all_sessions(db: Session, user_id: str = "default") -> List[ConversationSession]:
         """Get all sessions for a user."""
-        return db.query(ConversationSession).filter_by(
-            user_id=user_id
-        ).order_by(ConversationSession.updated_at.desc()).all()
+        return (
+            db.query(ConversationSession)
+            .filter_by(user_id=user_id)
+            .order_by(ConversationSession.updated_at.desc())
+            .all()
+        )
 
 
 class UserSettingsRepository:
     """Repository for user settings operations."""
 
     @staticmethod
-    def get_user_context(db: Session, user_id: str = 'default') -> Optional[str]:
+    def get_user_context(db: Session, user_id: str = "default") -> Optional[str]:
         """Get user context for a user.
 
         Returns:
@@ -232,7 +212,7 @@ class UserSettingsRepository:
         return settings.user_context if settings else None
 
     @staticmethod
-    def save_user_context(db: Session, context: str, user_id: str = 'default') -> UserSettings:
+    def save_user_context(db: Session, context: str, user_id: str = "default") -> UserSettings:
         """Save or update user context.
 
         Args:
@@ -251,10 +231,7 @@ class UserSettingsRepository:
             settings.updated_at = datetime.utcnow()
         else:
             # Create new settings
-            settings = UserSettings(
-                user_id=user_id,
-                user_context=context
-            )
+            settings = UserSettings(user_id=user_id, user_context=context)
             db.add(settings)
 
         db.commit()
@@ -262,7 +239,7 @@ class UserSettingsRepository:
         return settings
 
     @staticmethod
-    def get_or_create_settings(db: Session, user_id: str = 'default') -> UserSettings:
+    def get_or_create_settings(db: Session, user_id: str = "default") -> UserSettings:
         """Get existing settings or create new one with empty context.
 
         Args:
@@ -274,7 +251,7 @@ class UserSettingsRepository:
         """
         settings = db.query(UserSettings).filter_by(user_id=user_id).first()
         if not settings:
-            settings = UserSettings(user_id=user_id, user_context='')
+            settings = UserSettings(user_id=user_id, user_context="")
             db.add(settings)
             db.commit()
             db.refresh(settings)
@@ -294,7 +271,7 @@ class ToolExecutionLogRepository:
         tool_params: dict,
         result_summary: str,
         exit_code: Optional[int],
-        execution_time_ms: int
+        execution_time_ms: int,
     ) -> ToolExecutionLog:
         """Create a new tool execution log entry.
 
@@ -320,7 +297,7 @@ class ToolExecutionLogRepository:
             tool_params=tool_params,
             result_summary=result_summary,
             exit_code=exit_code,
-            execution_time_ms=execution_time_ms
+            execution_time_ms=execution_time_ms,
         )
         db.add(log)
         db.commit()
@@ -328,7 +305,9 @@ class ToolExecutionLogRepository:
         return log
 
     @staticmethod
-    def get_logs_for_session(db: Session, session_id: str, limit: int = 100) -> List[ToolExecutionLog]:
+    def get_logs_for_session(
+        db: Session, session_id: str, limit: int = 100
+    ) -> List[ToolExecutionLog]:
         """Get tool execution logs for a session, ordered by creation time.
 
         Args:
@@ -339,9 +318,13 @@ class ToolExecutionLogRepository:
         Returns:
             List of ToolExecutionLog objects
         """
-        return db.query(ToolExecutionLog).filter_by(
-            session_id=session_id
-        ).order_by(ToolExecutionLog.created_at.desc()).limit(limit).all()
+        return (
+            db.query(ToolExecutionLog)
+            .filter_by(session_id=session_id)
+            .order_by(ToolExecutionLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
 
     @staticmethod
     def delete_old_logs(db: Session, days: int = 30) -> int:
@@ -355,9 +338,9 @@ class ToolExecutionLogRepository:
             Number of logs deleted
         """
         cutoff_date = datetime.utcnow() - timedelta(days=days)
-        count = db.query(ToolExecutionLog).filter(
-            ToolExecutionLog.created_at < cutoff_date
-        ).delete()
+        count = (
+            db.query(ToolExecutionLog).filter(ToolExecutionLog.created_at < cutoff_date).delete()
+        )
         db.commit()
         return count
 
@@ -406,36 +389,40 @@ class QueryFeedbackRepository:
     @staticmethod
     def get_unprocessed(db: Session, limit: int = 200) -> List[QueryFeedback]:
         """Get unprocessed feedback records for retrospective analysis."""
-        return db.query(QueryFeedback).filter(
-            QueryFeedback.processed == False
-        ).order_by(QueryFeedback.created_at.asc()).limit(limit).all()
+        return (
+            db.query(QueryFeedback)
+            .filter(QueryFeedback.processed.is_(False))
+            .order_by(QueryFeedback.created_at.asc())
+            .limit(limit)
+            .all()
+        )
 
     @staticmethod
     def mark_processed(db: Session, feedback_ids: List[int]) -> None:
         """Mark feedback records as processed."""
         if not feedback_ids:
             return
-        db.query(QueryFeedback).filter(
-            QueryFeedback.id.in_(feedback_ids)
-        ).update({
-            QueryFeedback.processed: True,
-            QueryFeedback.processed_at: datetime.utcnow()
-        }, synchronize_session='fetch')
+        db.query(QueryFeedback).filter(QueryFeedback.id.in_(feedback_ids)).update(
+            {QueryFeedback.processed: True, QueryFeedback.processed_at: datetime.utcnow()},
+            synchronize_session="fetch",
+        )
         db.commit()
 
     @staticmethod
     def get_recent_for_session(db: Session, session_id: str, limit: int = 1) -> List[QueryFeedback]:
         """Get most recent feedback records for a session."""
-        return db.query(QueryFeedback).filter(
-            QueryFeedback.session_id == session_id
-        ).order_by(QueryFeedback.created_at.desc()).limit(limit).all()
+        return (
+            db.query(QueryFeedback)
+            .filter(QueryFeedback.session_id == session_id)
+            .order_by(QueryFeedback.created_at.desc())
+            .limit(limit)
+            .all()
+        )
 
     @staticmethod
     def mark_correction(db: Session, query_id: str) -> None:
         """Mark a query feedback record as having a user follow-up correction."""
-        feedback = db.query(QueryFeedback).filter(
-            QueryFeedback.query_id == query_id
-        ).first()
+        feedback = db.query(QueryFeedback).filter(QueryFeedback.query_id == query_id).first()
         if feedback:
             feedback.user_followup_correction = True
             db.commit()
@@ -444,18 +431,28 @@ class QueryFeedbackRepository:
     def get_stats(db: Session, days: int = 7) -> Dict[str, Any]:
         """Get feedback statistics for the last N days."""
         from sqlalchemy import func
+
         cutoff = datetime.utcnow() - timedelta(days=days)
-        total = db.query(func.count(QueryFeedback.id)).filter(
-            QueryFeedback.created_at >= cutoff
-        ).scalar() or 0
-        misses = db.query(func.count(QueryFeedback.id)).filter(
-            QueryFeedback.created_at >= cutoff,
-            QueryFeedback.retrieval_miss == True
-        ).scalar() or 0
-        corrections = db.query(func.count(QueryFeedback.id)).filter(
-            QueryFeedback.created_at >= cutoff,
-            QueryFeedback.user_followup_correction == True
-        ).scalar() or 0
+        total = (
+            db.query(func.count(QueryFeedback.id))
+            .filter(QueryFeedback.created_at >= cutoff)
+            .scalar()
+            or 0
+        )
+        misses = (
+            db.query(func.count(QueryFeedback.id))
+            .filter(QueryFeedback.created_at >= cutoff, QueryFeedback.retrieval_miss.is_(True))
+            .scalar()
+            or 0
+        )
+        corrections = (
+            db.query(func.count(QueryFeedback.id))
+            .filter(
+                QueryFeedback.created_at >= cutoff, QueryFeedback.user_followup_correction.is_(True)
+            )
+            .scalar()
+            or 0
+        )
         return {
             "total_queries": total,
             "retrieval_misses": misses,
@@ -499,17 +496,21 @@ class LearnedRuleRepository:
         reshuffle whenever a row is updated, which churns the downstream prompt
         cache. Stable order keeps the injected block byte-identical between runs.
         """
-        return db.query(LearnedRule).filter(
-            LearnedRule.is_active == True  # noqa: E712
-        ).order_by(LearnedRule.confidence.desc(), LearnedRule.id.asc()).all()
+        return (
+            db.query(LearnedRule)
+            .filter(LearnedRule.is_active.is_(True))
+            .order_by(LearnedRule.confidence.desc(), LearnedRule.id.asc())
+            .all()
+        )
 
     @staticmethod
     def get_all(db: Session) -> List[LearnedRule]:
         """Get all learned rules (active and inactive)."""
-        return db.query(LearnedRule).order_by(
-            LearnedRule.is_active.desc(),
-            LearnedRule.confidence.desc()
-        ).all()
+        return (
+            db.query(LearnedRule)
+            .order_by(LearnedRule.is_active.desc(), LearnedRule.confidence.desc())
+            .all()
+        )
 
     @staticmethod
     def get_by_id(db: Session, rule_id: int) -> Optional[LearnedRule]:
@@ -517,11 +518,7 @@ class LearnedRuleRepository:
         return db.query(LearnedRule).filter(LearnedRule.id == rule_id).first()
 
     @staticmethod
-    def update(
-        db: Session,
-        rule_id: int,
-        **kwargs
-    ) -> Optional[LearnedRule]:
+    def update(db: Session, rule_id: int, **kwargs) -> Optional[LearnedRule]:
         """Update a learned rule's fields."""
         rule = db.query(LearnedRule).filter(LearnedRule.id == rule_id).first()
         if not rule:
@@ -558,10 +555,14 @@ class LearnedRuleRepository:
         Matching is by rule_type and exact rule_text. In practice the retrospective
         module should try to reuse existing rule text for reinforcement.
         """
-        existing = db.query(LearnedRule).filter(
-            LearnedRule.rule_type == rule_type,
-            LearnedRule.rule_text == rule_text,
-        ).first()
+        existing = (
+            db.query(LearnedRule)
+            .filter(
+                LearnedRule.rule_type == rule_type,
+                LearnedRule.rule_text == rule_text,
+            )
+            .first()
+        )
 
         if existing:
             existing.hit_count += 1
@@ -588,10 +589,14 @@ class LearnedRuleRepository:
         Returns the number of rules decayed.
         """
         cutoff = datetime.utcnow() - timedelta(days=days_threshold)
-        stale_rules = db.query(LearnedRule).filter(
-            LearnedRule.is_active == True,
-            LearnedRule.last_reinforced_at < cutoff,
-        ).all()
+        stale_rules = (
+            db.query(LearnedRule)
+            .filter(
+                LearnedRule.is_active.is_(True),
+                LearnedRule.last_reinforced_at < cutoff,
+            )
+            .all()
+        )
 
         count = 0
         for rule in stale_rules:
@@ -610,9 +615,12 @@ class LearnedRuleRepository:
 
         Returns the number of rules deactivated.
         """
-        active_rules = db.query(LearnedRule).filter(
-            LearnedRule.is_active == True
-        ).order_by(LearnedRule.confidence.desc()).all()
+        active_rules = (
+            db.query(LearnedRule)
+            .filter(LearnedRule.is_active.is_(True))
+            .order_by(LearnedRule.confidence.desc())
+            .all()
+        )
 
         if len(active_rules) <= max_active:
             return 0
@@ -629,10 +637,14 @@ class LearnedRuleRepository:
     @staticmethod
     def get_vocabulary_rules(db: Session) -> List[LearnedRule]:
         """Get active vocabulary-type rules for query expansion."""
-        return db.query(LearnedRule).filter(
-            LearnedRule.is_active == True,
-            LearnedRule.rule_type == 'vocabulary',
-        ).all()
+        return (
+            db.query(LearnedRule)
+            .filter(
+                LearnedRule.is_active.is_(True),
+                LearnedRule.rule_type == "vocabulary",
+            )
+            .all()
+        )
 
 
 class QueryFeedbackExplicitRepository:
@@ -656,9 +668,7 @@ class QueryFeedbackExplicitRepository:
         Returns:
             True if feedback was recorded, False if query_id not found
         """
-        record = db.query(QueryFeedback).filter(
-            QueryFeedback.query_id == query_id
-        ).first()
+        record = db.query(QueryFeedback).filter(QueryFeedback.query_id == query_id).first()
 
         if not record:
             return False
@@ -673,7 +683,7 @@ class QueryFeedbackExplicitRepository:
     def mark_satisfaction(
         db: Session,
         query_id: str,
-        feedback_type: str = 'positive_implicit',
+        feedback_type: str = "positive_implicit",
     ) -> bool:
         """Mark a query as having implicit positive satisfaction.
 
@@ -685,15 +695,13 @@ class QueryFeedbackExplicitRepository:
         Returns:
             True if marked, False if not found or already has explicit feedback
         """
-        record = db.query(QueryFeedback).filter(
-            QueryFeedback.query_id == query_id
-        ).first()
+        record = db.query(QueryFeedback).filter(QueryFeedback.query_id == query_id).first()
 
         if not record:
             return False
 
         # Don't overwrite explicit feedback
-        if record.explicit_feedback and record.explicit_feedback in ('positive', 'negative'):
+        if record.explicit_feedback and record.explicit_feedback in ("positive", "negative"):
             return False
 
         record.explicit_feedback = feedback_type
@@ -710,10 +718,14 @@ class ToolExecutionLogExtendedRepository:
 
         Returns number of records updated.
         """
-        count = db.query(ToolExecutionLog).filter(
-            ToolExecutionLog.query_id == query_id,
-            ToolExecutionLog.tool_name != '__query_summary__',
-        ).update({ToolExecutionLog.was_helpful: True}, synchronize_session='fetch')
+        count = (
+            db.query(ToolExecutionLog)
+            .filter(
+                ToolExecutionLog.query_id == query_id,
+                ToolExecutionLog.tool_name != "__query_summary__",
+            )
+            .update({ToolExecutionLog.was_helpful: True}, synchronize_session="fetch")
+        )
         db.commit()
         return count
 
@@ -723,21 +735,33 @@ class ToolExecutionLogExtendedRepository:
 
         Returns number of records updated.
         """
-        count = db.query(ToolExecutionLog).filter(
-            ToolExecutionLog.query_id == query_id,
-            ToolExecutionLog.tool_name != '__query_summary__',
-        ).update({ToolExecutionLog.was_helpful: False}, synchronize_session='fetch')
+        count = (
+            db.query(ToolExecutionLog)
+            .filter(
+                ToolExecutionLog.query_id == query_id,
+                ToolExecutionLog.tool_name != "__query_summary__",
+            )
+            .update({ToolExecutionLog.was_helpful: False}, synchronize_session="fetch")
+        )
         db.commit()
         return count
 
     @staticmethod
-    def get_recent_summaries(db: Session, hours: int = 24, limit: int = 500) -> List[ToolExecutionLog]:
+    def get_recent_summaries(
+        db: Session, hours: int = 24, limit: int = 500
+    ) -> List[ToolExecutionLog]:
         """Get recent tool execution logs for retrospective analysis."""
         cutoff = datetime.utcnow() - timedelta(hours=hours)
-        return db.query(ToolExecutionLog).filter(
-            ToolExecutionLog.created_at >= cutoff,
-            ToolExecutionLog.tool_name != '__query_summary__',
-        ).order_by(ToolExecutionLog.created_at.asc()).limit(limit).all()
+        return (
+            db.query(ToolExecutionLog)
+            .filter(
+                ToolExecutionLog.created_at >= cutoff,
+                ToolExecutionLog.tool_name != "__query_summary__",
+            )
+            .order_by(ToolExecutionLog.created_at.asc())
+            .limit(limit)
+            .all()
+        )
 
 
 class SessionNoteRepository:
@@ -748,7 +772,7 @@ class SessionNoteRepository:
         db: Session,
         session_id: str,
         note: str,
-        category: str = 'other',
+        category: str = "other",
     ) -> SessionNote:
         """Create a new session note."""
         session_note = SessionNote(
@@ -764,9 +788,14 @@ class SessionNoteRepository:
     @staticmethod
     def get_for_session(db: Session, session_id: str) -> List[SessionNote]:
         """Get all notes for a session, ordered by creation time."""
-        return db.query(SessionNote).filter(
-            SessionNote.session_id == session_id,
-        ).order_by(SessionNote.created_at.asc()).all()
+        return (
+            db.query(SessionNote)
+            .filter(
+                SessionNote.session_id == session_id,
+            )
+            .order_by(SessionNote.created_at.asc())
+            .all()
+        )
 
 
 class AgentRunLogRepository:
@@ -807,13 +836,9 @@ class AgentRunLogRepository:
     @staticmethod
     def get_recent(db: Session, limit: int = 10) -> List[AgentRunLog]:
         """Get recent agent run logs, newest first."""
-        return db.query(AgentRunLog).order_by(
-            AgentRunLog.started_at.desc()
-        ).limit(limit).all()
+        return db.query(AgentRunLog).order_by(AgentRunLog.started_at.desc()).limit(limit).all()
 
     @staticmethod
     def get_latest(db: Session) -> Optional[AgentRunLog]:
         """Get the most recent agent run log."""
-        return db.query(AgentRunLog).order_by(
-            AgentRunLog.started_at.desc()
-        ).first()
+        return db.query(AgentRunLog).order_by(AgentRunLog.started_at.desc()).first()

@@ -53,6 +53,13 @@ target-version = "py311"
 select = ["E", "F", "I"]
 ignore = []
 
+[tool.ruff.lint.per-file-ignores]
+# Deliberate late imports: server does config/logging setup first;
+# test scripts adjust sys.path before importing the package.
+"pkm-bridge-server.py" = ["E402"]
+"tests/**" = ["E402"]
+"test*.py" = ["E402"]
+
 [tool.black]
 line-length = 100
 target-version = ['py311']

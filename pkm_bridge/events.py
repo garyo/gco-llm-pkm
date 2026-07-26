@@ -1,14 +1,14 @@
 """Server-Sent Events (SSE) manager for real-time notifications."""
 
-import json
 import logging
 import queue
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Set, Optional
+from typing import Dict, Optional, Set
+
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class SSEEventManager:
         self.clients: Set[queue.Queue] = set()
         self.client_sessions: Dict[queue.Queue, Optional[str]] = {}  # Map client to session_id
         self.lock = threading.Lock()
-        self.file_watcher: Optional['FileWatcher'] = None
+        self.file_watcher: Optional["FileWatcher"] = None
 
     def add_client(self, session_id: Optional[str] = None) -> queue.Queue:
         """Add a new SSE client and return its message queue.
@@ -37,7 +37,10 @@ class SSEEventManager:
             self.client_sessions[client_queue] = session_id
             # Get all active sessions
             active_sessions = [sid for sid in self.client_sessions.values() if sid]
-        logger.info(f"SSE client connected (session: {session_id}). Total clients: {len(self.clients)}, Active sessions: {active_sessions}")
+        logger.info(
+            f"SSE client connected (session: {session_id}). "
+            f"Total clients: {len(self.clients)}, Active sessions: {active_sessions}"
+        )
         return client_queue
 
     def remove_client(self, client_queue: queue.Queue):
@@ -48,15 +51,14 @@ class SSEEventManager:
             self.client_sessions.pop(client_queue, None)
             # Get remaining active sessions
             active_sessions = [sid for sid in self.client_sessions.values() if sid]
-        logger.info(f"SSE client disconnected (session: {session_id}). Total clients: {len(self.clients)}, Active sessions: {active_sessions}")
+        logger.info(
+            f"SSE client disconnected (session: {session_id}). "
+            f"Total clients: {len(self.clients)}, Active sessions: {active_sessions}"
+        )
 
     def broadcast(self, event_type: str, data: Dict):
         """Broadcast an event to all connected clients."""
-        message = {
-            "type": event_type,
-            "data": data,
-            "timestamp": int(time.time())
-        }
+        message = {"type": event_type, "data": data, "timestamp": int(time.time())}
 
         # Remove disconnected clients
         disconnected = set()
@@ -80,11 +82,7 @@ class SSEEventManager:
             event_type: Type of event
             data: Event data
         """
-        message = {
-            "type": event_type,
-            "data": data,
-            "timestamp": int(time.time())
-        }
+        message = {"type": event_type, "data": data, "timestamp": int(time.time())}
 
         # Remove disconnected clients
         disconnected = set()
@@ -137,11 +135,7 @@ class FileWatcher:
         """Start watching the directories."""
         for directory in self.directories:
             if directory.exists():
-                self.observer.schedule(
-                    self.handler,
-                    str(directory),
-                    recursive=True
-                )
+                self.observer.schedule(self.handler, str(directory), recursive=True)
                 logger.info(f"Watching directory: {directory}")
             else:
                 logger.warning(f"Directory does not exist: {directory}")
@@ -186,11 +180,11 @@ class FileChangeHandler(FileSystemEventHandler):
         filename = Path(path).name
 
         # Ignore dotfiles (hidden files, Syncthing temp files like .!12345!file.md, etc.)
-        if filename.startswith('.'):
+        if filename.startswith("."):
             return False
 
         # Only notify about org, md, and txt files
-        return path.endswith(('.org', '.md', '.txt'))
+        return path.endswith((".org", ".md", ".txt"))
 
     def on_modified(self, event: FileSystemEvent):
         """Handle file modification events."""
@@ -210,11 +204,9 @@ class FileChangeHandler(FileSystemEventHandler):
             file_stat = Path(file_path).stat()
             mtime = int(file_stat.st_mtime)
 
-            self.event_manager.broadcast('file_changed', {
-                'path': file_path,
-                'mtime': mtime,
-                'size': file_stat.st_size
-            })
+            self.event_manager.broadcast(
+                "file_changed", {"path": file_path, "mtime": mtime, "size": file_stat.st_size}
+            )
         except Exception as e:
             logger.error(f"Error getting file stats for {file_path}: {e}")
 

@@ -1,6 +1,7 @@
 """Tool registry for managing and accessing tools."""
 
-from typing import Dict, List, Any
+from typing import Any, Dict, List
+
 from .base import BaseTool
 
 
@@ -35,7 +36,9 @@ class ToolRegistry:
             raise KeyError(f"Tool not found: {name}")
         return self._tools[name]
 
-    def execute_tool(self, name: str, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
+    def execute_tool(
+        self, name: str, params: Dict[str, Any], context: Dict[str, Any] = None
+    ) -> str:
         """Execute a tool by name.
 
         Args:
@@ -49,7 +52,7 @@ class ToolRegistry:
         try:
             tool = self.get_tool(name)
             return tool.execute(params, context=context)
-        except KeyError as e:
+        except KeyError:
             error_msg = f"❌ Unknown tool: {name}"
             # Log if tools have logger access
             return error_msg

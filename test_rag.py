@@ -3,20 +3,21 @@
 
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Load environment
-env_local = Path('.env.local')
+env_local = Path(".env.local")
 if env_local.exists():
     load_dotenv(env_local)
 else:
     load_dotenv()
 
-from pkm_bridge.embeddings.voyage_client import VoyageClient
 from pkm_bridge.context_retriever import ContextRetriever
+from pkm_bridge.embeddings.voyage_client import VoyageClient
 
 # Initialize clients
-voyage_api_key = os.getenv('VOYAGE_API_KEY')
+voyage_api_key = os.getenv("VOYAGE_API_KEY")
 if not voyage_api_key:
     print("Error: VOYAGE_API_KEY not set")
     exit(1)

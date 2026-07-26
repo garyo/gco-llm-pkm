@@ -53,11 +53,11 @@ class TaskDispatcher:
 
     @property
     def _daily_input_limit(self) -> int:
-        return int(os.environ.get('CRON_DAILY_INPUT_TOKEN_LIMIT', DEFAULT_DAILY_INPUT_LIMIT))
+        return int(os.environ.get("CRON_DAILY_INPUT_TOKEN_LIMIT", DEFAULT_DAILY_INPUT_LIMIT))
 
     @property
     def _daily_output_limit(self) -> int:
-        return int(os.environ.get('CRON_DAILY_OUTPUT_TOKEN_LIMIT', DEFAULT_DAILY_OUTPUT_LIMIT))
+        return int(os.environ.get("CRON_DAILY_OUTPUT_TOKEN_LIMIT", DEFAULT_DAILY_OUTPUT_LIMIT))
 
     def _check_global_budget(self, db) -> bool:
         """Return True if daily budget still has room."""
@@ -78,19 +78,25 @@ class TaskDispatcher:
         pct = max(input_pct, output_pct)
 
         if pct >= 0.95:
-            event_manager.broadcast('daily_budget_warning', {
-                'level': 'critical',
-                'percent': round(pct * 100),
-                'input_tokens': usage.input_tokens,
-                'output_tokens': usage.output_tokens,
-            })
+            event_manager.broadcast(
+                "daily_budget_warning",
+                {
+                    "level": "critical",
+                    "percent": round(pct * 100),
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+            )
         elif pct >= 0.80:
-            event_manager.broadcast('daily_budget_warning', {
-                'level': 'warning',
-                'percent': round(pct * 100),
-                'input_tokens': usage.input_tokens,
-                'output_tokens': usage.output_tokens,
-            })
+            event_manager.broadcast(
+                "daily_budget_warning",
+                {
+                    "level": "warning",
+                    "percent": round(pct * 100),
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                },
+            )
 
     def tick(self) -> None:
         """Called every 60 seconds by APScheduler. Finds and runs due tasks."""
@@ -145,15 +151,18 @@ class TaskDispatcher:
             db,
             task_id=task.id,
             started_at=started_at,
-            status='running',
+            status="running",
         )
 
         # Broadcast start event
-        event_manager.broadcast('scheduled_task_started', {
-            'task_id': task.id,
-            'task_name': task.name,
-            'started_at': started_at.isoformat(),
-        })
+        event_manager.broadcast(
+            "scheduled_task_started",
+            {
+                "task_id": task.id,
+                "task_name": task.name,
+                "started_at": started_at.isoformat(),
+            },
+        )
 
         self.logger.info(f"Scheduler: running '{task.name}'")
 
@@ -170,11 +179,12 @@ class TaskDispatcher:
         completed_at = datetime.utcnow()
         duration_s = (completed_at - started_at).total_seconds()
         error = result.get("error")
-        status = 'failed' if error else 'completed'
+        status = "failed" if error else "completed"
 
         # Update run log
         ScheduledTaskRunRepository.update(
-            db, run.id,
+            db,
+            run.id,
             completed_at=completed_at,
             status=status,
             turns_used=result["turns_used"],
@@ -196,20 +206,26 @@ class TaskDispatcher:
 
         # Broadcast completion/failure event
         if error:
-            event_manager.broadcast('scheduled_task_failed', {
-                'task_id': task.id,
-                'task_name': task.name,
-                'error': error[:500],
-            })
+            event_manager.broadcast(
+                "scheduled_task_failed",
+                {
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "error": error[:500],
+                },
+            )
             self.logger.error(f"Scheduler: '{task.name}' failed: {error[:200]}")
         else:
-            event_manager.broadcast('scheduled_task_completed', {
-                'task_id': task.id,
-                'task_name': task.name,
-                'summary': result.get("summary", "")[:500],
-                'tokens_used': result["input_tokens"] + result["output_tokens"],
-                'duration_s': round(duration_s, 1),
-            })
+            event_manager.broadcast(
+                "scheduled_task_completed",
+                {
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "summary": result.get("summary", "")[:500],
+                    "tokens_used": result["input_tokens"] + result["output_tokens"],
+                    "duration_s": round(duration_s, 1),
+                },
+            )
             self.logger.info(
                 f"Scheduler: '{task.name}' completed in {duration_s:.1f}s "
                 f"({result['turns_used']} turns, "

@@ -1,7 +1,8 @@
 """Open file in editor tool."""
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
+
 from .base import BaseTool
 
 
@@ -26,7 +27,8 @@ class OpenFileTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return """Open a file in the web editor interface. Use this when the user asks to edit a file.
+        return """Open a file in the web editor interface. Use this when the user asks to edit
+a file.
 
 Accepts either:
 - Absolute path (e.g., /path/to/org-agenda/file.org)
@@ -41,10 +43,10 @@ The file will be opened in the editor tab of the web interface."""
             "properties": {
                 "filepath": {
                     "type": "string",
-                    "description": "Path to the file to open (absolute or relative)"
+                    "description": "Path to the file to open (absolute or relative)",
                 }
             },
-            "required": ["filepath"]
+            "required": ["filepath"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
@@ -79,12 +81,17 @@ The file will be opened in the editor tab of the web interface."""
                     formatted_path = f"org:{relative_path}"
                     base_dir = self.org_dir
                 # Check if it's in logseq_dir
-                elif self.logseq_dir and str(resolved_path).startswith(str(self.logseq_dir.resolve())):
+                elif self.logseq_dir and str(resolved_path).startswith(
+                    str(self.logseq_dir.resolve())
+                ):
                     relative_path = resolved_path.relative_to(self.logseq_dir.resolve())
                     formatted_path = f"logseq:{relative_path}"
                     base_dir = self.logseq_dir
                 else:
-                    return f"❌ Error: File '{filepath}' is not within allowed directories (org or logseq)"
+                    return (
+                        f"❌ Error: File '{filepath}' is not within allowed directories "
+                        "(org or logseq)"
+                    )
 
                 full_path = resolved_path
             else:
@@ -114,23 +121,26 @@ The file will be opened in the editor tab of the web interface."""
             try:
                 full_path.relative_to(base_dir.resolve())
             except ValueError:
-                return f"❌ Error: Security violation - path traversal detected"
+                return "❌ Error: Security violation - path traversal detected"
 
             # Broadcast event to frontend via SSE
             from pkm_bridge.events import event_manager
+
             if session_id:
                 # Send only to this session
-                event_manager.broadcast_to_session(session_id, 'open_file', {
-                    'path': formatted_path,
-                    'absolute_path': str(full_path)
-                })
-                self.logger.info(f"Opening file in editor for session {session_id}: {formatted_path}")
+                event_manager.broadcast_to_session(
+                    session_id,
+                    "open_file",
+                    {"path": formatted_path, "absolute_path": str(full_path)},
+                )
+                self.logger.info(
+                    f"Opening file in editor for session {session_id}: {formatted_path}"
+                )
             else:
                 # Fallback to broadcast (shouldn't happen in normal use)
-                event_manager.broadcast('open_file', {
-                    'path': formatted_path,
-                    'absolute_path': str(full_path)
-                })
+                event_manager.broadcast(
+                    "open_file", {"path": formatted_path, "absolute_path": str(full_path)}
+                )
                 self.logger.warning(f"Opening file without session context: {formatted_path}")
 
             return f"✅ Opening '{filepath}' in editor tab..."

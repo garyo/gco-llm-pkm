@@ -13,13 +13,14 @@ Supports both one-off queries and interactive REPL mode.
 """
 
 import argparse
-import sys
-import os
-import requests
-import json
 import getpass
+import json
+import os
+import sys
 from pathlib import Path
 from typing import Optional
+
+import requests
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -78,9 +79,7 @@ class PKMClient:
 
         try:
             response = requests.post(
-                f"{self.base_url}/verify-token",
-                json={"token": self.token},
-                timeout=5
+                f"{self.base_url}/verify-token", json={"token": self.token}, timeout=5
             )
             return response.status_code == 200 and response.json().get("valid", False)
         except Exception:
@@ -103,9 +102,7 @@ class PKMClient:
         # Login
         try:
             response = requests.post(
-                f"{self.base_url}/login",
-                json={"password": password},
-                timeout=10
+                f"{self.base_url}/login", json={"password": password}, timeout=10
             )
 
             if response.status_code == 200:
@@ -139,7 +136,9 @@ class PKMClient:
         TOKEN_FILE.unlink(missing_ok=True)
         self._authenticate()
 
-    def query(self, message: str, session_id: Optional[str] = None, model: Optional[str] = None) -> dict:
+    def query(
+        self, message: str, session_id: Optional[str] = None, model: Optional[str] = None
+    ) -> dict:
         """Send a query to the server"""
         if session_id is None:
             session_id = self.session_id or "cli-session"
@@ -150,20 +149,14 @@ class PKMClient:
 
         try:
             response = requests.post(
-                f"{self.base_url}/query",
-                json=payload,
-                headers=self._get_headers(),
-                timeout=60
+                f"{self.base_url}/query", json=payload, headers=self._get_headers(), timeout=60
             )
 
             # Handle 401 and retry once
             if response.status_code == 401 and AUTH_ENABLED:
                 self._handle_401()
                 response = requests.post(
-                    f"{self.base_url}/query",
-                    json=payload,
-                    headers=self._get_headers(),
-                    timeout=60
+                    f"{self.base_url}/query", json=payload, headers=self._get_headers(), timeout=60
                 )
 
             response.raise_for_status()
@@ -192,18 +185,14 @@ class PKMClient:
 
         try:
             response = requests.delete(
-                f"{self.base_url}/sessions/{session_id}",
-                headers=self._get_headers(),
-                timeout=5
+                f"{self.base_url}/sessions/{session_id}", headers=self._get_headers(), timeout=5
             )
 
             # Handle 401 and retry once
             if response.status_code == 401 and AUTH_ENABLED:
                 self._handle_401()
                 response = requests.delete(
-                    f"{self.base_url}/sessions/{session_id}",
-                    headers=self._get_headers(),
-                    timeout=5
+                    f"{self.base_url}/sessions/{session_id}", headers=self._get_headers(), timeout=5
                 )
 
             response.raise_for_status()
@@ -233,13 +222,13 @@ def repl_mode(client: PKMClient):
     if "error" in health:
         print(f"❌ Cannot connect to server at {client.base_url}")
         print(f"   Error: {health['error']}")
-        print(f"\nMake sure the server is running:")
-        print(f"  ./pkm-bridge-server.py")
+        print("\nMake sure the server is running:")
+        print("  ./pkm-bridge-server.py")
         return
 
-    print(f"✓ Connected to server")
+    print("✓ Connected to server")
     print(f"  Org dir: {health.get('org_dir', 'unknown')}")
-    if health.get('logseq_dir'):
+    if health.get("logseq_dir"):
         print(f"  Logseq dir: {health['logseq_dir']}")
     print(f"  Skills: {', '.join(health.get('skills_available', []))}")
     print()
@@ -292,7 +281,7 @@ def repl_mode(client: PKMClient):
             if "error" in result:
                 print(f"\n\033[1;31m❌ Error:\033[0m {result['error']}")
             else:
-                print(f"\n\033[1;32mAssistant:\033[0m")
+                print("\n\033[1;32mAssistant:\033[0m")
                 print(result.get("response", "(no response)"))
 
         except KeyboardInterrupt:
@@ -303,7 +292,9 @@ def repl_mode(client: PKMClient):
             break
 
 
-def one_off_mode(client: PKMClient, query: str, session_id: Optional[str] = None, model: Optional[str] = None):
+def one_off_mode(
+    client: PKMClient, query: str, session_id: Optional[str] = None, model: Optional[str] = None
+):
     """One-off query mode"""
     result = client.query(query, session_id, model)
 
@@ -332,35 +323,24 @@ Examples:
 
   # Check server health
   %(prog)s --health
-        """
+        """,
     )
 
     parser.add_argument(
-        "query",
-        nargs="?",
-        help="Query to send (if not provided, enters REPL mode)"
+        "query", nargs="?", help="Query to send (if not provided, enters REPL mode)"
     )
 
-    parser.add_argument(
-        "--session", "-s",
-        help="Session ID for conversation context"
-    )
+    parser.add_argument("--session", "-s", help="Session ID for conversation context")
+
+    parser.add_argument("--health", action="store_true", help="Check server health and exit")
+
+    parser.add_argument("--url", default=BASE_URL, help=f"Server URL (default: {BASE_URL})")
 
     parser.add_argument(
-        "--health",
-        action="store_true",
-        help="Check server health and exit"
-    )
-
-    parser.add_argument(
-        "--url",
-        default=BASE_URL,
-        help=f"Server URL (default: {BASE_URL})"
-    )
-
-    parser.add_argument(
-        "--model", "-m",
-        help="Claude model to use (overrides server default). Options: claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-7"
+        "--model",
+        "-m",
+        help="Claude model to use (overrides server default). "
+        "Options: claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-7",
     )
 
     args = parser.parse_args()

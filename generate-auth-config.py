@@ -10,8 +10,9 @@ This script generates a secure JWT secret and password hash for use in .env file
 """
 
 import secrets
-import bcrypt
 import sys
+
+import bcrypt
 
 
 def generate_jwt_secret() -> str:
@@ -22,7 +23,7 @@ def generate_jwt_secret() -> str:
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt with 12 rounds."""
     salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(password.encode(), salt).decode('utf-8')
+    return bcrypt.hashpw(password.encode(), salt).decode("utf-8")
 
 
 def main():
@@ -52,7 +53,7 @@ def main():
         if len(password) < 8:
             print("Warning: Password is less than 8 characters")
             confirm = input("Continue anyway? (y/n): ").strip().lower()
-            if confirm != 'y':
+            if confirm != "y":
                 continue
 
         # Confirm password

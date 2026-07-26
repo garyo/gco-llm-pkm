@@ -9,17 +9,17 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from pkm_bridge.database import get_db, Document, DocumentChunk
+from config.settings import Config
+from pkm_bridge.database import Document, DocumentChunk, get_db
 from pkm_bridge.embeddings.chunker import NoteChunker
 from pkm_bridge.embeddings.voyage_client import VoyageClient
-from config.settings import Config
 
 
 def compute_file_hash(file_path: Path) -> str:
     """Compute SHA256 hash for change detection."""
     sha256 = hashlib.sha256()
-    with open(file_path, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
             sha256.update(chunk)
     return sha256.hexdigest()
 
@@ -44,69 +44,74 @@ def extract_date_from_file(file_path: Path, logger=None) -> Optional[str]:
 
     # Strategy 1: Extract from journal path
     # Handle both org-mode (/journals/YYYY-MM-DD.org) and Logseq (/journals/YYYY_MM_DD.md)
-    if '/journals/' in str(file_path):
+    if "/journals/" in str(file_path):
         # Try YYYY-MM-DD format
-        date_match = re.search(r'/journals/(\d{4}-\d{2}-\d{2})', str(file_path))
+        date_match = re.search(r"/journals/(\d{4}-\d{2}-\d{2})", str(file_path))
         if date_match:
             log(f"Date from journal path: {date_match.group(1)}")
             return date_match.group(1)
 
         # Try YYYY_MM_DD format (Logseq)
-        date_match = re.search(r'/journals/(\d{4}_\d{2}_\d{2})', str(file_path))
+        date_match = re.search(r"/journals/(\d{4}_\d{2}_\d{2})", str(file_path))
         if date_match:
-            date_str = date_match.group(1).replace('_', '-')
+            date_str = date_match.group(1).replace("_", "-")
             log(f"Date from Logseq journal path: {date_str}")
             return date_str
 
     # Strategy 2: Extract from filename
     # Try YYYY-MM-DD format
-    filename_match = re.search(r'(\d{4}-\d{2}-\d{2})', file_path.name)
+    filename_match = re.search(r"(\d{4}-\d{2}-\d{2})", file_path.name)
     if filename_match:
         log(f"Date from filename: {filename_match.group(1)}")
         return filename_match.group(1)
 
     # Try YYYY_MM_DD format (Logseq)
-    filename_match = re.search(r'(\d{4}_\d{2}_\d{2})', file_path.name)
+    filename_match = re.search(r"(\d{4}_\d{2}_\d{2})", file_path.name)
     if filename_match:
-        date_str = filename_match.group(1).replace('_', '-')
+        date_str = filename_match.group(1).replace("_", "-")
         log(f"Date from Logseq filename: {date_str}")
         return date_str
 
     # Strategy 3: Extract from org-mode content
-    if file_path.suffix == '.org':
+    if file_path.suffix == ".org":
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 in_properties = False
                 for line in f:
                     line = line.strip()
 
                     # Check #+title
-                    if line.startswith('#+title:'):
-                        title = line.split(':', 1)[1].strip()
-                        title_match = re.search(r'(\d{4}-\d{2}-\d{2})', title)
+                    if line.startswith("#+title:"):
+                        title = line.split(":", 1)[1].strip()
+                        title_match = re.search(r"(\d{4}-\d{2}-\d{2})", title)
                         if title_match:
                             log(f"Date from #+title: {title_match.group(1)}")
                             return title_match.group(1)
 
                     # Check property drawer
-                    if line == ':PROPERTIES:':
+                    if line == ":PROPERTIES:":
                         in_properties = True
                         continue
-                    if line == ':END:':
+                    if line == ":END:":
                         in_properties = False
                         continue
 
                     if in_properties:
                         # Look for :DATE: or :CREATED: properties
-                        if line.startswith(':DATE:') or line.startswith(':CREATED:'):
-                            prop_value = line.split(':', 2)[2].strip()
-                            prop_match = re.search(r'(\d{4}-\d{2}-\d{2})', prop_value)
+                        if line.startswith(":DATE:") or line.startswith(":CREATED:"):
+                            prop_value = line.split(":", 2)[2].strip()
+                            prop_match = re.search(r"(\d{4}-\d{2}-\d{2})", prop_value)
                             if prop_match:
                                 log(f"Date from property drawer: {prop_match.group(1)}")
                                 return prop_match.group(1)
 
                     # Stop reading after first heading or non-header content
-                    if not line.startswith('#') and not line.startswith(':') and not in_properties and line:
+                    if (
+                        not line.startswith("#")
+                        and not line.startswith(":")
+                        and not in_properties
+                        and line
+                    ):
                         break
         except Exception as e:
             log(f"Error reading file content: {e}")
@@ -114,7 +119,7 @@ def extract_date_from_file(file_path: Path, logger=None) -> Optional[str]:
     # Strategy 4: Use file modification time as fallback
     try:
         mtime = file_path.stat().st_mtime
-        date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+        date_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
         log(f"Date from mtime fallback: {date_str}")
         return date_str
     except Exception as e:
@@ -129,7 +134,7 @@ def embed_document(
     chunker: NoteChunker,
     db,
     force: bool = False,
-    logger=None
+    logger=None,
 ) -> bool:
     """Embed a single document (all chunks).
 
@@ -144,6 +149,7 @@ def embed_document(
     Returns:
         True if embedded, False if skipped
     """
+
     def log(msg):
         if logger:
             logger.info(msg)
@@ -202,10 +208,7 @@ def embed_document(
     # Batch embed all chunks
     try:
         texts = [chunk.content for chunk in chunks]
-        result = voyage_client.embed(
-            texts=texts,
-            input_type="document"
-        )
+        result = voyage_client.embed(texts=texts, input_type="document")
         embeddings = result.embeddings
     except Exception as e:
         log(f"❌ Error embedding {file_path}: {e}")
@@ -229,7 +232,7 @@ def embed_document(
                 file_path=str(file_path),
                 file_type=file_path.suffix[1:],  # 'org' or 'md'
                 file_hash=current_hash,
-                date_extracted=date_extracted
+                date_extracted=date_extracted,
             )
             db.add(doc)
             db.flush()  # Get ID
@@ -244,7 +247,7 @@ def embed_document(
                 content=chunk.content,
                 start_line=chunk.start_line,
                 token_count=chunk.token_count,
-                embedding=embedding
+                embedding=embedding,
             )
             db.add(chunk_obj)
 
@@ -290,24 +293,13 @@ def find_note_files(directories: list[Path], logger=None) -> list[Path]:
             log(f"⚠️  Directory not found: {directory}")
             continue
 
-        cmd = [
-            'rg',
-            '--files',
-            '--type-add', 'notes:*.{org,md}',
-            '--type', 'notes',
-            str(directory)
-        ]
+        cmd = ["rg", "--files", "--type-add", "notes:*.{org,md}", "--type", "notes", str(directory)]
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
             if result.returncode == 0:
-                for line in result.stdout.strip().split('\n'):
+                for line in result.stdout.strip().split("\n"):
                     if line:
                         files.append(Path(line))
             else:
@@ -316,9 +308,9 @@ def find_note_files(directories: list[Path], logger=None) -> list[Path]:
         except subprocess.TimeoutExpired:
             log(f"⚠️  Timeout searching {directory}")
         except FileNotFoundError:
-            log(f"⚠️  ripgrep not found. Please install ripgrep (rg)")
+            log("⚠️  ripgrep not found. Please install ripgrep (rg)")
             # Fallback to glob (less reliable)
-            for pattern in ['**/*.org', '**/*.md']:
+            for pattern in ["**/*.org", "**/*.md"]:
                 files.extend(directory.glob(pattern))
 
     # Sort by modification time (newest first)
@@ -360,7 +352,7 @@ def embed_gmail_messages(
 
     # Get Gmail token
     try:
-        token = OAuthRepository.get_token(db, 'google_gmail')
+        token = OAuthRepository.get_token(db, "google_gmail")
         if not token:
             log("Gmail not connected, skipping email embedding")
             return stats
@@ -371,13 +363,13 @@ def embed_gmail_messages(
                 new_token_data = gmail_oauth.refresh_token(token.refresh_token)
                 OAuthRepository.save_token(
                     db=db,
-                    service='google_gmail',
-                    access_token=new_token_data['access_token'],
-                    refresh_token=new_token_data.get('refresh_token'),
-                    expires_at=new_token_data['expires_at'],
-                    scope=new_token_data.get('scope'),
+                    service="google_gmail",
+                    access_token=new_token_data["access_token"],
+                    refresh_token=new_token_data.get("refresh_token"),
+                    expires_at=new_token_data["expires_at"],
+                    scope=new_token_data.get("scope"),
                 )
-                token = OAuthRepository.get_token(db, 'google_gmail')
+                token = OAuthRepository.get_token(db, "google_gmail")
             except Exception as e:
                 log(f"Failed to refresh Gmail token for embedding: {e}")
                 return stats
@@ -389,7 +381,8 @@ def embed_gmail_messages(
 
     # Search for recent important emails only (Gmail's yellow flag)
     from datetime import datetime, timedelta
-    date_str = (datetime.utcnow() - timedelta(days=days_back)).strftime('%Y/%m/%d')
+
+    date_str = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y/%m/%d")
     query = f"is:important after:{date_str}"
 
     chunker = NoteChunker()
@@ -404,11 +397,11 @@ def embed_gmail_messages(
                 max_results=min(50, max_emails - len(all_messages)),
                 page_token=page_token,
             )
-            messages = results.get('messages', [])
+            messages = results.get("messages", [])
             if not messages:
                 break
             all_messages.extend(messages)
-            page_token = results.get('nextPageToken')
+            page_token = results.get("nextPageToken")
             if not page_token:
                 break
 
@@ -416,22 +409,22 @@ def embed_gmail_messages(
 
         for msg_stub in all_messages:
             try:
-                msg_id = msg_stub['id']
+                msg_id = msg_stub["id"]
                 synthetic_path = f"gmail://{msg_id}"
 
                 # Fetch full message
                 msg = client.get_message(msg_id)
-                payload = msg.get('payload', {})
-                headers = payload.get('headers', [])
+                payload = msg.get("payload", {})
+                headers = payload.get("headers", [])
 
-                subject = client.extract_header(headers, 'Subject') or '(no subject)'
-                from_addr = client.extract_header(headers, 'From')
-                date = client.extract_header(headers, 'Date')
+                subject = client.extract_header(headers, "Subject") or "(no subject)"
+                from_addr = client.extract_header(headers, "From")
+                date = client.extract_header(headers, "Date")
                 body = client.decode_body(payload)
 
                 # Compute hash for change detection
                 content_hash = hashlib.sha256(
-                    (subject + from_addr + body).encode('utf-8')
+                    (subject + from_addr + body).encode("utf-8")
                 ).hexdigest()
 
                 # Check if already embedded
@@ -455,8 +448,9 @@ def embed_gmail_messages(
                 date_extracted = None
                 try:
                     from email.utils import parsedate_to_datetime
+
                     dt = parsedate_to_datetime(date)
-                    date_extracted = dt.strftime('%Y-%m-%d')
+                    date_extracted = dt.strftime("%Y-%m-%d")
                 except Exception:
                     pass
 
@@ -470,7 +464,7 @@ def embed_gmail_messages(
                 else:
                     doc = Document(
                         file_path=synthetic_path,
-                        file_type='gmail',
+                        file_type="gmail",
                         file_hash=content_hash,
                         date_extracted=date_extracted,
                     )
@@ -601,7 +595,9 @@ def run_incremental_embedding(
     try:
         for file_path in files:
             try:
-                if embed_document(file_path, voyage_client, chunker, db, force=False, logger=logger):
+                if embed_document(
+                    file_path, voyage_client, chunker, db, force=False, logger=logger
+                ):
                     embedded_count += 1
                 else:
                     skipped_count += 1
@@ -619,9 +615,7 @@ def run_incremental_embedding(
 
         # Embed recent Gmail messages (if connected)
         if gmail_oauth:
-            gmail_stats = embed_gmail_messages(
-                voyage_client, gmail_oauth, db, logger=logger
-            )
+            gmail_stats = embed_gmail_messages(voyage_client, gmail_oauth, db, logger=logger)
             embedded_count += gmail_stats.get("gmail_embedded", 0)
             skipped_count += gmail_stats.get("gmail_skipped", 0)
             error_count += gmail_stats.get("gmail_errors", 0)
@@ -637,5 +631,5 @@ def run_incremental_embedding(
         "embedded_count": embedded_count,
         "skipped_count": skipped_count,
         "deleted_count": deleted_count,
-        "error_count": error_count
+        "error_count": error_count,
     }

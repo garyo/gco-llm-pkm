@@ -15,9 +15,9 @@ Generates:
 - Password hash (for login authentication)
 """
 
-import secrets
-import sys
 import getpass
+import secrets
+
 import bcrypt
 
 
@@ -29,8 +29,8 @@ def generate_jwt_secret():
 def generate_password_hash(password):
     """Generate bcrypt hash for password."""
     salt = bcrypt.gensalt(12)  # 12 rounds
-    hash_bytes = bcrypt.hashpw(password.encode('utf-8'), salt)
-    return hash_bytes.decode('utf-8')
+    hash_bytes = bcrypt.hashpw(password.encode("utf-8"), salt)
+    return hash_bytes.decode("utf-8")
 
 
 def main():
@@ -49,21 +49,21 @@ def main():
     print("Enter a password for logging into the web interface.")
     print("This should be strong and unique. Store it in a password manager!")
     print()
-    
+
     while True:
         password = getpass.getpass("Password: ")
         password_confirm = getpass.getpass("Confirm password: ")
-        
+
         if password != password_confirm:
             print("❌ Passwords don't match. Try again.")
             print()
             continue
-        
+
         if len(password) < 8:
             print("❌ Password too short (minimum 8 characters). Try again.")
             print()
             continue
-        
+
         break
 
     # Generate password hash
@@ -89,5 +89,5 @@ def main():
     print("=" * 70)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

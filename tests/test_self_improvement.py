@@ -15,7 +15,6 @@ import pytest
 # ---------------------------------------------------------------------------
 # Phase 1: Skills / Recipes — frontmatter helpers + tools
 # ---------------------------------------------------------------------------
-
 from pkm_bridge.tools.skills import (
     SKILL_NAME_RE,
     ListSkillsTool,
@@ -50,6 +49,7 @@ def org_dir(tmp_path: Path) -> Path:
 
 # -- Skill name validation ---------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "name,valid",
     [
@@ -57,12 +57,12 @@ def org_dir(tmp_path: Path) -> Path:
         ("search-music-notes", True),
         ("ab", True),
         ("a1", True),
-        ("a", False),        # too short (< 2 chars)
-        ("A-Bad", False),    # uppercase
+        ("a", False),  # too short (< 2 chars)
+        ("A-Bad", False),  # uppercase
         ("-leading", False),
         ("trailing-", False),
         ("has space", False),
-        ("x" * 51, False),   # over 50 chars
+        ("x" * 51, False),  # over 50 chars
         ("good-name-123", True),
     ],
 )
@@ -71,6 +71,7 @@ def test_skill_name_regex(name: str, valid: bool):
 
 
 # -- Frontmatter round-trip ---------------------------------------------------
+
 
 class TestShellFrontmatter:
     def test_round_trip(self):
@@ -117,6 +118,7 @@ class TestMdFrontmatter:
 
 # -- _parse_skill_file --------------------------------------------------------
 
+
 class TestParseSkillFile:
     def test_shell_file(self, skills_dir: Path):
         fm = _build_shell_frontmatter({"name": "my-shell", "description": "test"})
@@ -151,15 +153,18 @@ class TestParseSkillFile:
 
 # -- SaveSkillTool ------------------------------------------------------------
 
+
 class TestSaveSkillTool:
     def test_save_shell_skill(self, logger, org_dir: Path):
         tool = SaveSkillTool(logger, org_dir, dangerous_patterns=[])
-        result = tool.execute({
-            "skill_name": "hello-world",
-            "skill_type": "shell",
-            "description": "Prints hello",
-            "content": "echo hello",
-        })
+        result = tool.execute(
+            {
+                "skill_name": "hello-world",
+                "skill_type": "shell",
+                "description": "Prints hello",
+                "content": "echo hello",
+            }
+        )
         assert "Created" in result
         fp = org_dir / ".pkm/skills" / "hello-world.sh"
         assert fp.exists()
@@ -172,14 +177,16 @@ class TestSaveSkillTool:
 
     def test_save_recipe_skill(self, logger, org_dir: Path):
         tool = SaveSkillTool(logger, org_dir, dangerous_patterns=[])
-        result = tool.execute({
-            "skill_name": "weekly-review",
-            "skill_type": "recipe",
-            "description": "Weekly review procedure",
-            "content": "## Steps\n1. Check calendar\n2. Review notes",
-            "trigger": "user asks for weekly review",
-            "tags": ["review", "weekly"],
-        })
+        result = tool.execute(
+            {
+                "skill_name": "weekly-review",
+                "skill_type": "recipe",
+                "description": "Weekly review procedure",
+                "content": "## Steps\n1. Check calendar\n2. Review notes",
+                "trigger": "user asks for weekly review",
+                "tags": ["review", "weekly"],
+            }
+        )
         assert "Created" in result
         fp = org_dir / ".pkm/skills" / "weekly-review.md"
         assert fp.exists()
@@ -194,23 +201,27 @@ class TestSaveSkillTool:
     def test_update_existing_skill(self, logger, org_dir: Path):
         tool = SaveSkillTool(logger, org_dir, dangerous_patterns=[])
         # Create first
-        tool.execute({
-            "skill_name": "updatable",
-            "skill_type": "recipe",
-            "description": "v1",
-            "content": "old content",
-        })
+        tool.execute(
+            {
+                "skill_name": "updatable",
+                "skill_type": "recipe",
+                "description": "v1",
+                "content": "old content",
+            }
+        )
         fp = org_dir / ".pkm/skills" / "updatable.md"
         meta1, _ = _parse_md_frontmatter(fp.read_text())
         created_time = meta1["created"]
 
         # Update
-        result = tool.execute({
-            "skill_name": "updatable",
-            "skill_type": "recipe",
-            "description": "v2",
-            "content": "new content",
-        })
+        result = tool.execute(
+            {
+                "skill_name": "updatable",
+                "skill_type": "recipe",
+                "description": "v2",
+                "content": "new content",
+            }
+        )
         assert "Updated" in result
         content = fp.read_text()
         assert "new content" in content
@@ -220,36 +231,52 @@ class TestSaveSkillTool:
 
     def test_bad_name_rejected(self, logger, org_dir: Path):
         tool = SaveSkillTool(logger, org_dir, dangerous_patterns=[])
-        result = tool.execute({
-            "skill_name": "BAD NAME!",
-            "skill_type": "recipe",
-            "description": "bad",
-            "content": "nope",
-        })
+        result = tool.execute(
+            {
+                "skill_name": "BAD NAME!",
+                "skill_type": "recipe",
+                "description": "bad",
+                "content": "nope",
+            }
+        )
         assert "Error" in result
 
     def test_dangerous_shell_blocked(self, logger, org_dir: Path):
         tool = SaveSkillTool(logger, org_dir, dangerous_patterns=[r"rm\s+-rf"])
-        result = tool.execute({
-            "skill_name": "danger-zone",
-            "skill_type": "shell",
-            "description": "dangerous",
-            "content": "rm -rf /",
-        })
+        result = tool.execute(
+            {
+                "skill_name": "danger-zone",
+                "skill_type": "shell",
+                "description": "dangerous",
+                "content": "rm -rf /",
+            }
+        )
         assert "Error" in result
         assert "blocked" in result.lower() or "safety" in result.lower()
 
 
 # -- ListSkillsTool -----------------------------------------------------------
 
+
 class TestListSkillsTool:
-    def _create_skill(self, org_dir: Path, name: str, stype: str = "recipe",
-                      tags: list | None = None, desc: str = "test"):
+    def _create_skill(
+        self,
+        org_dir: Path,
+        name: str,
+        stype: str = "recipe",
+        tags: list | None = None,
+        desc: str = "test",
+    ):
         """Helper: write a skill file directly."""
         skills_dir = org_dir / ".pkm" / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
-        meta = {"name": name, "description": desc, "tags": tags or [],
-                "use_count": 0, "last_used": "never"}
+        meta = {
+            "name": name,
+            "description": desc,
+            "tags": tags or [],
+            "use_count": 0,
+            "last_used": "never",
+        }
         if stype == "shell":
             fm = _build_shell_frontmatter(meta)
             (skills_dir / f"{name}.sh").write_text(fm + "\n#!/bin/bash\ntrue\n")
@@ -290,16 +317,19 @@ class TestListSkillsTool:
 
 # -- UseSkillTool -------------------------------------------------------------
 
+
 class TestUseSkillTool:
     def test_load_and_bump(self, logger, org_dir: Path):
         # Create a skill first
         save = SaveSkillTool(logger, org_dir, dangerous_patterns=[])
-        save.execute({
-            "skill_name": "loadable",
-            "skill_type": "recipe",
-            "description": "Loadable skill",
-            "content": "Step 1: do the thing",
-        })
+        save.execute(
+            {
+                "skill_name": "loadable",
+                "skill_type": "recipe",
+                "description": "Loadable skill",
+                "content": "Step 1: do the thing",
+            }
+        )
 
         use = UseSkillTool(logger, org_dir)
         result = use.execute({"skill_name": "loadable"})
@@ -323,12 +353,14 @@ class TestUseSkillTool:
 
     def test_load_shell_skill(self, logger, org_dir: Path):
         save = SaveSkillTool(logger, org_dir, dangerous_patterns=[])
-        save.execute({
-            "skill_name": "my-script",
-            "skill_type": "shell",
-            "description": "A shell skill",
-            "content": "echo 'running'",
-        })
+        save.execute(
+            {
+                "skill_name": "my-script",
+                "skill_type": "shell",
+                "description": "A shell skill",
+                "content": "echo 'running'",
+            }
+        )
         use = UseSkillTool(logger, org_dir)
         result = use.execute({"skill_name": "my-script"})
         assert "shell" in result.lower()
@@ -429,15 +461,18 @@ class TestRetrospectiveToolStripping:
 # Phase 5: NoteToSelfTool (mocked DB)
 # ---------------------------------------------------------------------------
 
+
 class TestNoteToSelfTool:
     def test_saves_note_success(self, logger):
         tool = NoteToSelfTool(logger)
         mock_db = MagicMock()
         mock_repo = MagicMock()
 
-        with patch.dict("sys.modules", {}), \
-             patch("pkm_bridge.database.get_db", return_value=mock_db), \
-             patch("pkm_bridge.db_repository.SessionNoteRepository", mock_repo):
+        with (
+            patch.dict("sys.modules", {}),
+            patch("pkm_bridge.database.get_db", return_value=mock_db),
+            patch("pkm_bridge.db_repository.SessionNoteRepository", mock_repo),
+        ):
             # The tool does deferred imports inside execute(), so we need to
             # patch at the module level that the relative import resolves to.
             result = tool.execute(
@@ -464,6 +499,7 @@ class TestNoteToSelfTool:
 # Phase 3: Abandonment detection
 # ---------------------------------------------------------------------------
 
+
 class TestAbandonmentDetection:
     def test_detects_abandoned_session(self):
         """Sessions with last user message >30 min old should be marked abandoned."""
@@ -483,9 +519,7 @@ class TestAbandonmentDetection:
             {"role": "user", "content": "Can you help with X?"},  # last msg is user
         ]
 
-        with patch(
-            "pkm_bridge.retrospective.QueryFeedbackExplicitRepository"
-        ):
+        with patch("pkm_bridge.retrospective.QueryFeedbackExplicitRepository"):
             mock_db.query.return_value.filter.return_value.all.return_value = [mock_session]
             retro._detect_abandoned_sessions(mock_db)
             # Verify no exception raised — detailed assertions need real DB
@@ -548,6 +582,7 @@ class TestSettingsRuleFormatting:
 # Database schema upgrade
 # ---------------------------------------------------------------------------
 
+
 class TestSchemaUpgrade:
     def test_upgrade_adds_was_helpful_column(self):
         """_upgrade_schema should add was_helpful if missing."""
@@ -557,7 +592,9 @@ class TestSchemaUpgrade:
         mock_inspector = MagicMock()
         mock_inspector.get_table_names.return_value = ["tool_execution_logs"]
         mock_inspector.get_columns.return_value = [
-            {"name": "id"}, {"name": "tool_name"}, {"name": "exit_code"}
+            {"name": "id"},
+            {"name": "tool_name"},
+            {"name": "exit_code"},
         ]  # no was_helpful
 
         mock_conn = MagicMock()
@@ -581,7 +618,9 @@ class TestSchemaUpgrade:
         mock_inspector = MagicMock()
         mock_inspector.get_table_names.return_value = ["tool_execution_logs"]
         mock_inspector.get_columns.return_value = [
-            {"name": "id"}, {"name": "tool_name"}, {"name": "was_helpful"}
+            {"name": "id"},
+            {"name": "tool_name"},
+            {"name": "was_helpful"},
         ]
 
         with patch("pkm_bridge.database.inspect", return_value=mock_inspector):

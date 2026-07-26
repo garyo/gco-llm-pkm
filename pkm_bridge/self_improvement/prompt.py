@@ -56,9 +56,11 @@ These are your notes from previous runs. Use them to build continuity across run
 
 The PKM system has two user-facing interfaces that share the same backend:
 1. **Custom Web App** (pkm.oberbrunner.com) — Flask + Astro frontend, uses Anthropic API key,
-   has auto-RAG injection, interactive checkboxes, editor integration. System prompt: `config/system_prompt.txt`
+   has auto-RAG injection, interactive checkboxes, editor integration.
+   System prompt: `config/system_prompt.txt`
 2. **Claude.ai MCP Server** (mcp.oberbrunner.com) — accessed via Claude.ai desktop/mobile,
-   uses user's Claude subscription, must call semantic_search explicitly. System prompt: `config/system_prompt_mcp.txt`
+   uses user's Claude subscription, must call semantic_search explicitly.
+   System prompt: `config/system_prompt_mcp.txt`
 
 Both interfaces share the same tools, skills, and learned rules. When you:
 - Create or modify **skills**: they affect both interfaces
@@ -288,15 +290,26 @@ def gather_run_stats(org_dir: str | Path) -> Dict[str, Any]:
 
         # Count explicit feedback types
         from sqlalchemy import func
+
         cutoff = datetime.utcnow() - timedelta(days=7)
-        positive = db.query(func.count(QueryFeedback.id)).filter(
-            QueryFeedback.created_at >= cutoff,
-            QueryFeedback.explicit_feedback.in_(["positive", "positive_implicit"]),
-        ).scalar() or 0
-        negative = db.query(func.count(QueryFeedback.id)).filter(
-            QueryFeedback.created_at >= cutoff,
-            QueryFeedback.explicit_feedback == "negative",
-        ).scalar() or 0
+        positive = (
+            db.query(func.count(QueryFeedback.id))
+            .filter(
+                QueryFeedback.created_at >= cutoff,
+                QueryFeedback.explicit_feedback.in_(["positive", "positive_implicit"]),
+            )
+            .scalar()
+            or 0
+        )
+        negative = (
+            db.query(func.count(QueryFeedback.id))
+            .filter(
+                QueryFeedback.created_at >= cutoff,
+                QueryFeedback.explicit_feedback == "negative",
+            )
+            .scalar()
+            or 0
+        )
         stats["feedback_signals"]["positive"] = positive
         stats["feedback_signals"]["negative"] = negative
 

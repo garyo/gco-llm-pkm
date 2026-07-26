@@ -41,13 +41,19 @@ class NoteProposalRepository:
     @staticmethod
     def get_by_status(db: Session, status: str, limit: int = 20) -> List[NoteProposal]:
         """Get proposals with the given status, newest first."""
-        return db.query(NoteProposal).filter(
-            NoteProposal.status == status,
-        ).order_by(NoteProposal.created_at.desc()).limit(limit).all()
+        return (
+            db.query(NoteProposal)
+            .filter(
+                NoteProposal.status == status,
+            )
+            .order_by(NoteProposal.created_at.desc())
+            .limit(limit)
+            .all()
+        )
 
     @staticmethod
     def count_pending(db: Session) -> int:
-        return db.query(NoteProposal).filter(NoteProposal.status == 'pending').count()
+        return db.query(NoteProposal).filter(NoteProposal.status == "pending").count()
 
     @staticmethod
     def resolve(

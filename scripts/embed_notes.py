@@ -45,18 +45,18 @@ from pkm_bridge.embeddings.voyage_client import VoyageClient
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Embed notes for RAG semantic search")
-    parser.add_argument('--file', type=Path, help="Embed a single file")
-    parser.add_argument('--incremental', action='store_true', help="Only embed changed files")
-    parser.add_argument('--force', action='store_true', help="Force re-embedding all files")
-    parser.add_argument('--clear', action='store_true', help="Clear all embeddings from database")
-    parser.add_argument('--limit', type=int, help="Limit number of files (for testing)")
-    parser.add_argument('--org-dir', type=Path, help="Override ORG_DIR")
-    parser.add_argument('--logseq-dir', type=Path, help="Override LOGSEQ_DIR")
+    parser.add_argument("--file", type=Path, help="Embed a single file")
+    parser.add_argument("--incremental", action="store_true", help="Only embed changed files")
+    parser.add_argument("--force", action="store_true", help="Force re-embedding all files")
+    parser.add_argument("--clear", action="store_true", help="Clear all embeddings from database")
+    parser.add_argument("--limit", type=int, help="Limit number of files (for testing)")
+    parser.add_argument("--org-dir", type=Path, help="Override ORG_DIR")
+    parser.add_argument("--logseq-dir", type=Path, help="Override LOGSEQ_DIR")
 
     args = parser.parse_args()
 
     # Load environment - prefer .env.local for dev overrides
-    env_local = Path(__file__).parent.parent / '.env.local'
+    env_local = Path(__file__).parent.parent / ".env.local"
     if env_local.exists():
         load_dotenv(env_local)
         print(f"📝 Loaded environment from {env_local}")
@@ -65,7 +65,7 @@ def main():
         print("📝 Loaded environment from .env")
 
     # Get Voyage API key
-    voyage_api_key = os.getenv('VOYAGE_API_KEY')
+    voyage_api_key = os.getenv("VOYAGE_API_KEY")
     if not voyage_api_key:
         print("❌ Error: VOYAGE_API_KEY not set in environment")
         print("   Get your API key from https://www.voyageai.com/")
@@ -87,7 +87,7 @@ def main():
         # Ask for confirmation unless --force is also specified
         if not args.force:
             response = input("\nAre you sure? Type 'yes' to confirm: ")
-            if response.lower() != 'yes':
+            if response.lower() != "yes":
                 print("❌ Aborted.")
                 db.close()
                 sys.exit(0)
@@ -131,7 +131,7 @@ def main():
         files = find_note_files(directories)
 
         if args.limit:
-            files = files[:args.limit]
+            files = files[: args.limit]
 
     if not files:
         print("❌ No files found to embed")

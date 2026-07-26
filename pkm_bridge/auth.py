@@ -3,19 +3,21 @@
 Provides JWT-based token authentication with password verification.
 """
 
-import os
-import jwt
-import bcrypt
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Optional, Dict, Any
-from flask import request, jsonify
+from typing import Any, Dict, Optional
+
+import bcrypt
+import jwt
+from flask import jsonify, request
 
 
 class AuthManager:
     """Manages JWT-based authentication with bcrypt password hashing."""
 
-    def __init__(self, secret_key: str, password_hash: str, token_expiry_hours: int = 168, logger=None):
+    def __init__(
+        self, secret_key: str, password_hash: str, token_expiry_hours: int = 168, logger=None
+    ):
         """Initialize auth manager.
 
         Args:
@@ -40,7 +42,7 @@ class AuthManager:
             bcrypt hash as string
         """
         salt = bcrypt.gensalt(rounds=12)  # 12 rounds is a good balance of security/performance
-        return bcrypt.hashpw(password.encode(), salt).decode('utf-8')
+        return bcrypt.hashpw(password.encode(), salt).decode("utf-8")
 
     def verify_password(self, password: str) -> bool:
         """Verify a password against the stored bcrypt hash.
@@ -71,16 +73,14 @@ class AuthManager:
         now = datetime.utcnow()
         expiry = now + timedelta(hours=self.token_expiry_hours)
 
-        payload = {
-            "username": username,
-            "exp": expiry,
-            "iat": now
-        }
+        payload = {"username": username, "exp": expiry, "iat": now}
         token = jwt.encode(payload, self.secret_key, algorithm="HS256")
 
         if self.logger:
             self.logger.info(f"Generated token for '{username}', expires at {expiry.isoformat()}Z")
-            self.logger.debug(f"Token issued at {now.isoformat()}Z, expires in {self.token_expiry_hours} hours")
+            self.logger.debug(
+                f"Token issued at {now.isoformat()}Z, expires in {self.token_expiry_hours} hours"
+            )
 
         return token
 
@@ -99,7 +99,7 @@ class AuthManager:
                 token,
                 self.secret_key,
                 algorithms=["HS256"],
-                options={"verify_exp": True, "verify_aud": False}  # aud checked manually below
+                options={"verify_exp": True, "verify_aud": False},  # aud checked manually below
             )
             # The MCP server shares this JWT secret but mints tokens with
             # aud="mcp". Reject those here so an MCP access/refresh token can't
@@ -111,21 +111,26 @@ class AuthManager:
             if self.logger:
                 self.logger.debug(f"Token verified for user '{payload.get('username', 'unknown')}'")
             return payload
-        except jwt.ExpiredSignatureError as e:
+        except jwt.ExpiredSignatureError:
             if self.logger:
                 # Try to decode without verification to see the expiry time
                 try:
-                    unverified = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
-                    exp_timestamp = unverified.get('exp')
+                    unverified = jwt.decode(
+                        token, options={"verify_signature": False, "verify_exp": False}
+                    )
+                    exp_timestamp = unverified.get("exp")
                     if exp_timestamp:
                         exp_time = datetime.fromtimestamp(exp_timestamp)
                         now = datetime.utcnow()
                         self.logger.warning(
                             f"Token verification failed: expired token. "
-                            f"Token expired at {exp_time.isoformat()}Z, current time is {now.isoformat()}Z"
+                            f"Token expired at {exp_time.isoformat()}Z, "
+                            f"current time is {now.isoformat()}Z"
                         )
                     else:
-                        self.logger.warning("Token verification failed: expired token (no exp field)")
+                        self.logger.warning(
+                            "Token verification failed: expired token (no exp field)"
+                        )
                 except Exception:
                     self.logger.warning("Token verification failed: expired token")
             return None
@@ -143,12 +148,13 @@ class AuthManager:
             def protected_route():
                 return "Protected content"
         """
+
         @wraps(f)
         def decorated_function(*args, **kwargs):
             # Get token from Authorization header
-            auth_header = request.headers.get('Authorization', '')
+            auth_header = request.headers.get("Authorization", "")
 
-            if not auth_header.startswith('Bearer '):
+            if not auth_header.startswith("Bearer "):
                 return jsonify({"error": "Missing or invalid authorization header"}), 401
 
             token = auth_header[7:]  # Remove "Bearer " prefix

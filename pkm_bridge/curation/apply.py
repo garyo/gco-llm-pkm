@@ -30,7 +30,7 @@ from typing import Any, Dict, List
 
 from ..file_editor import ConflictError, FileEditor
 
-VALID_KINDS = ('add_links', 'new_page', 'insight')
+VALID_KINDS = ("add_links", "new_page", "insight")
 
 
 def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> List[str]:
@@ -43,20 +43,20 @@ def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> 
     if kind not in VALID_KINDS:
         return [f"Unknown proposal kind: '{kind}'"]
 
-    edits = payload.get('edits', [])
+    edits = payload.get("edits", [])
     if not isinstance(edits, list):
         return ["'edits' must be a list"]
 
-    if kind == 'add_links' and not edits:
+    if kind == "add_links" and not edits:
         problems.append("add_links proposal has no edits")
 
-    if kind == 'insight' and (edits or payload.get('page')):
+    if kind == "insight" and (edits or payload.get("page")):
         problems.append("insight proposals carry no file changes (use add_links/new_page)")
 
-    if kind == 'new_page':
-        page = payload.get('page') or {}
-        page_file = page.get('file', '')
-        content = page.get('content', '')
+    if kind == "new_page":
+        page = payload.get("page") or {}
+        page_file = page.get("file", "")
+        content = page.get("content", "")
         if not page_file or not content:
             problems.append("new_page proposal needs page.file and page.content")
         else:
@@ -68,9 +68,9 @@ def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> 
                 problems.append(f"Invalid page path '{page_file}': {e}")
 
     for i, edit in enumerate(edits):
-        file = edit.get('file', '')
-        find = edit.get('find', '')
-        replace = edit.get('replace')
+        file = edit.get("file", "")
+        find = edit.get("find", "")
+        replace = edit.get("replace")
         label = f"edit {i + 1} ({file or 'no file'})"
 
         if not file or not find or replace is None:
@@ -84,7 +84,7 @@ def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> 
         except ValueError as e:
             problems.append(f"{label}: {e}")
             continue
-        count = result['content'].count(find)
+        count = result["content"].count(find)
         if count == 0:
             problems.append(f"{label}: anchor text not found in file")
         elif count > 1:
@@ -112,31 +112,33 @@ def apply_proposal(
         return {"status": "stale", "problems": problems}
 
     # Read all edit targets up front so the apply works from one snapshot.
-    edits = payload.get('edits', [])
+    edits = payload.get("edits", [])
     snapshots = []
     for edit in edits:
-        result = editor.read_file(edit['file'], max_chars=None)
-        snapshots.append({
-            'file': result['path'],  # canonical path after pages/ fallback
-            'content': result['content'],
-            'mtime': result['modified'],
-            'find': edit['find'],
-            'replace': edit['replace'],
-        })
+        result = editor.read_file(edit["file"], max_chars=None)
+        snapshots.append(
+            {
+                "file": result["path"],  # canonical path after pages/ fallback
+                "content": result["content"],
+                "mtime": result["modified"],
+                "find": edit["find"],
+                "replace": edit["replace"],
+            }
+        )
 
     written: List[str] = []
 
-    if kind == 'new_page':
-        page = payload['page']
-        result = editor.write_file(page['file'], page['content'], create_only=True)
-        if result['status'] == 'exists':
+    if kind == "new_page":
+        page = payload["page"]
+        result = editor.write_file(page["file"], page["content"], create_only=True)
+        if result["status"] == "exists":
             return {"status": "stale", "problems": [f"Page already exists: {page['file']}"]}
-        written.append(result['path'])
+        written.append(result["path"])
 
     for snap in snapshots:
-        new_content = snap['content'].replace(snap['find'], snap['replace'], 1)
+        new_content = snap["content"].replace(snap["find"], snap["replace"], 1)
         try:
-            editor.write_file(snap['file'], new_content, expected_mtime=snap['mtime'])
+            editor.write_file(snap["file"], new_content, expected_mtime=snap["mtime"])
         except ConflictError as e:
             logger.warning(f"Proposal apply conflict on {snap['file']}: {e}")
             return {
@@ -144,7 +146,7 @@ def apply_proposal(
                 "written": written,
                 "problems": [f"{snap['file']} changed during apply: {e}"],
             }
-        written.append(snap['file'])
+        written.append(snap["file"])
 
     logger.info(f"Applied {kind} proposal: wrote {len(written)} file(s)")
     return {"status": "applied", "written": written}

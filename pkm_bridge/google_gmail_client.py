@@ -28,11 +28,11 @@ class GoogleGmailClient:
             token=access_token,
             refresh_token=refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv('GOOGLE_CLIENT_ID'),
-            client_secret=os.getenv('GOOGLE_CLIENT_SECRET')
+            client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         )
 
-        self.service = build('gmail', 'v1', credentials=self.credentials)
+        self.service = build("gmail", "v1", credentials=self.credentials)
 
     def list_labels(self) -> List[Dict[str, Any]]:
         """List all Gmail labels.
@@ -41,8 +41,8 @@ class GoogleGmailClient:
             List of label dictionaries with id, name, type, etc.
         """
         try:
-            results = self.service.users().labels().list(userId='me').execute()
-            return results.get('labels', [])
+            results = self.service.users().labels().list(userId="me").execute()
+            return results.get("labels", [])
         except HttpError as e:
             raise Exception(f"Failed to list labels: {e}")
 
@@ -67,26 +67,26 @@ class GoogleGmailClient:
         try:
             max_results = min(max_results, 50)
             params: Dict[str, Any] = {
-                'userId': 'me',
-                'maxResults': max_results,
+                "userId": "me",
+                "maxResults": max_results,
             }
             if query:
-                params['q'] = query
+                params["q"] = query
             if label_ids:
-                params['labelIds'] = label_ids
+                params["labelIds"] = label_ids
             if page_token:
-                params['pageToken'] = page_token
+                params["pageToken"] = page_token
 
             results = self.service.users().messages().list(**params).execute()
             return {
-                'messages': results.get('messages', []),
-                'nextPageToken': results.get('nextPageToken'),
-                'resultSizeEstimate': results.get('resultSizeEstimate', 0),
+                "messages": results.get("messages", []),
+                "nextPageToken": results.get("nextPageToken"),
+                "resultSizeEstimate": results.get("resultSizeEstimate", 0),
             }
         except HttpError as e:
             raise Exception(f"Failed to list messages: {e}")
 
-    def get_message(self, message_id: str, format: str = 'full') -> Dict[str, Any]:
+    def get_message(self, message_id: str, format: str = "full") -> Dict[str, Any]:
         """Get a single message.
 
         Args:
@@ -97,9 +97,12 @@ class GoogleGmailClient:
             Message dictionary
         """
         try:
-            return self.service.users().messages().get(
-                userId='me', id=message_id, format=format
-            ).execute()
+            return (
+                self.service.users()
+                .messages()
+                .get(userId="me", id=message_id, format=format)
+                .execute()
+            )
         except HttpError as e:
             raise Exception(f"Failed to get message {message_id}: {e}")
 
@@ -122,19 +125,19 @@ class GoogleGmailClient:
         try:
             max_results = min(max_results, 50)
             params: Dict[str, Any] = {
-                'userId': 'me',
-                'maxResults': max_results,
+                "userId": "me",
+                "maxResults": max_results,
             }
             if query:
-                params['q'] = query
+                params["q"] = query
             if page_token:
-                params['pageToken'] = page_token
+                params["pageToken"] = page_token
 
             results = self.service.users().threads().list(**params).execute()
             return {
-                'threads': results.get('threads', []),
-                'nextPageToken': results.get('nextPageToken'),
-                'resultSizeEstimate': results.get('resultSizeEstimate', 0),
+                "threads": results.get("threads", []),
+                "nextPageToken": results.get("nextPageToken"),
+                "resultSizeEstimate": results.get("resultSizeEstimate", 0),
             }
         except HttpError as e:
             raise Exception(f"Failed to list threads: {e}")
@@ -149,9 +152,12 @@ class GoogleGmailClient:
             Thread dictionary with messages
         """
         try:
-            return self.service.users().threads().get(
-                userId='me', id=thread_id, format='full'
-            ).execute()
+            return (
+                self.service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="full")
+                .execute()
+            )
         except HttpError as e:
             raise Exception(f"Failed to get thread {thread_id}: {e}")
 
@@ -168,9 +174,9 @@ class GoogleGmailClient:
         """
         name_lower = name.lower()
         for header in headers:
-            if header.get('name', '').lower() == name_lower:
-                return header.get('value', '')
-        return ''
+            if header.get("name", "").lower() == name_lower:
+                return header.get("value", "")
+        return ""
 
     @staticmethod
     def decode_body(payload: Dict[str, Any]) -> str:
@@ -185,32 +191,34 @@ class GoogleGmailClient:
         Returns:
             Decoded body text
         """
-        mime_type = payload.get('mimeType', '')
+        mime_type = payload.get("mimeType", "")
 
         # Direct body (non-multipart)
-        if 'body' in payload and payload['body'].get('data'):
-            decoded = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='replace')
-            if 'html' in mime_type:
+        if "body" in payload and payload["body"].get("data"):
+            decoded = base64.urlsafe_b64decode(payload["body"]["data"]).decode(
+                "utf-8", errors="replace"
+            )
+            if "html" in mime_type:
                 return GoogleGmailClient._strip_html(decoded)
             return decoded
 
         # Multipart: look through parts
-        parts = payload.get('parts', [])
-        text_plain = ''
-        text_html = ''
+        parts = payload.get("parts", [])
+        text_plain = ""
+        text_html = ""
 
         for part in parts:
-            part_mime = part.get('mimeType', '')
+            part_mime = part.get("mimeType", "")
 
-            if part_mime == 'text/plain' and part.get('body', {}).get('data'):
-                text_plain = base64.urlsafe_b64decode(
-                    part['body']['data']
-                ).decode('utf-8', errors='replace')
-            elif part_mime == 'text/html' and part.get('body', {}).get('data'):
-                text_html = base64.urlsafe_b64decode(
-                    part['body']['data']
-                ).decode('utf-8', errors='replace')
-            elif 'multipart' in part_mime:
+            if part_mime == "text/plain" and part.get("body", {}).get("data"):
+                text_plain = base64.urlsafe_b64decode(part["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
+            elif part_mime == "text/html" and part.get("body", {}).get("data"):
+                text_html = base64.urlsafe_b64decode(part["body"]["data"]).decode(
+                    "utf-8", errors="replace"
+                )
+            elif "multipart" in part_mime:
                 # Recurse into nested multipart
                 nested = GoogleGmailClient.decode_body(part)
                 if nested:
@@ -221,19 +229,19 @@ class GoogleGmailClient:
         if text_html:
             return GoogleGmailClient._strip_html(text_html)
 
-        return ''
+        return ""
 
     @staticmethod
     def _strip_html(html: str) -> str:
         """Strip HTML tags and decode entities for plain-text fallback."""
         # Remove style/script blocks
-        text = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"<(style|script)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
         # Replace <br> and </p> with newlines
-        text = re.sub(r'<br\s*/?>|</p>', '\n', text, flags=re.IGNORECASE)
+        text = re.sub(r"<br\s*/?>|</p>", "\n", text, flags=re.IGNORECASE)
         # Strip remaining tags
-        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r"<[^>]+>", "", text)
         # Collapse whitespace
-        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
 
     def format_message_summary(
@@ -252,14 +260,14 @@ class GoogleGmailClient:
         Returns:
             Formatted message summary
         """
-        payload = message.get('payload', {})
-        headers = payload.get('headers', [])
+        payload = message.get("payload", {})
+        headers = payload.get("headers", [])
 
-        from_addr = self.extract_header(headers, 'From')
-        to_addr = self.extract_header(headers, 'To')
-        subject = self.extract_header(headers, 'Subject') or '(no subject)'
-        date = self.extract_header(headers, 'Date')
-        message_id = message.get('id', '')
+        from_addr = self.extract_header(headers, "From")
+        to_addr = self.extract_header(headers, "To")
+        subject = self.extract_header(headers, "Subject") or "(no subject)"
+        date = self.extract_header(headers, "Date")
+        message_id = message.get("id", "")
 
         lines = [
             f"Subject: {subject}",
@@ -273,7 +281,7 @@ class GoogleGmailClient:
             body = self.decode_body(payload)
             if body:
                 if len(body) > max_body_chars:
-                    body = body[:max_body_chars] + '...[truncated]'
+                    body = body[:max_body_chars] + "...[truncated]"
                 lines.append(f"\n{body}")
 
-        return '\n'.join(lines)
+        return "\n".join(lines)

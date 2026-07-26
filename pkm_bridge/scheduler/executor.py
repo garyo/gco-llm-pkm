@@ -61,15 +61,12 @@ class TaskExecutor:
         # Build tool list (optionally filtered)
         if tools_allowed:
             tools = [
-                t for t in self.tool_registry.get_anthropic_tools()
-                if t["name"] in tools_allowed
+                t for t in self.tool_registry.get_anthropic_tools() if t["name"] in tools_allowed
             ]
         else:
             tools = self.tool_registry.get_anthropic_tools()
 
-        messages: List[Dict[str, Any]] = [
-            {"role": "user", "content": prompt}
-        ]
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": prompt}]
 
         agent_summary = ""
 
@@ -107,9 +104,7 @@ class TaskExecutor:
                 if tools:
                     api_params["tools"] = tools
                 if cache_enabled:
-                    api_params["extra_headers"] = {
-                        "anthropic-beta": "prompt-caching-2024-07-31"
-                    }
+                    api_params["extra_headers"] = {"anthropic-beta": "prompt-caching-2024-07-31"}
 
                 response = self.client.complete(**api_params)
 
@@ -139,21 +134,23 @@ class TaskExecutor:
                     self.logger.info(f"Scheduler executor: calling {tool_name}")
 
                     try:
-                        result_text = self.tool_registry.execute_tool(
-                            tool_name, block.input
-                        )
+                        result_text = self.tool_registry.execute_tool(tool_name, block.input)
                     except Exception as e:
                         result_text = f"Error executing {tool_name}: {e}"
                         self.logger.error(f"Scheduler executor: tool error: {e}")
 
-                    if not result_text or (isinstance(result_text, str) and not result_text.strip()):
+                    if not result_text or (
+                        isinstance(result_text, str) and not result_text.strip()
+                    ):
                         result_text = "[Empty result]"
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result_text,
+                        }
+                    )
 
                 # Build assistant message content
                 response_content = []
@@ -161,12 +158,14 @@ class TaskExecutor:
                     if getattr(block, "type", "") == "text":
                         response_content.append({"type": "text", "text": block.text})
                     elif getattr(block, "type", "") == "tool_use":
-                        response_content.append({
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        })
+                        response_content.append(
+                            {
+                                "type": "tool_use",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            }
+                        )
 
                 # Tell the model where it stands in its budgets so it can pace
                 # itself — without this it explores until the loop is cut off

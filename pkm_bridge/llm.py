@@ -35,6 +35,7 @@ class ContentBlock:
     Provides model_dump() for compatibility with serialize_message_content(),
     which uses that method to convert Anthropic SDK response objects to dicts.
     """
+
     type: str
     text: str = ""
     id: str = ""
@@ -49,6 +50,7 @@ class ContentBlock:
 @dataclass
 class Usage:
     """Token usage, matching Anthropic's attribute names."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
@@ -58,6 +60,7 @@ class Usage:
 @dataclass
 class LLMResponse:
     """Normalized response matching Anthropic's response shape."""
+
     content: list[ContentBlock] = field(default_factory=list)
     stop_reason: str = "end_turn"
     usage: Usage = field(default_factory=Usage)
@@ -224,8 +227,7 @@ def _anthropic_messages_to_openai(
         elif isinstance(system, list):
             # Anthropic structured blocks — concatenate text fields
             sys_text = "\n\n".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in system
+                block.get("text", "") if isinstance(block, dict) else str(block) for block in system
             )
         else:
             sys_text = str(system)
@@ -277,14 +279,15 @@ def _anthropic_messages_to_openai(
                     # tool_result content can be a list of blocks; flatten to string
                     if isinstance(tr_content, list):
                         tr_content = "\n".join(
-                            b.get("text", "") if isinstance(b, dict) else str(b)
-                            for b in tr_content
+                            b.get("text", "") if isinstance(b, dict) else str(b) for b in tr_content
                         )
-                    openai_msgs.append({
-                        "role": "tool",
-                        "tool_call_id": tr.get("tool_use_id", ""),
-                        "content": tr_content,
-                    })
+                    openai_msgs.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tr.get("tool_use_id", ""),
+                            "content": tr_content,
+                        }
+                    )
 
                 # Emit any non-tool-result text as a user message
                 combined_text = "\n".join(t for t in text_parts if t)
@@ -323,14 +326,16 @@ def _translate_assistant_message(content: Any, *, include_reasoning: bool = True
         if btype == "text":
             text_parts.append(block.get("text", ""))
         elif btype == "tool_use":
-            tool_calls.append({
-                "id": block.get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": block.get("name", ""),
-                    "arguments": json.dumps(block.get("input", {})),
-                },
-            })
+            tool_calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                }
+            )
         elif btype == "reasoning":
             reasoning_parts.append(block.get("text", ""))
         # Skip Anthropic-native 'thinking' blocks (different on-wire format)
@@ -360,9 +365,8 @@ def _openai_response_to_llm_response(response: Any) -> LLMResponse:
     # OpenRouter normalizes the field to `reasoning`; some providers expose
     # `reasoning_content` directly. Some providers (SiliconFlow) require this
     # to be echoed back on the next turn — see `_translate_assistant_message`.
-    reasoning_text = (
-        getattr(message, "reasoning_content", None)
-        or getattr(message, "reasoning", None)
+    reasoning_text = getattr(message, "reasoning_content", None) or getattr(
+        message, "reasoning", None
     )
     if reasoning_text:
         content_blocks.append(ContentBlock(type="reasoning", text=reasoning_text))
@@ -378,12 +382,14 @@ def _openai_response_to_llm_response(response: Any) -> LLMResponse:
                 args = json.loads(tc.function.arguments)
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            content_blocks.append(ContentBlock(
-                type="tool_use",
-                id=tc.id,
-                name=tc.function.name,
-                input=args,
-            ))
+            content_blocks.append(
+                ContentBlock(
+                    type="tool_use",
+                    id=tc.id,
+                    name=tc.function.name,
+                    input=args,
+                )
+            )
 
     # Map finish_reason
     finish = choice.finish_reason or "stop"
@@ -642,9 +648,8 @@ class LLMClient:
                 text_buf.append(text)
                 yield {"type": "text_delta", "text": text}
 
-            reasoning = (
-                getattr(delta, "reasoning_content", None)
-                or getattr(delta, "reasoning", None)
+            reasoning = getattr(delta, "reasoning_content", None) or getattr(
+                delta, "reasoning", None
             )
             if reasoning:
                 reasoning_buf.append(reasoning)
@@ -674,9 +679,14 @@ class LLMClient:
                 args = json.loads(tc["arguments"]) if tc["arguments"] else {}
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            content_blocks.append(ContentBlock(
-                type="tool_use", id=tc["id"], name=tc["name"], input=args,
-            ))
+            content_blocks.append(
+                ContentBlock(
+                    type="tool_use",
+                    id=tc["id"],
+                    name=tc["name"],
+                    input=args,
+                )
+            )
         if not content_blocks:
             content_blocks.append(ContentBlock(type="text", text=""))
 
@@ -694,9 +704,7 @@ class LLMClient:
         # can read it. stream_chunk_builder is the official helper for this.
         rebuilt: Any = None
         try:
-            rebuilt = litellm.stream_chunk_builder(
-                chunks_collected, messages=openai_messages
-            )
+            rebuilt = litellm.stream_chunk_builder(chunks_collected, messages=openai_messages)
         except Exception as e:
             logger.debug(f"stream_chunk_builder failed (non-fatal): {e}")
 

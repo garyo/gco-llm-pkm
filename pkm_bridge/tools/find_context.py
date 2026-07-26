@@ -8,23 +8,24 @@
 
 import json
 import re
-import sys
-import yaml
 import subprocess
-from pathlib import Path
-from typing import Dict, Any, List, Optional
+import sys
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
 
 # Allow running as script or as module
 if __name__ == "__main__":
     # When running as script, add parent directory to path
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-    from pkm_bridge.tools.base import BaseTool
     from pkm_bridge.logging_config import setup_logging
     from pkm_bridge.org_links import rewrite_org_links_to_markdown
+    from pkm_bridge.tools.base import BaseTool
 else:
-    from .base import BaseTool
     from ..org_links import rewrite_org_links_to_markdown
+    from .base import BaseTool
 
 
 class FindContextTool(BaseTool):
@@ -36,7 +37,7 @@ class FindContextTool(BaseTool):
     - File metadata (name, type, line number)
     """
 
-    def __init__(self, logger, org_dir: Path, logseq_dir: Path|None = None):
+    def __init__(self, logger, org_dir: Path, logseq_dir: Path | None = None):
         """Initialize find_context tool.
 
         Args:
@@ -68,21 +69,26 @@ Uses ripgrep for fast searching. Automatically respects .gitignore files to excl
 Returns YAML with the following fields for each match:
 - filename: full path to the file
 - file_type: 'org' or 'md'
-- date: note date in YYYY-MM-DD format (extracted from #+title for org files, filename for journals, or file mtime)
+- date: note date in YYYY-MM-DD format (extracted from #+title for org files, filename for
+  journals, or file mtime)
 - match_line: line number of the match (1-indexed)
 - matched_text: the actual matched line
-- context: hierarchical context (optional - only included if there's additional context beyond the matched line)
+- context: hierarchical context (optional - only included if there's additional context beyond
+  the matched line)
 
 Context structure:
-- For org files: includes parent headings up to root, current heading, and direct content under that heading (stops at child headings)
-- For markdown files: includes parent bullets (less indented), matched line, and child content (more indented)
+- For org files: includes parent headings up to root, current heading, and direct content under
+  that heading (stops at child headings)
+- For markdown files: includes parent bullets (less indented), matched line, and child content
+  (more indented)
 
 Returns only the first match per file to avoid duplication.
 Results are sorted by date (most recent first), then limited to max_results.
 
 Arguments:
 - pattern: regex pattern to search for (case-insensitive, required)
-- paths: optional list of files/directories to search (if not provided, searches default directories)
+- paths: optional list of files/directories to search (if not provided, searches default
+  directories)
 - newer: optional date filter in YYYY-MM-DD format (only returns notes with dates >= this date)
 - max_results: maximum number of results to return (default: 50)
 
@@ -95,26 +101,25 @@ Default directories searched (if paths not provided):
         return {
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regex pattern to search for"
-                },
+                "pattern": {"type": "string", "description": "Regex pattern to search for"},
                 "paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional list of files or directories to search. Directories are searched recursively."
+                    "description": "Optional list of files or directories to search. "
+                    "Directories are searched recursively.",
                 },
                 "newer": {
                     "type": "string",
-                    "description": "Optional date filter in YYYY-MM-DD format. Only returns notes with dates >= this date."
+                    "description": "Optional date filter in YYYY-MM-DD format. "
+                    "Only returns notes with dates >= this date.",
                 },
                 "max_results": {
                     "type": "number",
                     "default": 50,
-                    "description": "Maximum number of results to return"
-                }
+                    "description": "Maximum number of results to return",
+                },
             },
-            "required": ["pattern"]
+            "required": ["pattern"],
         }
 
     def _parse_org_structure(self, lines: List[str], match_line: int) -> Dict[str, Any]:
@@ -138,9 +143,9 @@ Default directories searched (if paths not provided):
                 break
 
             # Check for org heading
-            if line.startswith('*'):
+            if line.startswith("*"):
                 # Count the number of stars
-                match = re.match(r'^(\*+)\s+(.+)$', line)
+                match = re.match(r"^(\*+)\s+(.+)$", line)
                 if match:
                     level = len(match.group(1))
                     heading_text = match.group(2).strip()
@@ -163,8 +168,8 @@ Default directories searched (if paths not provided):
         section_end = len(lines)
         for i in range(current_section_start + 1, len(lines)):
             line = lines[i]
-            if line.startswith('*'):
-                match = re.match(r'^(\*+)\s', line)
+            if line.startswith("*"):
+                match = re.match(r"^(\*+)\s", line)
                 if match:
                     # Stop at ANY heading (child or sibling)
                     section_end = i
@@ -178,10 +183,10 @@ Default directories searched (if paths not provided):
             line = lines[i]
 
             # Track property drawer state
-            if line.strip() == ':PROPERTIES:':
+            if line.strip() == ":PROPERTIES:":
                 in_properties = True
                 continue
-            elif line.strip() == ':END:':
+            elif line.strip() == ":END:":
                 in_properties = False
                 continue
 
@@ -192,11 +197,11 @@ Default directories searched (if paths not provided):
             section_content.append(line)
 
         return {
-            'parent_headings': parent_headings,
-            'current_heading': current_heading,
-            'current_heading_level': current_section_level,
-            'section_content': '\n'.join(section_content).strip(),
-            'section_start': current_section_start,
+            "parent_headings": parent_headings,
+            "current_heading": current_heading,
+            "current_heading_level": current_section_level,
+            "section_content": "\n".join(section_content).strip(),
+            "section_start": current_section_start,
         }
 
     def _parse_markdown_structure(self, lines: List[str], match_line: int) -> Dict[str, Any]:
@@ -216,7 +221,7 @@ Default directories searched (if paths not provided):
             if not line.strip():
                 continue
             line_indent = len(line) - len(line.lstrip())
-            if line_indent < match_indent and line.strip().startswith('-'):
+            if line_indent < match_indent and line.strip().startswith("-"):
                 parent_bullets.insert(0, (line_indent, line.strip()))
                 match_indent = line_indent
 
@@ -233,8 +238,8 @@ Default directories searched (if paths not provided):
             section_content.append(line.strip())
 
         return {
-            'parent_bullets': parent_bullets,
-            'section_content': '\n'.join(section_content).strip()
+            "parent_bullets": parent_bullets,
+            "section_content": "\n".join(section_content).strip(),
         }
 
     def _extract_date(self, file_path: Path, lines: List[str], file_type: str) -> Optional[str]:
@@ -249,17 +254,17 @@ Default directories searched (if paths not provided):
             Date string in YYYY-MM-DD format, or None if no date found
         """
         # 1. Try #+title for org files
-        if file_type == 'org':
+        if file_type == "org":
             for line in lines[:20]:  # Check first 20 lines
-                if line.lower().startswith('#+title:'):
+                if line.lower().startswith("#+title:"):
                     # Look for YYYY-MM-DD pattern in the title
-                    title_match = re.search(r'(\d{4}-\d{2}-\d{2})', line)
+                    title_match = re.search(r"(\d{4}-\d{2}-\d{2})", line)
                     if title_match:
                         return title_match.group(1)
 
         # 2. Try filename pattern (YYYY-MM-DD or YYYY_MM_DD)
         filename = file_path.stem  # Get filename without extension
-        date_match = re.match(r'^(\d{4})[-_](\d{2})[-_](\d{2})', filename)
+        date_match = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})", filename)
         if date_match:
             year, month, day = date_match.groups()
             return f"{year}-{month}-{day}"
@@ -268,12 +273,10 @@ Default directories searched (if paths not provided):
         try:
             mtime = file_path.stat().st_mtime
             dt = datetime.fromtimestamp(mtime)
-            return dt.strftime('%Y-%m-%d')
+            return dt.strftime("%Y-%m-%d")
         except Exception as e:
             self.logger.warning(f"Could not get mtime for {file_path}: {e}")
             return None
-
-
 
     def _run_ripgrep(self, pattern: str, paths: List[str]) -> List[Dict[str, Any]]:
         """Use ripgrep to find all matches efficiently.
@@ -292,38 +295,38 @@ Default directories searched (if paths not provided):
         # Note: ripgrep respects .gitignore by default, which already excludes
         # internal directories like bak/, .recycle/, .logseq/, etc.
         cmd = [
-            'rg',
-            '--json',  # JSON output for easy parsing
-            '-i',  # Case insensitive
-            '--type-add', 'notes:*.{org,md}',  # Define custom type
-            '--type', 'notes',  # Only search note files
-            '--max-count', '1',  # Only first match per file
-            pattern
+            "rg",
+            "--json",  # JSON output for easy parsing
+            "-i",  # Case insensitive
+            "--type-add",
+            "notes:*.{org,md}",  # Define custom type
+            "--type",
+            "notes",  # Only search note files
+            "--max-count",
+            "1",  # Only first match per file
+            pattern,
         ]
         cmd.extend(paths)
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
             # Parse JSON output from ripgrep
             matches = []
-            for line in result.stdout.strip().split('\n'):
+            for line in result.stdout.strip().split("\n"):
                 if not line:
                     continue
                 try:
                     data = json.loads(line)
-                    if data.get('type') == 'match':
-                        match_data = data['data']
-                        matches.append({
-                            'file': Path(match_data['path']['text']),
-                            'line_num': match_data['line_number'],
-                            'matched_text': match_data['lines']['text'].strip()
-                        })
+                    if data.get("type") == "match":
+                        match_data = data["data"]
+                        matches.append(
+                            {
+                                "file": Path(match_data["path"]["text"]),
+                                "line_num": match_data["line_number"],
+                                "matched_text": match_data["lines"]["text"].strip(),
+                            }
+                        )
                 except Exception as e:
                     self.logger.debug(f"Could not parse ripgrep line: {e}")
                     continue
@@ -331,7 +334,7 @@ Default directories searched (if paths not provided):
             return matches
 
         except subprocess.TimeoutExpired:
-            self.logger.error(f"Ripgrep search timed out after 30s")
+            self.logger.error("Ripgrep search timed out after 30s")
             return []
         except FileNotFoundError:
             self.logger.error("ripgrep (rg) not found. Please install ripgrep.")
@@ -389,44 +392,44 @@ Default directories searched (if paths not provided):
         # Now extract context for each match
         all_results = []
         for match in matches:
-            file_path = match['file']
-            line_num = match['line_num'] - 1  # Convert to 0-indexed
+            file_path = match["file"]
+            line_num = match["line_num"] - 1  # Convert to 0-indexed
 
             # Determine file type
-            if file_path.suffix == '.org':
-                file_type = 'org'
-            elif file_path.suffix == '.md':
-                file_type = 'md'
+            if file_path.suffix == ".org":
+                file_type = "org"
+            elif file_path.suffix == ".md":
+                file_type = "md"
             else:
                 continue
 
             try:
                 # Read file and extract context
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    lines = [line.rstrip('\n\r') for line in f.readlines()]
+                with open(file_path, "r", encoding="utf-8") as f:
+                    lines = [line.rstrip("\n\r") for line in f.readlines()]
 
                 # Extract date from file
                 file_date = self._extract_date(file_path, lines, file_type)
 
                 # Extract context based on file type
-                if file_type == 'org':
+                if file_type == "org":
                     context = self._parse_org_structure(lines, line_num)
 
                     # Build full context with parent headings
                     full_context = []
-                    for level, heading in context['parent_headings']:
-                        full_context.append('*' * level + ' ' + heading)
-                    if context.get('current_heading'):
-                        level = context['current_heading_level']
-                        full_context.append('*' * level + ' ' + context['current_heading'])
-                    full_context.append('')
-                    full_context.append(context['section_content'])
+                    for level, heading in context["parent_headings"]:
+                        full_context.append("*" * level + " " + heading)
+                    if context.get("current_heading"):
+                        level = context["current_heading_level"]
+                        full_context.append("*" * level + " " + context["current_heading"])
+                    full_context.append("")
+                    full_context.append(context["section_content"])
 
-                    context_str = '\n'.join(full_context).strip()
-                    matched_text = match['matched_text']
+                    context_str = "\n".join(full_context).strip()
+                    matched_text = match["matched_text"]
 
                     # Rewrite org links to markdown for image/id rendering
-                    section_start = context.get('section_start', 0)
+                    section_start = context.get("section_start", 0)
                     context_str = rewrite_org_links_to_markdown(
                         context_str, lines, section_start, self.org_dir
                     )
@@ -435,19 +438,19 @@ Default directories searched (if paths not provided):
                     )
 
                     result = {
-                        'filename': str(file_path),
-                        'file_type': file_type,
-                        'match_line': match['line_num'],
-                        'matched_text': matched_text,
+                        "filename": str(file_path),
+                        "file_type": file_type,
+                        "match_line": match["line_num"],
+                        "matched_text": matched_text,
                     }
 
                     # Add date if available
                     if file_date:
-                        result['date'] = file_date
+                        result["date"] = file_date
 
                     # Only include context if it adds information beyond the matched line
                     if context_str != matched_text:
-                        result['context'] = context_str
+                        result["context"] = context_str
 
                     all_results.append(result)
 
@@ -456,27 +459,27 @@ Default directories searched (if paths not provided):
 
                     # Build full context with parent bullets
                     full_context = []
-                    for indent, bullet in context['parent_bullets']:
-                        full_context.append(' ' * indent + bullet)
-                    full_context.append(context['section_content'])
+                    for indent, bullet in context["parent_bullets"]:
+                        full_context.append(" " * indent + bullet)
+                    full_context.append(context["section_content"])
 
-                    context_str = '\n'.join(full_context).strip()
-                    matched_text = match['matched_text']
+                    context_str = "\n".join(full_context).strip()
+                    matched_text = match["matched_text"]
 
                     result = {
-                        'filename': str(file_path),
-                        'file_type': file_type,
-                        'match_line': match['line_num'],
-                        'matched_text': matched_text,
+                        "filename": str(file_path),
+                        "file_type": file_type,
+                        "match_line": match["line_num"],
+                        "matched_text": matched_text,
                     }
 
                     # Add date if available
                     if file_date:
-                        result['date'] = file_date
+                        result["date"] = file_date
 
                     # Only include context if it adds information beyond the matched line
                     if context_str != matched_text:
-                        result['context'] = context_str
+                        result["context"] = context_str
 
                     all_results.append(result)
 
@@ -486,11 +489,11 @@ Default directories searched (if paths not provided):
 
         # Sort results by date (most recent first)
         # Results without dates will be at the end
-        all_results.sort(key=lambda x: x.get('date', '0000-00-00'), reverse=True)
+        all_results.sort(key=lambda x: x.get("date", "0000-00-00"), reverse=True)
 
         # Filter by date if newer is specified
         if newer:
-            all_results = [r for r in all_results if r.get('date', '0000-00-00') >= newer]
+            all_results = [r for r in all_results if r.get("date", "0000-00-00") >= newer]
 
         # Limit results AFTER sorting and filtering
         all_results = all_results[:max_results]
@@ -499,24 +502,17 @@ Default directories searched (if paths not provided):
         if not all_results:
             return f"No matches found for pattern: {pattern}"
 
-        output = {
-            'pattern': pattern,
-            'total_matches': len(all_results),
-            'results': all_results
-        }
+        output = {"pattern": pattern, "total_matches": len(all_results), "results": all_results}
 
         # Custom representer for multiline strings - use literal block style (|)
         def str_representer(dumper, data):
-            if '\n' in data:
-                return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
-            return dumper.represent_scalar('tag:yaml.org,2002:str', data)
+            if "\n" in data:
+                return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+            return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
         yaml.add_representer(str, str_representer)
 
-        return yaml.dump(output,
-                        default_flow_style=False,
-                        allow_unicode=True,
-                        sort_keys=False)
+        return yaml.dump(output, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def main():
@@ -525,7 +521,7 @@ def main():
     import os
 
     parser = argparse.ArgumentParser(
-        description='Find notes matching a regex pattern with full context',
+        description="Find notes matching a regex pattern with full context",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -534,32 +530,44 @@ Examples:
   %(prog)s "#music" --org-only
   %(prog)s "TODO" --paths ~/Documents/org-agenda/journals/2025-11-*.org
   %(prog)s "music" --newer 2025-11-01
-        """
+        """,
     )
-    parser.add_argument('pattern', help='Regex pattern to search for')
-    parser.add_argument('--paths', nargs='+',
-                        help='Files or directories to search (default: use default org/logseq dirs)')
-    parser.add_argument('--newer', type=str,
-                        help='Only return notes with dates >= this date (YYYY-MM-DD format)')
-    parser.add_argument('--max-results', type=int, default=50,
-                        help='Maximum number of results (default: 50)')
-    parser.add_argument('--org-only', action='store_true',
-                        help='Search only org files (skip Logseq)')
-    parser.add_argument('--logseq-only', action='store_true',
-                        help='Search only Logseq files (skip org)')
-    parser.add_argument('--org-dir', type=str,
-                        default=os.path.expanduser('~/Documents/org-agenda'),
-                        help='Org-mode directory (default: ~/Documents/org-agenda)')
-    parser.add_argument('--logseq-dir', type=str,
-                        default=os.path.expanduser('~/Logseq Notes'),
-                        help='Logseq directory (default: ~/Logseq Notes)')
-    parser.add_argument('--debug', action='store_true',
-                        help='Enable debug logging')
+    parser.add_argument("pattern", help="Regex pattern to search for")
+    parser.add_argument(
+        "--paths",
+        nargs="+",
+        help="Files or directories to search (default: use default org/logseq dirs)",
+    )
+    parser.add_argument(
+        "--newer", type=str, help="Only return notes with dates >= this date (YYYY-MM-DD format)"
+    )
+    parser.add_argument(
+        "--max-results", type=int, default=50, help="Maximum number of results (default: 50)"
+    )
+    parser.add_argument(
+        "--org-only", action="store_true", help="Search only org files (skip Logseq)"
+    )
+    parser.add_argument(
+        "--logseq-only", action="store_true", help="Search only Logseq files (skip org)"
+    )
+    parser.add_argument(
+        "--org-dir",
+        type=str,
+        default=os.path.expanduser("~/Documents/org-agenda"),
+        help="Org-mode directory (default: ~/Documents/org-agenda)",
+    )
+    parser.add_argument(
+        "--logseq-dir",
+        type=str,
+        default=os.path.expanduser("~/Logseq Notes"),
+        help="Logseq directory (default: ~/Logseq Notes)",
+    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     args = parser.parse_args()
 
     # Setup logging
-    log_level = 'DEBUG' if args.debug else 'INFO'
+    log_level = "DEBUG" if args.debug else "INFO"
     logger = setup_logging(log_level)
 
     # Determine directories
@@ -571,15 +579,12 @@ Examples:
         sys.exit(1)
 
     # Create tool and execute
-    tool = FindContextTool(logger, org_dir or Path('/tmp'), logseq_dir)
-    params = {
-        'pattern': args.pattern,
-        'max_results': args.max_results
-    }
+    tool = FindContextTool(logger, org_dir or Path("/tmp"), logseq_dir)
+    params = {"pattern": args.pattern, "max_results": args.max_results}
     if args.paths:
-        params['paths'] = args.paths
+        params["paths"] = args.paths
     if args.newer:
-        params['newer'] = args.newer
+        params["newer"] = args.newer
 
     result = tool.execute(params)
 

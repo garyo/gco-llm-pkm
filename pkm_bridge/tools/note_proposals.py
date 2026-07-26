@@ -302,8 +302,11 @@ class ResolveNoteProposalTool(_ProposalToolBase):
                 if problems:
                     return "❌ Modified payload invalid:\n" + "\n".join(f"- {p}" for p in problems)
                 NoteProposalRepository.update_payload(
-                    db, proposal_id, payload,
-                    title=params.get("title"), resolution_note=reason or None,
+                    db,
+                    proposal_id,
+                    payload,
+                    title=params.get("title"),
+                    resolution_note=reason or None,
                 )
                 return (
                     f"✅ Updated proposal #{proposal_id}; still pending — "

@@ -32,113 +32,126 @@ A modular server providing Claude API access to Personal Knowledge Management fi
 """
 
 import json
+import os
 import re
 import secrets
 import threading
 import time
 import uuid
 from contextlib import contextmanager
-from typing import Dict, Any
+from pathlib import Path
+from typing import Any, Dict
 
 from anthropic import Anthropic
-from flask import Flask, Response, request, jsonify, render_template, send_from_directory, stream_with_context
-from pkm_bridge.llm import LLMClient
-from pkm_bridge.models import (
-    get_anthropic_cost, get_available_models, get_role_model, is_anthropic,
-    web_search_tool,
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    request,
+    send_from_directory,
+    stream_with_context,
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
-import os
-from pathlib import Path
+
+from pkm_bridge.llm import LLMClient
+from pkm_bridge.models import (
+    get_anthropic_cost,
+    get_available_models,
+    is_anthropic,
+    web_search_tool,
+)
 
 # Optional: flask_hot_reload (dev only)
 try:
     from flask_hot_reload import HotReload
+
     HOT_RELOAD_AVAILABLE = True
 except ImportError:
     HOT_RELOAD_AVAILABLE = False
 
 # Import configuration and logging
+# Import scheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+
 from config.settings import Config
-from pkm_bridge.logging_config import setup_logging
 
 # Import auth
 from pkm_bridge.auth import AuthManager
 
-# Import database
-from pkm_bridge.database import init_db, get_db
-from pkm_bridge.db_repository import (
-    SessionRepository, ToolExecutionLogRepository, LearnedRuleRepository,
-    QueryFeedbackRepository, QueryFeedbackExplicitRepository, SessionNoteRepository,
-)
+# Import RAG components
+from pkm_bridge.context_retriever import DEFAULT_MIN_SIMILARITY, ContextRetriever
 
-# Import tool components
-from pkm_bridge.tools.registry import ToolRegistry
-from pkm_bridge.tools.shell import ExecuteShellTool, WriteAndExecuteScriptTool
+# Import database
+from pkm_bridge.database import get_db, init_db
+
+# Import database components
+from pkm_bridge.db_repository import (
+    LearnedRuleRepository,
+    OAuthRepository,
+    QueryFeedbackExplicitRepository,
+    QueryFeedbackRepository,
+    SessionNoteRepository,
+    SessionRepository,
+    ToolExecutionLogRepository,
+    UserSettingsRepository,
+)
+from pkm_bridge.embeddings.embedding_service import run_incremental_embedding
+from pkm_bridge.embeddings.voyage_client import VoyageClient
+
+# Import SSE event manager
+from pkm_bridge.events import event_manager
+
+# Import self-improvement components
+from pkm_bridge.feedback_capture import capture_feedback, check_previous_correction
+
+# Import Google Calendar components
+from pkm_bridge.google_oauth import GoogleOAuth
+from pkm_bridge.logging_config import setup_logging
+
+# Import org-mode link utilities
+from pkm_bridge.org_links import resolve_attachment_path, resolve_org_id_to_file
+from pkm_bridge.query_enhancer import QueryEnhancer
+from pkm_bridge.retrospective import SessionRetrospective
+from pkm_bridge.scheduler.dispatcher import TaskDispatcher
+from pkm_bridge.scheduler.executor import TaskExecutor
+from pkm_bridge.scheduler.heartbeat import ensure_heartbeat_task
+from pkm_bridge.scheduler.repository import (
+    DailyTokenUsageRepository,
+    ScheduledTaskRepository,
+    ScheduledTaskRunRepository,
+)
+from pkm_bridge.self_improvement.agent import SelfImprovementAgent
+from pkm_bridge.self_improvement.filesystem import ensure_pkm_structure
+
+# Import STT client for Whisper transcription
+from pkm_bridge.stt_client import STTClient
+
+# Import TickTick components
+from pkm_bridge.ticktick_oauth import TickTickOAuth
 from pkm_bridge.tools.files import ListFilesTool, ReadNoteTool
+from pkm_bridge.tools.find_context import FindContextTool
+from pkm_bridge.tools.google_calendar import GoogleCalendarTool
+from pkm_bridge.tools.google_gmail import GoogleGmailTool
 from pkm_bridge.tools.note_proposals import (
     ListNoteProposalsTool,
     ProposeNoteOrganizationTool,
     ResolveNoteProposalTool,
 )
-from pkm_bridge.tools.search_notes import SearchNotesTool
-from pkm_bridge.tools.ticktick import TickTickTool
-from pkm_bridge.tools.google_calendar import GoogleCalendarTool
-from pkm_bridge.tools.google_gmail import GoogleGmailTool
 from pkm_bridge.tools.open_file import OpenFileTool
-from pkm_bridge.tools.find_context import FindContextTool
-from pkm_bridge.tools.semantic_search import SemanticSearchTool
-from pkm_bridge.tools.skills import SaveSkillTool, ListSkillsTool, UseSkillTool, NoteToSelfTool
+
+# Import tool components
+from pkm_bridge.tools.registry import ToolRegistry
 from pkm_bridge.tools.schedule_task import ScheduleTaskTool
-
-# Import database components
-from pkm_bridge.database import init_db, get_db
-from pkm_bridge.db_repository import OAuthRepository, UserSettingsRepository
-
-# Import TickTick components
-from pkm_bridge.ticktick_oauth import TickTickOAuth
-from pkm_bridge.ticktick_client import TickTickClient
-
-# Import Google Calendar components
-from pkm_bridge.google_oauth import GoogleOAuth
-from pkm_bridge.google_calendar_client import GoogleCalendarClient
-
-# Import org-mode link utilities
-from pkm_bridge.org_links import resolve_attachment_path, resolve_org_id_to_file
-
-# Import SSE event manager
-from pkm_bridge.events import event_manager
+from pkm_bridge.tools.search_notes import SearchNotesTool
+from pkm_bridge.tools.semantic_search import SemanticSearchTool
+from pkm_bridge.tools.shell import ExecuteShellTool, WriteAndExecuteScriptTool
+from pkm_bridge.tools.skills import ListSkillsTool, NoteToSelfTool, SaveSkillTool, UseSkillTool
+from pkm_bridge.tools.ticktick import TickTickTool
 
 # Import voice preprocessor
 from pkm_bridge.voice_preprocessor import VoicePreprocessor
-
-# Import STT client for Whisper transcription
-from pkm_bridge.stt_client import STTClient
-
-# Import RAG components
-from pkm_bridge.context_retriever import ContextRetriever, DEFAULT_MIN_SIMILARITY
-from pkm_bridge.embeddings.voyage_client import VoyageClient
-from pkm_bridge.embeddings.embedding_service import run_incremental_embedding
-
-# Import self-improvement components
-from pkm_bridge.feedback_capture import capture_feedback, check_previous_correction
-from pkm_bridge.retrospective import SessionRetrospective
-from pkm_bridge.query_enhancer import QueryEnhancer
-from pkm_bridge.self_improvement.agent import SelfImprovementAgent
-from pkm_bridge.self_improvement.filesystem import ensure_pkm_structure
-from pkm_bridge.scheduler.executor import TaskExecutor
-from pkm_bridge.scheduler.dispatcher import TaskDispatcher
-from pkm_bridge.scheduler.heartbeat import ensure_heartbeat_task
-from pkm_bridge.scheduler.repository import (
-    ScheduledTaskRepository,
-    ScheduledTaskRunRepository,
-    DailyTokenUsageRepository,
-)
-
-# Import scheduler
-from apscheduler.schedulers.background import BackgroundScheduler
 
 # -------------------------
 # Setup & Configuration
@@ -165,12 +178,12 @@ except ValueError as e:
     logger.info(f"STT not configured: {e}")
 
 # Initialize RAG components (if Voyage API key available)
-voyage_api_key = os.getenv('VOYAGE_API_KEY')
-rag_recent_days = int(os.getenv('RAG_RECENT_DAYS', '3'))  # Number of recent days to include
+voyage_api_key = os.getenv("VOYAGE_API_KEY")
+rag_recent_days = int(os.getenv("RAG_RECENT_DAYS", "3"))  # Number of recent days to include
 # Auto-inject RAG context (semantic + recent journals) into the system prompt on every /query.
 # Off by default — semantic_search is still available as an explicit tool. False-similarity matches
 # tend to mislead more than help, and the context is uncached so it adds tokens to every turn.
-rag_auto_inject = os.getenv('RAG_AUTO_INJECT', 'false').lower() in ('true', '1', 'yes')
+rag_auto_inject = os.getenv("RAG_AUTO_INJECT", "false").lower() in ("true", "1", "yes")
 voyage_client = None
 context_retriever = None
 embedding_scheduler = None
@@ -189,20 +202,21 @@ if voyage_api_key:
         # Guard against Flask debug reloader: in debug mode, Werkzeug forks a child
         # process that re-executes module-level code. Only start the scheduler in the
         # child (WERKZEUG_RUN_MAIN=true) or when not in debug mode.
-        if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
             embedding_scheduler = BackgroundScheduler()
+
             def _scheduled_embedding():
-                gmail_oauth = globals().get('google_gmail_oauth')
+                gmail_oauth = globals().get("google_gmail_oauth")
                 run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
 
             embedding_scheduler.add_job(
                 func=_scheduled_embedding,
                 trigger="interval",
                 hours=1,  # Run every hour
-                id='incremental_embedding',
-                name='Incremental note embedding',
+                id="incremental_embedding",
+                name="Incremental note embedding",
                 replace_existing=True,
-                misfire_grace_time=3600  # Allow 1 hour grace if server was down
+                misfire_grace_time=3600,  # Allow 1 hour grace if server was down
             )
             embedding_scheduler.start()
             logger.info("Background embedding scheduler started (runs hourly)")
@@ -216,7 +230,7 @@ retrospective = SessionRetrospective(llm_client, logger)
 si_agent = SelfImprovementAgent(llm_client, logger, config)
 
 # Master switch for scheduled task execution
-cron_enabled = os.environ.get('CRON_ENABLED', 'true').lower() in ('true', '1', 'yes')
+cron_enabled = os.environ.get("CRON_ENABLED", "true").lower() in ("true", "1", "yes")
 
 # Ensure .pkm/ directory structure exists on startup
 try:
@@ -225,7 +239,7 @@ try:
 except Exception as e:
     logger.warning(f"Failed to ensure .pkm/ structure: {e}")
 
-if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     if embedding_scheduler is None:
         embedding_scheduler = BackgroundScheduler()
         embedding_scheduler.start()
@@ -239,12 +253,12 @@ if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
             func=si_agent.run,
             trigger="cron",
             hour=3,
-            day='*/2',
+            day="*/2",
             timezone=config.timezone,
-            id='self_improvement',
-            name='Self-improvement agent (every other day)',
+            id="self_improvement",
+            name="Self-improvement agent (every other day)",
             replace_existing=True,
-            misfire_grace_time=7200  # Allow 2 hour grace
+            misfire_grace_time=7200,  # Allow 2 hour grace
         )
         logger.info(f"Self-improvement agent scheduled (every other day at 3 AM {config.timezone})")
     else:
@@ -253,6 +267,7 @@ if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     # Scheduled task dispatcher (60s tick) — runs in both debug and production
     # Uses a wrapper because task_dispatcher is initialized later (after tool registry)
     if cron_enabled:
+
         def _scheduled_task_tick():
             task_dispatcher.tick()
 
@@ -260,8 +275,8 @@ if not config.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
             func=_scheduled_task_tick,
             trigger="interval",
             seconds=60,
-            id='scheduled_task_dispatcher',
-            name='Scheduled task dispatcher (60s tick)',
+            id="scheduled_task_dispatcher",
+            name="Scheduled task dispatcher (60s tick)",
             replace_existing=True,
             misfire_grace_time=120,
         )
@@ -283,12 +298,15 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
 
 # Enable browser hot-reload in debug mode (if available)
 if config.debug and HOT_RELOAD_AVAILABLE:
-    HotReload(app, includes=['templates', 'static'])
+    HotReload(app, includes=["templates", "static"])
 
     # Patch: flask_hot_reload's after_request crashes on streaming responses (SSE).
     # Replace its handler with one that skips non-HTML/streaming responses.
-    _hot_reload_handlers = [f for f in app.after_request_funcs.get(None, [])
-                            if 'hot_reload' in getattr(f, '__module__', '')]
+    _hot_reload_handlers = [
+        f
+        for f in app.after_request_funcs.get(None, [])
+        if "hot_reload" in getattr(f, "__module__", "")
+    ]
     if _hot_reload_handlers:
         _original_hr = _hot_reload_handlers[0]
         app.after_request_funcs[None].remove(_original_hr)
@@ -297,8 +315,8 @@ if config.debug and HOT_RELOAD_AVAILABLE:
         def safe_hot_reload(response):
             if response.is_streamed or response.direct_passthrough:
                 return response
-            content_type = response.content_type or ''
-            if 'text/html' not in content_type:
+            content_type = response.content_type or ""
+            if "text/html" not in content_type:
                 return response
             return _original_hr(response)
 
@@ -332,7 +350,7 @@ google_gmail_oauth = None
 try:
     google_gmail_oauth = GoogleOAuth(
         scopes=["https://www.googleapis.com/auth/gmail.readonly"],
-        redirect_uri_env='GOOGLE_GMAIL_REDIRECT_URI'
+        redirect_uri_env="GOOGLE_GMAIL_REDIRECT_URI",
     )
     logger.info("Google Gmail OAuth handler initialized")
 except ValueError as e:
@@ -352,7 +370,7 @@ if config.auth_enabled:
         secret_key=config.jwt_secret,
         password_hash=config.password_hash,
         token_expiry_hours=config.token_expiry_hours,
-        logger=logger
+        logger=logger,
     )
     logger.info("Authentication enabled with rate limiting")
 
@@ -444,24 +462,28 @@ except Exception as e:
 # Ensure the note-curation task exists in DB (propose-only background curator)
 try:
     from pkm_bridge.curation.task import ensure_curation_task
+
     ensure_curation_task(logger)
 except Exception as e:
     logger.warning(f"Failed to ensure curation task: {e}")
 
 # Initialize file editor
-from pkm_bridge.file_editor import FileEditor, ConflictError
+from pkm_bridge.file_editor import ConflictError, FileEditor
+
 file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
 
 # Initialize history manager for conversation truncation
 from pkm_bridge.history_manager import HistoryManager
+
 history_manager = HistoryManager(
     max_tokens=75000,  # Leave ~25k for system prompt + tools (total budget: 100k)
-    keep_recent_turns=10  # Always keep last 10 conversation turns
+    keep_recent_turns=10,  # Always keep last 10 conversation turns
 )
 
 # -------------------------
 # Utilities
 # -------------------------
+
 
 @contextmanager
 def timer(label: str):
@@ -489,18 +511,20 @@ def serialize_message_content(content, *, strip_thinking: bool = True):
     """
     if isinstance(content, str):
         if strip_thinking:
-            return re.sub(r'<thinking>[\s\S]*?</thinking>', '', content).strip()
+            return re.sub(r"<thinking>[\s\S]*?</thinking>", "", content).strip()
         return content
     elif isinstance(content, list):
         serialized = []
         for item in content:
-            item_type = getattr(item, 'type', None) or (item.get('type') if isinstance(item, dict) else None)
+            item_type = getattr(item, "type", None) or (
+                item.get("type") if isinstance(item, dict) else None
+            )
             # Drop API-level thinking blocks only when stripping for persistence
-            if item_type in ('thinking', 'redacted_thinking') and strip_thinking:
+            if item_type in ("thinking", "redacted_thinking") and strip_thinking:
                 continue
 
-            api_exclude = getattr(item, '__api_exclude__', None) or set()
-            if hasattr(item, 'model_dump'):
+            api_exclude = getattr(item, "__api_exclude__", None) or set()
+            if hasattr(item, "model_dump"):
                 dumped = item.model_dump()
             elif isinstance(item, dict):
                 dumped = item
@@ -511,11 +535,14 @@ def serialize_message_content(content, *, strip_thinking: bool = True):
                 dumped.pop(key, None)
 
             # Strip inline <thinking> tags from text blocks (persist path only)
-            if strip_thinking and dumped.get('type') == 'text' and 'text' in dumped:
-                dumped = {**dumped, 'text': re.sub(r'<thinking>[\s\S]*?</thinking>', '', dumped['text']).strip()}
+            if strip_thinking and dumped.get("type") == "text" and "text" in dumped:
+                dumped = {
+                    **dumped,
+                    "text": re.sub(r"<thinking>[\s\S]*?</thinking>", "", dumped["text"]).strip(),
+                }
 
             # Skip empty text blocks — Anthropic rejects them on replay
-            if dumped.get('type') == 'text' and not dumped.get('text'):
+            if dumped.get("type") == "text" and not dumped.get("text"):
                 continue
 
             serialized.append(dumped)
@@ -527,11 +554,11 @@ def serialize_message_content(content, *, strip_thinking: bool = True):
 def validate_history(history):
     """Ensure all messages have non-empty content (API requirement)."""
     for i, msg in enumerate(history):
-        content = msg.get('content')
+        content = msg.get("content")
         # Empty string, empty list, or None
         if not content or (isinstance(content, str) and not content.strip()):
             logger.warning(f"Empty content at message {i} (role={msg.get('role')}), fixing")
-            msg['content'] = '[Empty message]'
+            msg["content"] = "[Empty message]"
 
 
 def _independent_message_copy(messages):
@@ -622,31 +649,32 @@ def _persist_history_safely(session_id: str, history) -> None:
 # Web Endpoints
 # -------------------------
 
-@app.route('/')
+
+@app.route("/")
 def index():
     """Serve the main web interface."""
     # Send as static file to avoid Jinja2 processing issues with minified CSS
-    return send_from_directory(app.template_folder, 'index.html')
+    return send_from_directory(app.template_folder, "index.html")
 
 
-@app.route('/settings')
+@app.route("/settings")
 def settings():
     """Serve the settings page."""
     # Send as static file to avoid Jinja2 processing issues with minified CSS
-    return send_from_directory(app.template_folder, 'settings.html')
+    return send_from_directory(app.template_folder, "settings.html")
 
 
-@app.route('/admin')
+@app.route("/admin")
 def admin():
     """Serve the admin page."""
-    return send_from_directory(app.template_folder, 'admin.html')
+    return send_from_directory(app.template_folder, "admin.html")
 
 
-@app.route('/editor/')
-@app.route('/editor/<path:filename>')
-def serve_editor(filename='index.html'):
+@app.route("/editor/")
+@app.route("/editor/<path:filename>")
+def serve_editor(filename="index.html"):
     """Serve the standalone editor SPA from editor-dist/."""
-    editor_dir = Path(__file__).parent / 'editor-dist'
+    editor_dir = Path(__file__).parent / "editor-dist"
     file_path = editor_dir / filename
     # Security: ensure the file is within editor-dist
     try:
@@ -655,11 +683,11 @@ def serve_editor(filename='index.html'):
         return "Not found", 404
     if not file_path.exists():
         # SPA fallback: serve index.html for any unknown path
-        return send_from_directory(editor_dir, 'index.html')
+        return send_from_directory(editor_dir, "index.html")
     return send_from_directory(editor_dir, filename)
 
 
-@app.route('/<path:filename>')
+@app.route("/<path:filename>")
 def serve_static(filename):
     """Serve static files from templates directory (Astro build output).
 
@@ -668,7 +696,7 @@ def serve_static(filename):
     they go through render_template() for proper handling.
     """
     # Don't serve .html files this way - they should use render_template()
-    if filename.endswith('.html'):
+    if filename.endswith(".html"):
         return "Not found", 404
 
     templates_dir = Path(app.template_folder)
@@ -686,7 +714,7 @@ def serve_static(filename):
     return send_from_directory(templates_dir, filename)
 
 
-@app.route('/login', methods=['POST'])
+@app.route("/login", methods=["POST"])
 @limiter.limit("5 per minute")  # Strict rate limit on login attempts
 def login():
     """Authenticate user and return JWT token.
@@ -699,14 +727,14 @@ def login():
         or {"error": "message"} with 401 status
     """
     client_ip = request.remote_addr
-    user_agent = request.headers.get('User-Agent', 'Unknown')
+    user_agent = request.headers.get("User-Agent", "Unknown")
 
     if not config.auth_enabled:
         logger.warning(f"Login attempted from {client_ip} but auth is disabled")
         return jsonify({"error": "Authentication is disabled"}), 400
 
     data = request.json
-    password = data.get('password', '')
+    password = data.get("password", "")
 
     if not password:
         logger.warning(f"Login attempt from {client_ip} with empty password")
@@ -717,16 +745,13 @@ def login():
     if auth_manager.verify_password(password):
         token = auth_manager.generate_token()
         logger.info(f"✅ Successful login from {client_ip}")
-        return jsonify({
-            "token": token,
-            "expires_in": config.token_expiry_hours
-        })
+        return jsonify({"token": token, "expires_in": config.token_expiry_hours})
     else:
         logger.warning(f"❌ Failed login attempt from {client_ip} - invalid password")
         return jsonify({"error": "Invalid password"}), 401
 
 
-@app.route('/verify-token', methods=['POST'])
+@app.route("/verify-token", methods=["POST"])
 @limiter.limit("30 per minute")  # Allow reasonable token verification rate
 def verify_token():
     """Verify if a token is still valid.
@@ -741,13 +766,13 @@ def verify_token():
         return jsonify({"valid": True})  # No auth = always valid
 
     # Accept token from JSON body or Authorization header
-    token = ''
+    token = ""
     data = request.get_json(silent=True)
     if data:
-        token = data.get('token', '')
+        token = data.get("token", "")
     if not token:
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
             token = auth_header[7:]
 
     if not token:
@@ -765,7 +790,7 @@ def verify_token():
     return jsonify({"valid": is_valid})
 
 
-@app.route('/transcribe', methods=['POST'])
+@app.route("/transcribe", methods=["POST"])
 @limiter.limit("30 per minute")
 def transcribe():
     """Transcribe audio using server-side Whisper API (Groq/OpenAI).
@@ -781,8 +806,8 @@ def transcribe():
     """
     # Check auth if enabled
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing or invalid authorization header"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -796,11 +821,11 @@ def transcribe():
     if request.content_length is not None and request.content_length > max_bytes:
         return jsonify({"error": "Audio file too large (max 25 MB)"}), 413
 
-    audio_file = request.files.get('audio')
+    audio_file = request.files.get("audio")
     if not audio_file:
         return jsonify({"error": "Missing 'audio' file in request"}), 400
 
-    language = request.form.get('language', 'en')
+    language = request.form.get("language", "en")
 
     try:
         text = stt_client.transcribe(audio_file, language=language)
@@ -847,7 +872,7 @@ def _forward_llm_deltas(stream_gen):
             return exc.value
 
 
-@app.route('/query', methods=['POST'])
+@app.route("/query", methods=["POST"])
 @limiter.limit("60 per minute")  # Reasonable limit for queries
 def query():
     """Main query endpoint with tool-use loop.
@@ -863,9 +888,11 @@ def query():
     """
     # Auth checks are synchronous — return regular JSON on failure
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
-            logger.warning(f"Unauthorized query attempt from {request.remote_addr}: missing auth header")
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            logger.warning(
+                f"Unauthorized query attempt from {request.remote_addr}: missing auth header"
+            )
             return jsonify({"error": "Missing or invalid authorization header"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -883,7 +910,7 @@ def query():
 
         try:
             data = request.json
-            session_id = data.get('session_id', 'default')
+            session_id = data.get("session_id", "default")
 
             # Serialize queries per session: history is read at the start and
             # rewritten at the end, so a concurrent query would drop a turn.
@@ -892,31 +919,33 @@ def query():
             if not lock_acquired:
                 logger.warning(f"Rejecting concurrent query for session {session_id}")
                 terminal_emitted = True
-                yield _ndjson({
-                    "type": "error",
-                    "error": "❌ Another query is already running for this session. "
-                             "Please wait for it to finish.",
-                    "session_id": session_id,
-                })
+                yield _ndjson(
+                    {
+                        "type": "error",
+                        "error": "❌ Another query is already running for this session. "
+                        "Please wait for it to finish.",
+                        "session_id": session_id,
+                    }
+                )
                 return
 
-            user_message = data['message']
-            model = data.get('model', config.model)
-            thinking = data.get('thinking')
-            user_timezone = data.get('timezone')  # Optional timezone from client
+            user_message = data["message"]
+            model = data.get("model", config.model)
+            thinking = data.get("thinking")
+            user_timezone = data.get("timezone")  # Optional timezone from client
             if not user_timezone and config.timezone:
                 # Fall back to the server-configured timezone so tools (e.g. the
                 # calendar tool's create/update) never silently default to UTC
                 # just because the client omitted one.
                 user_timezone = config.timezone.key
-            is_voice = data.get('is_voice', False)  # Flag indicating voice transcription
+            is_voice = data.get("is_voice", False)  # Flag indicating voice transcription
 
             # Preprocess voice transcriptions to clean up disfluencies
             if is_voice and voice_preprocessor.should_preprocess(user_message, is_voice):
                 original_message = user_message
                 user_message = voice_preprocessor.preprocess(user_message)
                 if user_message != original_message:
-                    logger.info(f"🎤 Voice preprocessing applied")
+                    logger.info("🎤 Voice preprocessing applied")
 
             # Check if this message is a correction of the previous query in this session
             check_previous_correction(session_id, user_message, logger)
@@ -928,7 +957,7 @@ def query():
             db = get_db()
             try:
                 # Load user context from database for system prompt
-                user_context = UserSettingsRepository.get_user_context(db, user_id='default')
+                user_context = UserSettingsRepository.get_user_context(db, user_id="default")
 
                 # Load active learned rules for prompt injection
                 learned_rules = LearnedRuleRepository.get_active(db)
@@ -950,7 +979,8 @@ def query():
                     notes_lines = [f"- [{n.category}] {n.note}" for n in session_notes]
                     notes_block = {
                         "type": "text",
-                        "text": "\n\n# SESSION NOTES (your working memory)\n" + "\n".join(notes_lines),
+                        "text": "\n\n# SESSION NOTES (your working memory)\n"
+                        + "\n".join(notes_lines),
                         # Not cached — changes per-request
                     }
                     # Insert before the last block (date block)
@@ -965,30 +995,36 @@ def query():
                 # Skip for non-Anthropic models — their smaller context windows can't handle
                 # the base system prompt + tools + RAG together
                 if context_retriever and not is_anthropic(model):
-                    logger.info("Skipping auto-RAG injection for non-Anthropic model (context window)")
+                    logger.info(
+                        "Skipping auto-RAG injection for non-Anthropic model (context window)"
+                    )
                 if context_retriever and is_anthropic(model) and rag_auto_inject:
                     try:
-                        # 1. Retrieve recent journal entries (configurable via RAG_RECENT_DAYS env var)
+                        # 1. Retrieve recent journal entries (configurable via
+                        # RAG_RECENT_DAYS env var)
                         # This provides temporal context for "what I did yesterday" queries
                         # NOTE: Not cached since it changes daily
-                        recent_journals_text = context_retriever.retrieve_and_format_recent(days=rag_recent_days)
+                        recent_journals_text = context_retriever.retrieve_and_format_recent(
+                            days=rag_recent_days
+                        )
                         if recent_journals_text:
                             recent_block = {
                                 "type": "text",
-                                "text": recent_journals_text
+                                "text": recent_journals_text,
                                 # No cache_control - changes daily, not worth caching
                             }
                             system_prompt_blocks.insert(-1, recent_block)
-                            logger.info(f"📅 Added recent journals context ({len(recent_journals_text)} chars)")
+                            logger.info(
+                                f"📅 Added recent journals context "
+                                f"({len(recent_journals_text)} chars)"
+                            )
 
                         # 2. Expand query using vocabulary rules before semantic search
                         expanded_query = query_enhancer.expand_query(user_message)
 
                         # 3. Retrieve semantically relevant chunks
                         context_block_text = context_retriever.retrieve_and_format(
-                            query=expanded_query,
-                            limit=12,
-                            min_similarity=DEFAULT_MIN_SIMILARITY
+                            query=expanded_query, limit=12, min_similarity=DEFAULT_MIN_SIMILARITY
                         )
 
                         if context_block_text:
@@ -1003,7 +1039,9 @@ def query():
                             system_prompt_blocks.insert(-1, context_block)
                             had_rag_context = True
                             rag_context_chars = len(context_block_text)
-                            logger.info(f"🔍 Auto-retrieved semantic context ({rag_context_chars} chars)")
+                            logger.info(
+                                f"🔍 Auto-retrieved semantic context ({rag_context_chars} chars)"
+                            )
                     except Exception as e:
                         logger.warning(f"Context retrieval failed: {e}")
 
@@ -1015,8 +1053,7 @@ def query():
 
                 # Also get flat version for session storage
                 system_prompt_flat = config.get_system_prompt(
-                    user_context=user_context,
-                    user_timezone=user_timezone
+                    user_context=user_context, user_timezone=user_timezone
                 )
 
                 db_session = SessionRepository.get_or_create_session(
@@ -1027,10 +1064,7 @@ def query():
                 db.close()
 
             # Append user message
-            history.append({
-                "role": "user",
-                "content": user_message
-            })
+            history.append({"role": "user", "content": user_message})
 
             # Truncate only the copy sent to the API — `history` stays the full,
             # persisted record so old PKM conversation content is never destroyed.
@@ -1038,16 +1072,18 @@ def query():
             # dicts) when nothing needs trimming, so wrap it in an independent copy;
             # otherwise loop appends and cache bookkeeping would corrupt `history`.
             stats_before = history_manager.get_history_stats(history)
-            if stats_before['total_tokens'] > 50000:  # Only log if potentially concerning
+            if stats_before["total_tokens"] > 50000:  # Only log if potentially concerning
                 logger.info(f"History before truncation: {stats_before['budget_usage']}")
 
             api_messages = _independent_message_copy(history_manager.truncate_history(history))
 
             # Log if we truncated
             stats_after = history_manager.get_history_stats(api_messages)
-            if stats_after['total_tokens'] < stats_before['total_tokens']:
-                saved = stats_before['total_tokens'] - stats_after['total_tokens']
-                logger.info(f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})")
+            if stats_after["total_tokens"] < stats_before["total_tokens"]:
+                saved = stats_before["total_tokens"] - stats_after["total_tokens"]
+                logger.info(
+                    f"✂️  Truncated history: saved {saved} tokens ({stats_after['budget_usage']})"
+                )
 
             # Validate all messages have non-empty content (API requirement)
             validate_history(api_messages)
@@ -1075,9 +1111,7 @@ def query():
                 beta_features = ["prompt-caching-2024-07-31"]
                 if thinking:
                     beta_features.append("interleaved-thinking-2025-05-14")
-                api_params["extra_headers"] = {
-                    "anthropic-beta": ",".join(beta_features)
-                }
+                api_params["extra_headers"] = {"anthropic-beta": ",".join(beta_features)}
                 # Cache breakpoint goes on the last *message* block (see
                 # mark_last_message_for_cache), not on tools: render order is
                 # tools→system→messages and the system blocks already carry cache
@@ -1092,9 +1126,7 @@ def query():
 
             # Initial call — stream deltas (text + reasoning) to the UI as they arrive.
             with timer(f"LLM API call (initial, {model})"):
-                response = yield from _forward_llm_deltas(
-                    llm_client.complete_stream(**api_params)
-                )
+                response = yield from _forward_llm_deltas(llm_client.complete_stream(**api_params))
 
             api_call_count = 1
             tool_call_count = 0
@@ -1109,15 +1141,15 @@ def query():
             total_web_searches = 0
 
             def accumulate_usage(resp):
-                nonlocal total_input_tokens, total_output_tokens, \
-                    total_cache_write_tokens, total_cache_read_tokens, total_web_searches
+                nonlocal total_input_tokens, total_output_tokens, total_cache_write_tokens
+                nonlocal total_cache_read_tokens, total_web_searches
                 usage = resp.usage
-                total_input_tokens += getattr(usage, 'input_tokens', 0)
-                total_output_tokens += getattr(usage, 'output_tokens', 0)
-                total_cache_write_tokens += getattr(usage, 'cache_creation_input_tokens', 0)
-                total_cache_read_tokens += getattr(usage, 'cache_read_input_tokens', 0)
-                server_use = getattr(usage, 'server_tool_use', None)
-                total_web_searches += getattr(server_use, 'web_search_requests', 0) or 0
+                total_input_tokens += getattr(usage, "input_tokens", 0)
+                total_output_tokens += getattr(usage, "output_tokens", 0)
+                total_cache_write_tokens += getattr(usage, "cache_creation_input_tokens", 0)
+                total_cache_read_tokens += getattr(usage, "cache_read_input_tokens", 0)
+                server_use = getattr(usage, "server_tool_use", None)
+                total_web_searches += getattr(server_use, "web_search_requests", 0) or 0
 
             accumulate_usage(response)
 
@@ -1129,16 +1161,20 @@ def query():
                     # the trailing server_tool_use block and resumes the turn.
                     # No cache re-mark here: server tool blocks must go back
                     # verbatim, without added cache_control annotations.
-                    history.append({
-                        "role": "assistant",
-                        "content": serialize_message_content(response.content),
-                    })
-                    api_messages.append({
-                        "role": "assistant",
-                        "content": serialize_message_content(
-                            response.content, strip_thinking=False
-                        ),
-                    })
+                    history.append(
+                        {
+                            "role": "assistant",
+                            "content": serialize_message_content(response.content),
+                        }
+                    )
+                    api_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": serialize_message_content(
+                                response.content, strip_thinking=False
+                            ),
+                        }
+                    )
                     api_params["messages"] = api_messages
                     api_call_count += 1
                     yield _ndjson({"type": "keepalive", "ts": time.time()})
@@ -1159,23 +1195,24 @@ def query():
                         # Surface the call to the UI before we run it — for slow
                         # tools (network, LLM-driven scripts) the user sees what
                         # the model is doing instead of a silent spinner.
-                        yield _ndjson({
-                            "type": "tool_call",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        })
+                        yield _ndjson(
+                            {
+                                "type": "tool_call",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            }
+                        )
 
                         # Capture start time for tool execution logging
                         start_time = time.time()
 
                         with timer(f"<<< Tool execution: {block.name}"):
                             # Pass session_id and user_timezone in context for tools that need it
-                            context = {
-                                "session_id": session_id,
-                                "user_timezone": user_timezone
-                            }
-                            result = tool_registry.execute_tool(block.name, block.input, context=context)
+                            context = {"session_id": session_id, "user_timezone": user_timezone}
+                            result = tool_registry.execute_tool(
+                                block.name, block.input, context=context
+                            )
 
                         # Calculate execution time
                         end_time = time.time()
@@ -1190,8 +1227,15 @@ def query():
                         # to avoid blowing context windows (Anthropic has 200K+)
                         if not is_anthropic(model) and len(result) > 20000:
                             truncated_len = len(result)
-                            result = result[:20000] + f"\n\n[... truncated {truncated_len - 20000:,} chars — result too large for model context]"
-                            logger.warning(f"Truncated {block.name} result from {truncated_len:,} to 20,000 chars")
+                            result = (
+                                result[:20000]
+                                + f"\n\n[... truncated {truncated_len - 20000:,} chars "
+                                f"— result too large for model context]"
+                            )
+                            logger.warning(
+                                f"Truncated {block.name} result "
+                                f"from {truncated_len:,} to 20,000 chars"
+                            )
 
                         # Log if tool result contains an error
                         if result.startswith("❌"):
@@ -1204,20 +1248,24 @@ def query():
                         # Stream the result back to the UI; flag auth-required so
                         # the chat shows a reconnect banner mid-conversation.
                         is_error = isinstance(result, str) and result.startswith("❌")
-                        yield _ndjson({
-                            "type": "tool_result",
-                            "id": block.id,
-                            "name": block.name,
-                            "ok": not is_error,
-                            "preview": result_summary,
-                            "duration_ms": execution_time_ms,
-                        })
+                        yield _ndjson(
+                            {
+                                "type": "tool_result",
+                                "id": block.id,
+                                "name": block.name,
+                                "ok": not is_error,
+                                "preview": result_summary,
+                                "duration_ms": execution_time_ms,
+                            }
+                        )
                         auth_provider = _detect_auth_required(result)
                         if auth_provider:
-                            yield _ndjson({
-                                "type": "auth_required",
-                                "provider": auth_provider,
-                            })
+                            yield _ndjson(
+                                {
+                                    "type": "auth_required",
+                                    "provider": auth_provider,
+                                }
+                            )
 
                         # Extract exit code if shell command
                         exit_code = None
@@ -1241,7 +1289,7 @@ def query():
                                     tool_params=block.input,
                                     result_summary=result_summary,
                                     exit_code=exit_code,
-                                    execution_time_ms=execution_time_ms
+                                    execution_time_ms=execution_time_ms,
                                 )
                             finally:
                                 log_db.close()
@@ -1249,11 +1297,9 @@ def query():
                             # Don't fail the query if logging fails
                             logger.warning(f"Failed to log tool execution: {log_error}")
 
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result
-                        })
+                        tool_results.append(
+                            {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                        )
 
                 if not tool_results:
                     # tool_use with no executable client tools (shouldn't happen,
@@ -1265,15 +1311,21 @@ def query():
                 # raw assistant content (thinking blocks intact) to the API, since
                 # the interleaved-thinking beta requires them replayed verbatim
                 # while continuing a tool-use turn.
-                history.append({
-                    "role": "assistant",
-                    "content": serialize_message_content(response.content),
-                })
+                history.append(
+                    {
+                        "role": "assistant",
+                        "content": serialize_message_content(response.content),
+                    }
+                )
                 history.append({"role": "user", "content": tool_results})
-                api_messages.append({
-                    "role": "assistant",
-                    "content": serialize_message_content(response.content, strip_thinking=False),
-                })
+                api_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": serialize_message_content(
+                            response.content, strip_thinking=False
+                        ),
+                    }
+                )
                 # Distinct block shells so the moving cache breakpoint isn't
                 # written into the persisted history.
                 api_messages.append({"role": "user", "content": [dict(tr) for tr in tool_results]})
@@ -1298,7 +1350,9 @@ def query():
                 if getattr(block, "type", "") == "text":
                     assistant_text += block.text
 
-            history.append({"role": "assistant", "content": serialize_message_content(response.content)})
+            history.append(
+                {"role": "assistant", "content": serialize_message_content(response.content)}
+            )
 
             # Save updated history to database
             db = get_db()
@@ -1308,22 +1362,37 @@ def query():
                 db.close()
 
             total_elapsed = time.time() - request_start
-            logger.info(f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}")
+            logger.info(
+                f"Assistant: {assistant_text[:400]}{'...' if len(assistant_text) > 200 else ''}"
+            )
 
             # Log token usage (accumulated across all API calls in the tool loop)
-            history_turns = len([m for m in history if m.get('role') in ['user', 'assistant']])
+            history_turns = len([m for m in history if m.get("role") in ["user", "assistant"]])
             system_blocks = len(system_prompt_blocks)
 
-            logger.info(f"Token usage ({api_call_count} API calls): {total_input_tokens} input, {total_cache_write_tokens} cache write, {total_cache_read_tokens} cache read, {total_output_tokens} output"
-                        + (f", {total_web_searches} web searches" if total_web_searches else ""))
-            logger.info(f"  Breakdown: {history_turns} conversation turns, {system_blocks} system blocks, {len(tools)} tools")
+            logger.info(
+                f"Token usage ({api_call_count} API calls): {total_input_tokens} input, "
+                f"{total_cache_write_tokens} cache write, "
+                f"{total_cache_read_tokens} cache read, {total_output_tokens} output"
+                + (f", {total_web_searches} web searches" if total_web_searches else "")
+            )
+            logger.info(
+                f"  Breakdown: {history_turns} conversation turns, "
+                f"{system_blocks} system blocks, {len(tools)} tools"
+            )
 
             # Warn if conversation is getting large
             uncached_input = total_input_tokens - total_cache_read_tokens
             if uncached_input > 20000:
-                logger.warning(f"⚠️  Large uncached input ({uncached_input} tokens) - likely long conversation history")
+                logger.warning(
+                    f"⚠️  Large uncached input ({uncached_input} tokens) "
+                    f"- likely long conversation history"
+                )
 
-            logger.info(f"Request completed in {total_elapsed:.3f}s ({api_call_count} API calls, {tool_call_count} tool calls)")
+            logger.info(
+                f"Request completed in {total_elapsed:.3f}s "
+                f"({api_call_count} API calls, {tool_call_count} tool calls)"
+            )
 
             # Log query summary (always, even if no tools were used)
             try:
@@ -1335,10 +1404,14 @@ def query():
                         query_id=query_id,
                         user_message=user_message,
                         tool_name="__query_summary__",  # Special marker for query summary
-                        tool_params={"model": model, "api_calls": api_call_count, "tool_calls": tool_call_count},
+                        tool_params={
+                            "model": model,
+                            "api_calls": api_call_count,
+                            "tool_calls": tool_call_count,
+                        },
                         result_summary=assistant_text[:200] if assistant_text else "",
                         exit_code=None,
-                        execution_time_ms=int(total_elapsed * 1000)
+                        execution_time_ms=int(total_elapsed * 1000),
                     )
                 finally:
                     log_db.close()
@@ -1364,15 +1437,21 @@ def query():
             # non-Anthropic models use LiteLLM's built-in cost database
             if is_anthropic(model):
                 request_cost = get_anthropic_cost(
-                    model, total_input_tokens, total_output_tokens,
-                    total_cache_write_tokens, total_cache_read_tokens,
+                    model,
+                    total_input_tokens,
+                    total_output_tokens,
+                    total_cache_write_tokens,
+                    total_cache_read_tokens,
                     web_search_requests=total_web_searches,
                 )
             else:
                 # For non-Anthropic, try LiteLLM cost; cache tokens are always 0
                 request_cost = llm_client.get_completion_cost(response, model) or 0.0
 
-            logger.info(f"  Estimated cost: ${request_cost:.4f} ({total_input_tokens} in, {total_output_tokens} out)")
+            logger.info(
+                f"  Estimated cost: ${request_cost:.4f} "
+                f"({total_input_tokens} in, {total_output_tokens} out)"
+            )
 
             # Update session totals in database
             db = get_db()
@@ -1394,21 +1473,23 @@ def query():
                 db.close()
 
             terminal_emitted = True
-            yield _ndjson({
-                "type": "done",
-                "response": assistant_text,
-                "session_id": session_id,
-                "session_cost": total_session_cost,
-                "query_id": query_id,
-                "usage": {
-                    "input_tokens": total_input_tokens,
-                    "output_tokens": total_output_tokens,
-                    "cache_read_tokens": total_cache_read_tokens,
-                    "cache_write_tokens": total_cache_write_tokens,
-                    "tool_calls": tool_call_count,
-                    "cost": round(request_cost, 6),
-                },
-            })
+            yield _ndjson(
+                {
+                    "type": "done",
+                    "response": assistant_text,
+                    "session_id": session_id,
+                    "session_cost": total_session_cost,
+                    "query_id": query_id,
+                    "usage": {
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "cache_read_tokens": total_cache_read_tokens,
+                        "cache_write_tokens": total_cache_write_tokens,
+                        "tool_calls": tool_call_count,
+                        "cost": round(request_cost, 6),
+                    },
+                }
+            )
 
         except GeneratorExit:
             # Client disconnected mid-stream (browser tab closed, network drop,
@@ -1426,11 +1507,13 @@ def query():
         except Exception as e:
             logger.error(f"Query error: {str(e)}", exc_info=True)
             terminal_emitted = True
-            yield _ndjson({
-                "type": "error",
-                "error": f"❌ Error: {str(e)}",
-                "session_id": session_id,
-            })
+            yield _ndjson(
+                {
+                    "type": "error",
+                    "error": f"❌ Error: {str(e)}",
+                    "session_id": session_id,
+                }
+            )
         finally:
             if lock_acquired and session_lock is not None:
                 session_lock.release()
@@ -1445,22 +1528,22 @@ def query():
 
     return Response(
         stream_with_context(_stream()),
-        mimetype='application/x-ndjson',
+        mimetype="application/x-ndjson",
         headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',  # disable nginx buffering on streaming responses
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering on streaming responses
         },
     )
 
 
-@app.route('/sessions/<session_id>/history', methods=['GET'])
+@app.route("/sessions/<session_id>/history", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_history(session_id):
     """Return a simplified text-only history for debugging UI."""
     # Check auth if enabled
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             logger.warning(f"Unauthorized history access from {request.remote_addr}")
             return jsonify({"error": "Missing or invalid authorization header"}), 401
         token = auth_header[7:]
@@ -1477,25 +1560,25 @@ def get_history(session_id):
 
         history = []
         for msg in db_session.history:
-            if msg['role'] in ['user', 'assistant']:
-                if isinstance(msg['content'], str):
-                    history.append({"role": msg['role'], "text": msg['content']})
-                elif isinstance(msg['content'], list):
+            if msg["role"] in ["user", "assistant"]:
+                if isinstance(msg["content"], str):
+                    history.append({"role": msg["role"], "text": msg["content"]})
+                elif isinstance(msg["content"], list):
                     text = ""
-                    for item in msg['content']:
-                        if hasattr(item, 'text'):
+                    for item in msg["content"]:
+                        if hasattr(item, "text"):
                             text += item.text
-                        elif isinstance(item, dict) and 'text' in item:
-                            text += item['text']
+                        elif isinstance(item, dict) and "text" in item:
+                            text += item["text"]
                     if text:
-                        history.append({"role": msg['role'], "text": text})
+                        history.append({"role": msg["role"], "text": text})
 
         return jsonify(history)
     finally:
         db.close()
 
 
-@app.route('/sessions/<session_id>/tool-logs', methods=['GET'])
+@app.route("/sessions/<session_id>/tool-logs", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_tool_logs(session_id):
     """Get tool execution logs for a session.
@@ -1521,13 +1604,15 @@ def get_tool_logs(session_id):
     """
     # Check auth if enabled
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             logger.warning(f"Unauthorized tool-logs access from {request.remote_addr}")
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
-            logger.warning(f"Unauthorized tool-logs access from {request.remote_addr}: invalid token")
+            logger.warning(
+                f"Unauthorized tool-logs access from {request.remote_addr}: invalid token"
+            )
             return jsonify({"error": "Invalid token"}), 401
 
     db = get_db()
@@ -1542,15 +1627,17 @@ def get_tool_logs(session_id):
                 grouped[log.query_id] = {
                     "user_message": log.user_message,
                     "timestamp": log.created_at.isoformat(),
-                    "tools": []
+                    "tools": [],
                 }
-            grouped[log.query_id]["tools"].append({
-                "tool_name": log.tool_name,
-                "tool_params": log.tool_params,
-                "result_summary": log.result_summary,
-                "exit_code": log.exit_code,
-                "execution_time_ms": log.execution_time_ms
-            })
+            grouped[log.query_id]["tools"].append(
+                {
+                    "tool_name": log.tool_name,
+                    "tool_params": log.tool_params,
+                    "result_summary": log.result_summary,
+                    "exit_code": log.exit_code,
+                    "execution_time_ms": log.execution_time_ms,
+                }
+            )
 
         # Convert to list and sort by timestamp (most recent first)
         result = list(grouped.values())
@@ -1561,14 +1648,14 @@ def get_tool_logs(session_id):
         db.close()
 
 
-@app.route('/sessions', methods=['GET'])
+@app.route("/sessions", methods=["GET"])
 @limiter.limit("30 per minute")
 def list_sessions():
     """List all conversation sessions for the user."""
     # Check auth if enabled
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             logger.warning(f"Unauthorized sessions list from {request.remote_addr}")
             return jsonify({"error": "Missing or invalid authorization header"}), 401
         token = auth_header[7:]
@@ -1579,45 +1666,47 @@ def list_sessions():
     # Get all sessions from database
     db = get_db()
     try:
-        db_sessions = SessionRepository.get_all_sessions(db, user_id='default')
+        db_sessions = SessionRepository.get_all_sessions(db, user_id="default")
 
         sessions_list = []
         for session in db_sessions:
             # Get first user message as preview
             preview = ""
             for msg in session.history:
-                if msg.get('role') == 'user':
-                    content = msg.get('content', '')
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
                     if isinstance(content, str):
                         preview = content[:100]
                     break
 
-            sessions_list.append({
-                "session_id": session.session_id,
-                "created_at": session.created_at.isoformat() + 'Z',  # Mark as UTC
-                "updated_at": session.updated_at.isoformat() + 'Z',  # Mark as UTC
-                "message_count": len(session.history),
-                "preview": preview,
-                "total_cost": session.total_cost,
-                "total_input_tokens": session.total_input_tokens,
-                "total_output_tokens": session.total_output_tokens,
-                "total_cache_write_tokens": getattr(session, 'total_cache_write_tokens', 0),
-                "total_cache_read_tokens": getattr(session, 'total_cache_read_tokens', 0),
-            })
+            sessions_list.append(
+                {
+                    "session_id": session.session_id,
+                    "created_at": session.created_at.isoformat() + "Z",  # Mark as UTC
+                    "updated_at": session.updated_at.isoformat() + "Z",  # Mark as UTC
+                    "message_count": len(session.history),
+                    "preview": preview,
+                    "total_cost": session.total_cost,
+                    "total_input_tokens": session.total_input_tokens,
+                    "total_output_tokens": session.total_output_tokens,
+                    "total_cache_write_tokens": getattr(session, "total_cache_write_tokens", 0),
+                    "total_cache_read_tokens": getattr(session, "total_cache_read_tokens", 0),
+                }
+            )
 
         return jsonify(sessions_list)
     finally:
         db.close()
 
 
-@app.route('/sessions/<session_id>', methods=['DELETE'])
+@app.route("/sessions/<session_id>", methods=["DELETE"])
 @limiter.limit("10 per minute")
 def clear_session(session_id):
     """Clear a conversation session."""
     # Check auth if enabled
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             logger.warning(f"Unauthorized session delete from {request.remote_addr}")
             return jsonify({"error": "Missing or invalid authorization header"}), 401
         token = auth_header[7:]
@@ -1636,7 +1725,7 @@ def clear_session(session_id):
         db.close()
 
 
-@app.route('/assets/<path:filepath>', methods=['GET'])
+@app.route("/assets/<path:filepath>", methods=["GET"])
 @limiter.limit("100 per minute")
 def serve_asset(filepath):
     """Serve image and asset files from ORG_DIR or LOGSEQ_DIR.
@@ -1662,16 +1751,18 @@ def serve_asset(filepath):
         token = None
 
         # Try Authorization header first
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
             token = auth_header[7:]
 
         # Fall back to query parameter (for browser <img> tags)
         if not token:
-            token = request.args.get('token', '')
+            token = request.args.get("token", "")
 
         if not token:
-            logger.warning(f"Unauthorized asset access from {request.remote_addr}: no token provided")
+            logger.warning(
+                f"Unauthorized asset access from {request.remote_addr}: no token provided"
+            )
             return jsonify({"error": "Missing authorization token"}), 401
 
         if not auth_manager.verify_token(token):
@@ -1695,11 +1786,13 @@ def serve_asset(filepath):
 
         # Add Logseq paths if configured
         if config.logseq_dir:
-            search_paths.extend([
-                config.logseq_dir / filepath,
-                config.logseq_dir / "Personal" / "assets" / filepath,
-                config.logseq_dir / "DSS" / "assets" / filepath,
-            ])
+            search_paths.extend(
+                [
+                    config.logseq_dir / filepath,
+                    config.logseq_dir / "Personal" / "assets" / filepath,
+                    config.logseq_dir / "DSS" / "assets" / filepath,
+                ]
+            )
 
         found_path = None
         allowed_roots = [config.org_dir.resolve()]
@@ -1711,10 +1804,7 @@ def serve_asset(filepath):
                 resolved_path = candidate_path.resolve()
 
                 # Check if path is within allowed directories
-                is_allowed = any(
-                    resolved_path.is_relative_to(root)
-                    for root in allowed_roots
-                )
+                is_allowed = any(resolved_path.is_relative_to(root) for root in allowed_roots)
 
                 if not is_allowed:
                     continue
@@ -1733,10 +1823,7 @@ def serve_asset(filepath):
             return jsonify({"error": "File not found"}), 404
 
         # Final security check: ensure resolved path is within allowed directories
-        is_safe = any(
-            found_path.is_relative_to(root)
-            for root in allowed_roots
-        )
+        is_safe = any(found_path.is_relative_to(root) for root in allowed_roots)
 
         if not is_safe:
             logger.warning(f"Path traversal attempt from {request.remote_addr}: {filepath}")
@@ -1754,7 +1841,7 @@ def serve_asset(filepath):
         return jsonify({"error": "Error serving file"}), 500
 
 
-@app.route('/api/org-attachment/<org_id>/<filename>', methods=['GET'])
+@app.route("/api/org-attachment/<org_id>/<filename>", methods=["GET"])
 @limiter.limit("100 per minute")
 def serve_org_attachment(org_id, filename):
     """Serve an org-attach attachment file.
@@ -1765,11 +1852,11 @@ def serve_org_attachment(org_id, filename):
     # Auth check (same pattern as serve_asset)
     if config.auth_enabled:
         token = None
-        auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
             token = auth_header[7:]
         if not token:
-            token = request.args.get('token', '')
+            token = request.args.get("token", "")
         if not token:
             return jsonify({"error": "Missing authorization token"}), 401
         if not auth_manager.verify_token(token):
@@ -1777,11 +1864,12 @@ def serve_org_attachment(org_id, filename):
 
     # Validate org_id: only hex digits and hyphens
     import re as _re
-    if not _re.fullmatch(r'[A-Fa-f0-9-]+', org_id):
+
+    if not _re.fullmatch(r"[A-Fa-f0-9-]+", org_id):
         return jsonify({"error": "Invalid org ID format"}), 400
 
     # Validate filename: no path separators
-    if '/' in filename or '\\' in filename or '..' in filename:
+    if "/" in filename or "\\" in filename or ".." in filename:
         return jsonify({"error": "Invalid filename"}), 400
 
     found_path = resolve_attachment_path(config.org_dir, org_id, filename)
@@ -1799,19 +1887,17 @@ def serve_org_attachment(org_id, filename):
     return send_from_directory(resolved.parent, resolved.name)
 
 
-@app.route('/api/resolve-org-id/<uuid_str>', methods=['GET'])
+@app.route("/api/resolve-org-id/<uuid_str>", methods=["GET"])
 @require_auth
 @limiter.limit("60 per minute")
 def resolve_org_id(uuid_str):
     """Resolve an org-id UUID to its file path and line number."""
     import re as _re
-    if not _re.fullmatch(r'[A-Fa-f0-9-]+', uuid_str):
+
+    if not _re.fullmatch(r"[A-Fa-f0-9-]+", uuid_str):
         return jsonify({"error": "Invalid UUID format"}), 400
 
-    result = resolve_org_id_to_file(
-        config.org_dir, uuid_str,
-        logseq_dir=config.logseq_dir
-    )
+    result = resolve_org_id_to_file(config.org_dir, uuid_str, logseq_dir=config.logseq_dir)
 
     if not result:
         return jsonify({"error": "ID not found"}), 404
@@ -1824,7 +1910,8 @@ def resolve_org_id(uuid_str):
 # User Settings Endpoints
 # -------------------------
 
-@app.route('/api/models', methods=['GET'])
+
+@app.route("/api/models", methods=["GET"])
 @require_auth
 @limiter.limit("30 per minute")
 def get_models():
@@ -1832,7 +1919,7 @@ def get_models():
     return jsonify({"models": get_available_models()})
 
 
-@app.route('/api/user-context', methods=['GET'])
+@app.route("/api/user-context", methods=["GET"])
 @require_auth
 @limiter.limit("30 per minute")
 def get_user_context():
@@ -1844,7 +1931,7 @@ def get_user_context():
     try:
         db = get_db()
         try:
-            context = UserSettingsRepository.get_user_context(db, user_id='default')
+            context = UserSettingsRepository.get_user_context(db, user_id="default")
 
             # If no context in DB, try to load from file as fallback
             if context is None:
@@ -1863,7 +1950,7 @@ def get_user_context():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/user-context', methods=['PUT'])
+@app.route("/api/user-context", methods=["PUT"])
 @require_auth
 @limiter.limit("10 per minute")
 def update_user_context():
@@ -1877,10 +1964,10 @@ def update_user_context():
     """
     try:
         data = request.json
-        if data is None or 'user_context' not in data:
+        if data is None or "user_context" not in data:
             return jsonify({"error": "Missing 'user_context' in request body"}), 400
 
-        context = data['user_context']
+        context = data["user_context"]
 
         # Basic validation
         if not isinstance(context, str):
@@ -1888,14 +1975,16 @@ def update_user_context():
 
         db = get_db()
         try:
-            settings = UserSettingsRepository.save_user_context(db, context, user_id='default')
+            settings = UserSettingsRepository.save_user_context(db, context, user_id="default")
             logger.info(f"User context updated ({len(context)} chars)")
 
-            return jsonify({
-                "status": "success",
-                "user_context": settings.user_context,
-                "updated_at": settings.updated_at.isoformat() + 'Z'
-            })
+            return jsonify(
+                {
+                    "status": "success",
+                    "user_context": settings.user_context,
+                    "updated_at": settings.updated_at.isoformat() + "Z",
+                }
+            )
         finally:
             db.close()
     except Exception as e:
@@ -1907,7 +1996,8 @@ def update_user_context():
 # File Editor Endpoints
 # -------------------------
 
-@app.route('/api/files', methods=['GET'])
+
+@app.route("/api/files", methods=["GET"])
 @require_auth
 @limiter.limit("60 per minute")
 def list_files():
@@ -1924,7 +2014,7 @@ def list_files():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/file/<path:filepath>', methods=['GET'])
+@app.route("/api/file/<path:filepath>", methods=["GET"])
 @require_auth
 @limiter.limit("60 per minute")
 def get_file(filepath):
@@ -1949,7 +2039,7 @@ def get_file(filepath):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/file/<path:filepath>', methods=['PUT'])
+@app.route("/api/file/<path:filepath>", methods=["PUT"])
 @require_auth
 @limiter.limit("60 per minute")
 def save_file(filepath):
@@ -1970,15 +2060,15 @@ def save_file(filepath):
     """
     try:
         data = request.json
-        if not data or 'content' not in data:
+        if not data or "content" not in data:
             return jsonify({"error": "Missing 'content' in request body"}), 400
 
-        create_only = request.args.get('create_only', '').lower() == 'true'
-        expected_mtime = data.get('expected_mtime')
+        create_only = request.args.get("create_only", "").lower() == "true"
+        expected_mtime = data.get("expected_mtime")
         if expected_mtime is not None:
             expected_mtime = float(expected_mtime)
         result = file_editor.write_file(
-            filepath, data['content'], create_only=create_only, expected_mtime=expected_mtime
+            filepath, data["content"], create_only=create_only, expected_mtime=expected_mtime
         )
         return jsonify(result)
     except ValueError as e:
@@ -1996,7 +2086,8 @@ def save_file(filepath):
 # Checkbox Toggle Endpoint
 # -------------------------
 
-@app.route('/api/checkbox/toggle', methods=['POST'])
+
+@app.route("/api/checkbox/toggle", methods=["POST"])
 @require_auth
 @limiter.limit("30 per minute")
 def toggle_checkbox():
@@ -2016,11 +2107,11 @@ def toggle_checkbox():
     if not data:
         return jsonify({"error": "Missing request body"}), 400
 
-    toggle_type = data.get('type')
-    checked = data.get('checked', True)
+    toggle_type = data.get("type")
+    checked = data.get("checked", True)
 
-    if toggle_type == 'ticktick':
-        task_id = data.get('task_id')
+    if toggle_type == "ticktick":
+        task_id = data.get("task_id")
         if not task_id:
             return jsonify({"error": "Missing task_id"}), 400
 
@@ -2028,7 +2119,7 @@ def toggle_checkbox():
             return jsonify({"error": "Unchecking TickTick tasks is not supported yet"}), 400
 
         try:
-            ticktick_tool = tool_registry.get_tool('ticktick_query')
+            ticktick_tool = tool_registry.get_tool("ticktick_query")
             client = ticktick_tool.get_client()
             if not client:
                 return jsonify({"error": "TickTick not connected"}), 503
@@ -2042,21 +2133,24 @@ def toggle_checkbox():
             logger.error(f"Checkbox toggle error (ticktick): {e}")
             return jsonify({"error": str(e)}), 500
 
-    elif toggle_type == 'file':
-        file_path = data.get('path')
-        item_text = data.get('item_text', '')
-        line_hint = data.get('line_hint', 0)
+    elif toggle_type == "file":
+        file_path = data.get("path")
+        item_text = data.get("item_text", "")
+        line_hint = data.get("line_hint", 0)
 
         if not file_path:
             return jsonify({"error": "Missing path"}), 400
 
-        logger.info(f"Checkbox toggle (file): path={file_path!r}, item_text={item_text!r}, line_hint={line_hint}, checked={checked}")
+        logger.info(
+            f"Checkbox toggle (file): path={file_path!r}, item_text={item_text!r}, "
+            f"line_hint={line_hint}, checked={checked}"
+        )
 
         try:
             # Full content required: we rewrite the whole file after toggling.
             file_data = file_editor.read_file(file_path, max_chars=None)
-            content = file_data['content']
-            lines = content.split('\n')
+            content = file_data["content"]
+            lines = content.split("\n")
 
             # Search for matching checkbox line, starting from line_hint
             # Line hints are 1-indexed
@@ -2068,19 +2162,20 @@ def toggle_checkbox():
                 stripped = line.strip()
                 if want_checked:
                     # Looking to check: find unchecked boxes or plain list items
-                    if stripped.startswith(('- [ ]', '+ [ ]')):
+                    if stripped.startswith(("- [ ]", "+ [ ]")):
                         return True
-                    if 'TODO' in stripped and stripped.lstrip('*').strip().startswith('TODO'):
+                    if "TODO" in stripped and stripped.lstrip("*").strip().startswith("TODO"):
                         return True
                     # Plain list items (- text) that aren't already checked
-                    if (stripped.startswith('- ') and
-                            not stripped.startswith(('- [x]', '- [X]', '- [ ]'))):
+                    if stripped.startswith("- ") and not stripped.startswith(
+                        ("- [x]", "- [X]", "- [ ]")
+                    ):
                         return True
                 else:
                     # Looking to uncheck: find checked boxes
-                    if stripped.startswith(('- [x]', '- [X]', '+ [x]', '+ [X]')):
+                    if stripped.startswith(("- [x]", "- [X]", "+ [x]", "+ [X]")):
                         return True
-                    if 'DONE' in stripped and stripped.lstrip('*').strip().startswith('DONE'):
+                    if "DONE" in stripped and stripped.lstrip("*").strip().startswith("DONE"):
                         return True
                 return False
 
@@ -2128,52 +2223,67 @@ def toggle_checkbox():
                 def is_already_done(line: str, want_checked: bool) -> bool:
                     stripped = line.strip()
                     if want_checked:
-                        return stripped.startswith(('- [x]', '- [X]', '+ [x]', '+ [X]')) or \
-                               ('DONE' in stripped and stripped.lstrip('*').strip().startswith('DONE'))
+                        return stripped.startswith(("- [x]", "- [X]", "+ [x]", "+ [X]")) or (
+                            "DONE" in stripped and stripped.lstrip("*").strip().startswith("DONE")
+                        )
                     else:
-                        return stripped.startswith(('- [ ]', '+ [ ]')) or \
-                               stripped.startswith('- ') and not stripped.startswith(('- [x]', '- [X]'))
+                        return (
+                            stripped.startswith(("- [ ]", "+ [ ]"))
+                            or stripped.startswith("- ")
+                            and not stripped.startswith(("- [x]", "- [X]"))
+                        )
 
                 # Search for already-toggled match using same strategy
-                for idx in ([hint_idx] +
-                            [i for off in range(1, 11) for i in (hint_idx+off, hint_idx-off)]):
-                    if 0 <= idx < len(lines) and is_already_done(lines[idx], checked) and \
-                       text_matches(lines[idx], item_text):
-                        logger.info(f"Checkbox already in desired state at line {idx+1} in {file_path}")
+                for idx in [hint_idx] + [
+                    i for off in range(1, 11) for i in (hint_idx + off, hint_idx - off)
+                ]:
+                    if (
+                        0 <= idx < len(lines)
+                        and is_already_done(lines[idx], checked)
+                        and text_matches(lines[idx], item_text)
+                    ):
+                        logger.info(
+                            f"Checkbox already in desired state at line {idx+1} in {file_path}"
+                        )
                         return jsonify({"status": "ok"})
 
                 # Truly not found
                 start = max(0, hint_idx - 3)
                 end = min(len(lines), hint_idx + 4)
                 nearby = [f"  {i+1}: {lines[i]!r}" for i in range(start, end)]
-                logger.warning(f"Checkbox not found in {file_path} (hint line {line_hint}, "
-                               f"text={item_text!r}, checked={checked}). "
-                               f"Lines {start+1}-{end} near hint:\n" + "\n".join(nearby))
+                logger.warning(
+                    f"Checkbox not found in {file_path} (hint line {line_hint}, "
+                    f"text={item_text!r}, checked={checked}). "
+                    f"Lines {start+1}-{end} near hint:\n" + "\n".join(nearby)
+                )
                 return jsonify({"error": "Checkbox item not found in file"}), 404
 
             # Toggle the checkbox/list item
             line = lines[target_line]
             stripped = line.strip()
             if checked:
-                if '- [ ]' in line:
-                    line = line.replace('- [ ]', '- [X]', 1)
-                elif 'TODO' in stripped:
-                    line = line.replace('TODO', 'DONE', 1)
-                elif stripped.startswith('- ') and not stripped.startswith(('- [', '- *')):
+                if "- [ ]" in line:
+                    line = line.replace("- [ ]", "- [X]", 1)
+                elif "TODO" in stripped:
+                    line = line.replace("TODO", "DONE", 1)
+                elif stripped.startswith("- ") and not stripped.startswith(("- [", "- *")):
                     # Plain list item: insert [X] after the dash
-                    line = line.replace('- ', '- [X] ', 1)
+                    line = line.replace("- ", "- [X] ", 1)
             else:
-                if '- [x]' in line or '- [X]' in line:
-                    line = line.replace('- [x]', '- [ ]', 1)
-                    line = line.replace('- [X]', '- [ ]', 1)
-                elif 'DONE' in stripped:
-                    line = line.replace('DONE', 'TODO', 1)
+                if "- [x]" in line or "- [X]" in line:
+                    line = line.replace("- [x]", "- [ ]", 1)
+                    line = line.replace("- [X]", "- [ ]", 1)
+                elif "DONE" in stripped:
+                    line = line.replace("DONE", "TODO", 1)
 
             lines[target_line] = line
-            new_content = '\n'.join(lines)
+            new_content = "\n".join(lines)
 
             file_editor.write_file(file_path, new_content)
-            logger.info(f"Checkbox toggle: {'checked' if checked else 'unchecked'} line {target_line + 1} in {file_path}")
+            logger.info(
+                f"Checkbox toggle: {'checked' if checked else 'unchecked'} "
+                f"line {target_line + 1} in {file_path}"
+            )
             return jsonify({"status": "ok"})
 
         except ValueError as e:
@@ -2228,6 +2338,7 @@ def _finish_oauth_flow(service: str, state: str | None) -> str:
 def _oauth_success_html(service_name: str, message: str, return_to: str) -> str:
     """Generate the HTML page shown after successful OAuth connection."""
     from markupsafe import escape
+
     safe_url = escape(return_to)
     return f"""
     <html>
@@ -2248,7 +2359,8 @@ def _oauth_success_html(service_name: str, message: str, return_to: str) -> str:
 # TickTick OAuth Routes
 # -------------------------
 
-@app.route('/auth/ticktick/authorize', methods=['GET'])
+
+@app.route("/auth/ticktick/authorize", methods=["GET"])
 def ticktick_authorize():
     """Initiate TickTick OAuth flow.
 
@@ -2265,11 +2377,11 @@ def ticktick_authorize():
     if auth_err:
         return auth_err
 
-    return_to = request.args.get('return_to', '/')
+    return_to = request.args.get("return_to", "/")
 
     try:
         auth_data = ticktick_oauth.get_authorization_url()
-        _begin_oauth_flow('ticktick', auth_data['state'], return_to)
+        _begin_oauth_flow("ticktick", auth_data["state"], return_to)
         # Use HTML redirect to avoid hot-reload middleware issues
         return f"""
         <html>
@@ -2288,15 +2400,15 @@ def ticktick_authorize():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/auth/ticktick/callback', methods=['GET'])
+@app.route("/auth/ticktick/callback", methods=["GET"])
 def ticktick_callback():
     """Handle TickTick OAuth callback."""
     if not ticktick_oauth:
         return jsonify({"error": "TickTick not configured"}), 503
 
-    code = request.args.get('code')
-    state = request.args.get('state')
-    error = request.args.get('error')
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
 
     if error:
         logger.error(f"TickTick OAuth error: {error}")
@@ -2306,7 +2418,7 @@ def ticktick_callback():
         return jsonify({"error": "No authorization code received"}), 400
 
     try:
-        return_to = _finish_oauth_flow('ticktick', state)
+        return_to = _finish_oauth_flow("ticktick", state)
     except PermissionError:
         logger.warning("TickTick OAuth callback rejected: invalid/missing state")
         return jsonify({"error": "Invalid OAuth state"}), 400
@@ -2320,11 +2432,11 @@ def ticktick_callback():
         db = get_db()
         OAuthRepository.save_token(
             db=db,
-            service='ticktick',
-            access_token=token_data['access_token'],
-            refresh_token=token_data.get('refresh_token'),
-            expires_at=token_data['expires_at'],
-            scope=token_data.get('scope')
+            service="ticktick",
+            access_token=token_data["access_token"],
+            refresh_token=token_data.get("refresh_token"),
+            expires_at=token_data["expires_at"],
+            scope=token_data.get("scope"),
         )
 
         logger.info("TickTick OAuth completed successfully")
@@ -2334,7 +2446,8 @@ def ticktick_callback():
 
     except Exception as e:
         logger.error(f"Error completing TickTick OAuth: {e}")
-        return f"""
+        return (
+            f"""
         <html>
             <head><title>TickTick Connection Error</title></head>
             <body style="font-family: sans-serif; padding: 40px; text-align: center;">
@@ -2343,24 +2456,26 @@ def ticktick_callback():
                 <p><a href="/auth/ticktick/authorize">Try again</a></p>
             </body>
         </html>
-        """, 500
+        """,
+            500,
+        )
     finally:
         if db is not None:
             db.close()
 
 
-@app.route('/auth/ticktick/status', methods=['GET'])
+@app.route("/auth/ticktick/status", methods=["GET"])
 def ticktick_status():
     """Check TickTick connection status."""
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     db = None
     try:
         db = get_db()
-        token = OAuthRepository.get_token(db, 'ticktick')
+        token = OAuthRepository.get_token(db, "ticktick")
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
@@ -2368,13 +2483,17 @@ def ticktick_status():
             # `connected` means "we have a credential we can plausibly use".
             # Expired-with-refresh is fine (auto-refresh will run on demand);
             # expired-without-refresh means the user must re-authorize.
-            return jsonify({
-                "connected": not is_expired or has_refresh,
-                "expired": is_expired,
-                "has_refresh_token": has_refresh,
-                "auto_refreshable": has_refresh and is_expired,
-                "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-            })
+            return jsonify(
+                {
+                    "connected": not is_expired or has_refresh,
+                    "expired": is_expired,
+                    "has_refresh_token": has_refresh,
+                    "auto_refreshable": has_refresh and is_expired,
+                    "expires_at": (
+                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
+                    ),
+                }
+            )
         else:
             return jsonify({"connected": False})
 
@@ -2386,18 +2505,18 @@ def ticktick_status():
             db.close()
 
 
-@app.route('/auth/ticktick/disconnect', methods=['POST'])
+@app.route("/auth/ticktick/disconnect", methods=["POST"])
 def ticktick_disconnect():
     """Disconnect TickTick."""
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     db = None
     try:
         db = get_db()
-        deleted = OAuthRepository.delete_token(db, 'ticktick')
+        deleted = OAuthRepository.delete_token(db, "ticktick")
 
         if deleted:
             logger.info("TickTick disconnected")
@@ -2417,7 +2536,8 @@ def ticktick_disconnect():
 # Google Calendar OAuth Routes
 # -------------------------
 
-@app.route('/auth/google-calendar/authorize', methods=['GET'])
+
+@app.route("/auth/google-calendar/authorize", methods=["GET"])
 def google_calendar_authorize():
     """Initiate Google Calendar OAuth flow.
 
@@ -2431,11 +2551,11 @@ def google_calendar_authorize():
     if auth_err:
         return auth_err
 
-    return_to = request.args.get('return_to', '/')
+    return_to = request.args.get("return_to", "/")
 
     try:
         auth_data = google_oauth.get_authorization_url()
-        _begin_oauth_flow('google_calendar', auth_data['state'], return_to)
+        _begin_oauth_flow("google_calendar", auth_data["state"], return_to)
         # Use HTML redirect to avoid hot-reload middleware issues
         return f"""
         <html>
@@ -2454,15 +2574,15 @@ def google_calendar_authorize():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/auth/google-calendar/callback', methods=['GET'])
+@app.route("/auth/google-calendar/callback", methods=["GET"])
 def google_calendar_callback():
     """Handle Google Calendar OAuth callback."""
     if not google_oauth:
         return jsonify({"error": "Google Calendar not configured"}), 503
 
-    code = request.args.get('code')
-    state = request.args.get('state')
-    error = request.args.get('error')
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
 
     if error:
         logger.error(f"Google Calendar OAuth error: {error}")
@@ -2472,7 +2592,7 @@ def google_calendar_callback():
         return jsonify({"error": "No authorization code received"}), 400
 
     try:
-        return_to = _finish_oauth_flow('google_calendar', state)
+        return_to = _finish_oauth_flow("google_calendar", state)
     except PermissionError:
         logger.warning("Google Calendar OAuth callback rejected: invalid/missing state")
         return jsonify({"error": "Invalid OAuth state"}), 400
@@ -2486,11 +2606,11 @@ def google_calendar_callback():
         db = get_db()
         OAuthRepository.save_token(
             db=db,
-            service='google_calendar',
-            access_token=token_data['access_token'],
-            refresh_token=token_data.get('refresh_token'),
-            expires_at=token_data['expires_at'],
-            scope=token_data.get('scope')
+            service="google_calendar",
+            access_token=token_data["access_token"],
+            refresh_token=token_data.get("refresh_token"),
+            expires_at=token_data["expires_at"],
+            scope=token_data.get("scope"),
         )
 
         logger.info("Google Calendar OAuth completed successfully")
@@ -2500,7 +2620,8 @@ def google_calendar_callback():
 
     except Exception as e:
         logger.error(f"Error completing Google Calendar OAuth: {e}")
-        return f"""
+        return (
+            f"""
         <html>
             <head><title>Google Calendar Connection Error</title></head>
             <body style="font-family: sans-serif; padding: 40px; text-align: center;">
@@ -2509,24 +2630,26 @@ def google_calendar_callback():
                 <p><a href="/auth/google-calendar/authorize">Try again</a></p>
             </body>
         </html>
-        """, 500
+        """,
+            500,
+        )
     finally:
         if db is not None:
             db.close()
 
 
-@app.route('/auth/google-calendar/status', methods=['GET'])
+@app.route("/auth/google-calendar/status", methods=["GET"])
 def google_calendar_status():
     """Check Google Calendar connection status."""
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     db = None
     try:
         db = get_db()
-        token = OAuthRepository.get_token(db, 'google_calendar')
+        token = OAuthRepository.get_token(db, "google_calendar")
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
@@ -2534,13 +2657,17 @@ def google_calendar_status():
             # `connected` means "we have a credential we can plausibly use".
             # Expired-with-refresh is fine (auto-refresh will run on demand);
             # expired-without-refresh means the user must re-authorize.
-            return jsonify({
-                "connected": not is_expired or has_refresh,
-                "expired": is_expired,
-                "has_refresh_token": has_refresh,
-                "auto_refreshable": has_refresh and is_expired,
-                "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-            })
+            return jsonify(
+                {
+                    "connected": not is_expired or has_refresh,
+                    "expired": is_expired,
+                    "has_refresh_token": has_refresh,
+                    "auto_refreshable": has_refresh and is_expired,
+                    "expires_at": (
+                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
+                    ),
+                }
+            )
         else:
             return jsonify({"connected": False})
 
@@ -2552,18 +2679,18 @@ def google_calendar_status():
             db.close()
 
 
-@app.route('/auth/google-calendar/disconnect', methods=['POST'])
+@app.route("/auth/google-calendar/disconnect", methods=["POST"])
 def google_calendar_disconnect():
     """Disconnect Google Calendar."""
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     db = None
     try:
         db = get_db()
-        deleted = OAuthRepository.delete_token(db, 'google_calendar')
+        deleted = OAuthRepository.delete_token(db, "google_calendar")
 
         if deleted:
             logger.info("Google Calendar disconnected")
@@ -2583,7 +2710,8 @@ def google_calendar_disconnect():
 # Google Gmail OAuth Routes
 # -------------------------
 
-@app.route('/auth/google-gmail/authorize', methods=['GET'])
+
+@app.route("/auth/google-gmail/authorize", methods=["GET"])
 def google_gmail_authorize():
     """Initiate Google Gmail OAuth flow.
 
@@ -2597,11 +2725,11 @@ def google_gmail_authorize():
     if auth_err:
         return auth_err
 
-    return_to = request.args.get('return_to', '/')
+    return_to = request.args.get("return_to", "/")
 
     try:
         auth_data = google_gmail_oauth.get_authorization_url()
-        _begin_oauth_flow('google_gmail', auth_data['state'], return_to)
+        _begin_oauth_flow("google_gmail", auth_data["state"], return_to)
         return f"""
         <html>
             <head>
@@ -2619,15 +2747,15 @@ def google_gmail_authorize():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/auth/google-gmail/callback', methods=['GET'])
+@app.route("/auth/google-gmail/callback", methods=["GET"])
 def google_gmail_callback():
     """Handle Google Gmail OAuth callback."""
     if not google_gmail_oauth:
         return jsonify({"error": "Google Gmail not configured"}), 503
 
-    code = request.args.get('code')
-    state = request.args.get('state')
-    error = request.args.get('error')
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
 
     if error:
         logger.error(f"Google Gmail OAuth error: {error}")
@@ -2637,7 +2765,7 @@ def google_gmail_callback():
         return jsonify({"error": "No authorization code received"}), 400
 
     try:
-        return_to = _finish_oauth_flow('google_gmail', state)
+        return_to = _finish_oauth_flow("google_gmail", state)
     except PermissionError:
         logger.warning("Google Gmail OAuth callback rejected: invalid/missing state")
         return jsonify({"error": "Invalid OAuth state"}), 400
@@ -2649,21 +2777,20 @@ def google_gmail_callback():
         db = get_db()
         OAuthRepository.save_token(
             db=db,
-            service='google_gmail',
-            access_token=token_data['access_token'],
-            refresh_token=token_data.get('refresh_token'),
-            expires_at=token_data['expires_at'],
-            scope=token_data.get('scope')
+            service="google_gmail",
+            access_token=token_data["access_token"],
+            refresh_token=token_data.get("refresh_token"),
+            expires_at=token_data["expires_at"],
+            scope=token_data.get("scope"),
         )
 
         logger.info("Google Gmail OAuth completed successfully")
-        return _oauth_success_html(
-            "Gmail", "Claude can now read your Gmail messages.", return_to
-        )
+        return _oauth_success_html("Gmail", "Claude can now read your Gmail messages.", return_to)
 
     except Exception as e:
         logger.error(f"Error completing Google Gmail OAuth: {e}")
-        return f"""
+        return (
+            f"""
         <html>
             <head><title>Gmail Connection Error</title></head>
             <body style="font-family: sans-serif; padding: 40px; text-align: center;">
@@ -2672,24 +2799,26 @@ def google_gmail_callback():
                 <p><a href="/auth/google-gmail/authorize">Try again</a></p>
             </body>
         </html>
-        """, 500
+        """,
+            500,
+        )
     finally:
         if db is not None:
             db.close()
 
 
-@app.route('/auth/google-gmail/status', methods=['GET'])
+@app.route("/auth/google-gmail/status", methods=["GET"])
 def google_gmail_status():
     """Check Google Gmail connection status."""
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     db = None
     try:
         db = get_db()
-        token = OAuthRepository.get_token(db, 'google_gmail')
+        token = OAuthRepository.get_token(db, "google_gmail")
 
         if token:
             is_expired = OAuthRepository.is_token_expired(token)
@@ -2697,13 +2826,17 @@ def google_gmail_status():
             # `connected` means "we have a credential we can plausibly use".
             # Expired-with-refresh is fine (auto-refresh will run on demand);
             # expired-without-refresh means the user must re-authorize.
-            return jsonify({
-                "connected": not is_expired or has_refresh,
-                "expired": is_expired,
-                "has_refresh_token": has_refresh,
-                "auto_refreshable": has_refresh and is_expired,
-                "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-            })
+            return jsonify(
+                {
+                    "connected": not is_expired or has_refresh,
+                    "expired": is_expired,
+                    "has_refresh_token": has_refresh,
+                    "auto_refreshable": has_refresh and is_expired,
+                    "expires_at": (
+                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
+                    ),
+                }
+            )
         else:
             return jsonify({"connected": False})
 
@@ -2715,18 +2848,18 @@ def google_gmail_status():
             db.close()
 
 
-@app.route('/auth/google-gmail/disconnect', methods=['POST'])
+@app.route("/auth/google-gmail/disconnect", methods=["POST"])
 def google_gmail_disconnect():
     """Disconnect Gmail."""
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     db = None
     try:
         db = get_db()
-        deleted = OAuthRepository.delete_token(db, 'google_gmail')
+        deleted = OAuthRepository.delete_token(db, "google_gmail")
 
         if deleted:
             logger.info("Gmail disconnected")
@@ -2751,7 +2884,7 @@ _INTEGRATIONS = [
 ]
 
 
-@app.route('/api/integrations/status', methods=['GET'])
+@app.route("/api/integrations/status", methods=["GET"])
 def integrations_status():
     """Return connection status for every OAuth integration in one call.
 
@@ -2760,7 +2893,7 @@ def integrations_status():
     endpoint shape, plus a label and authorize_url for direct linking.
     """
     if auth_manager:
-        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
@@ -2790,7 +2923,7 @@ def integrations_status():
     return jsonify({"integrations": integrations})
 
 
-@app.route('/health', methods=['GET'])
+@app.route("/health", methods=["GET"])
 def health():
     """Health check with database connectivity test.
 
@@ -2804,6 +2937,7 @@ def health():
         db = get_db()
         # Try a simple query to verify connection works
         from sqlalchemy import text
+
         db.execute(text("SELECT 1"))
         health_data["database"] = "connected"
         db.close()
@@ -2818,7 +2952,7 @@ def health():
 _embedding_in_progress = threading.Lock()
 
 
-@app.route('/admin/trigger-embedding', methods=['POST'])
+@app.route("/admin/trigger-embedding", methods=["POST"])
 @limiter.limit("6 per hour")
 def trigger_embedding():
     """Manually trigger incremental embedding (admin endpoint)."""
@@ -2827,20 +2961,18 @@ def trigger_embedding():
         return auth_err
 
     if not voyage_client:
-        return jsonify({
-            "error": "RAG not configured",
-            "message": "VOYAGE_API_KEY not set"
-        }), 503
+        return jsonify({"error": "RAG not configured", "message": "VOYAGE_API_KEY not set"}), 503
 
     # Single-flight: refuse to spawn a second run while one is active, so repeated
     # calls can't pile up daemon threads and Voyage API spend.
     if not _embedding_in_progress.acquire(blocking=False):
-        return jsonify({
-            "status": "busy",
-            "message": "An embedding run is already in progress"
-        }), 409
+        return (
+            jsonify({"status": "busy", "message": "An embedding run is already in progress"}),
+            409,
+        )
 
     try:
+
         def run_embedding():
             try:
                 stats = run_incremental_embedding(logger, voyage_client, config, google_gmail_oauth)
@@ -2853,17 +2985,13 @@ def trigger_embedding():
         thread = threading.Thread(target=run_embedding, daemon=True)
         thread.start()
 
-        return jsonify({
-            "status": "started",
-            "message": "Incremental embedding started in background"
-        })
+        return jsonify(
+            {"status": "started", "message": "Incremental embedding started in background"}
+        )
     except Exception as e:
         _embedding_in_progress.release()
         logger.error(f"Failed to trigger embedding: {e}")
-        return jsonify({
-            "error": "Failed to start embedding",
-            "message": str(e)
-        }), 500
+        return jsonify({"error": "Failed to start embedding", "message": str(e)}), 500
 
 
 # -------------------------
@@ -2871,12 +2999,12 @@ def trigger_embedding():
 # -------------------------
 
 _PROMPT_FILES = {
-    'web': 'system_prompt.txt',
-    'mcp': 'system_prompt_mcp.txt',
+    "web": "system_prompt.txt",
+    "mcp": "system_prompt_mcp.txt",
 }
 
 
-@app.route('/api/system-prompt/<prompt_type>', methods=['GET'])
+@app.route("/api/system-prompt/<prompt_type>", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_system_prompt(prompt_type: str):
     """Read a system prompt file.
@@ -2885,8 +3013,8 @@ def get_system_prompt(prompt_type: str):
         prompt_type: 'web' or 'mcp'
     """
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -2905,7 +3033,7 @@ def get_system_prompt(prompt_type: str):
     return jsonify({"content": content, "modified": mtime})
 
 
-@app.route('/api/system-prompt/<prompt_type>', methods=['PUT'])
+@app.route("/api/system-prompt/<prompt_type>", methods=["PUT"])
 @limiter.limit("10 per minute")
 def put_system_prompt(prompt_type: str):
     """Update a system prompt file.
@@ -2913,8 +3041,8 @@ def put_system_prompt(prompt_type: str):
     Body: { "content": "...", "expected_mtime": <optional float> }
     """
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -2925,22 +3053,27 @@ def put_system_prompt(prompt_type: str):
         return jsonify({"error": f"Unknown prompt type: {prompt_type}"}), 400
 
     data = request.get_json()
-    if not data or 'content' not in data:
+    if not data or "content" not in data:
         return jsonify({"error": "Missing 'content' in request body"}), 400
 
     prompt_path = Path(__file__).parent / "config" / filename
 
     # Optimistic concurrency check
-    expected_mtime = data.get('expected_mtime')
+    expected_mtime = data.get("expected_mtime")
     if expected_mtime is not None and prompt_path.exists():
         actual_mtime = prompt_path.stat().st_mtime
         if actual_mtime > expected_mtime:
-            return jsonify({
-                "error": "File was modified since you loaded it",
-                "modified": actual_mtime,
-            }), 409
+            return (
+                jsonify(
+                    {
+                        "error": "File was modified since you loaded it",
+                        "modified": actual_mtime,
+                    }
+                ),
+                409,
+            )
 
-    prompt_path.write_text(data['content'], encoding="utf-8")
+    prompt_path.write_text(data["content"], encoding="utf-8")
     new_mtime = prompt_path.stat().st_mtime
     logger.info(f"System prompt '{prompt_type}' updated ({len(data['content'])} bytes)")
     return jsonify({"status": "saved", "modified": new_mtime})
@@ -2950,13 +3083,14 @@ def put_system_prompt(prompt_type: str):
 # Learned Rules API
 # -------------------------
 
-@app.route('/api/learned-rules', methods=['GET'])
+
+@app.route("/api/learned-rules", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_learned_rules():
     """List all learned rules (active and inactive) with metadata."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -2965,30 +3099,37 @@ def get_learned_rules():
     db = get_db()
     try:
         rules = LearnedRuleRepository.get_all(db)
-        return jsonify([{
-            "id": r.id,
-            "rule_type": r.rule_type,
-            "rule_text": r.rule_text,
-            "rule_data": r.rule_data,
-            "confidence": r.confidence,
-            "hit_count": r.hit_count,
-            "is_active": r.is_active,
-            "source_query_ids": r.source_query_ids,
-            "last_reinforced_at": r.last_reinforced_at.isoformat() + 'Z' if r.last_reinforced_at else None,
-            "created_at": r.created_at.isoformat() + 'Z',
-            "updated_at": r.updated_at.isoformat() + 'Z',
-        } for r in rules])
+        return jsonify(
+            [
+                {
+                    "id": r.id,
+                    "rule_type": r.rule_type,
+                    "rule_text": r.rule_text,
+                    "rule_data": r.rule_data,
+                    "confidence": r.confidence,
+                    "hit_count": r.hit_count,
+                    "is_active": r.is_active,
+                    "source_query_ids": r.source_query_ids,
+                    "last_reinforced_at": (
+                        r.last_reinforced_at.isoformat() + "Z" if r.last_reinforced_at else None
+                    ),
+                    "created_at": r.created_at.isoformat() + "Z",
+                    "updated_at": r.updated_at.isoformat() + "Z",
+                }
+                for r in rules
+            ]
+        )
     finally:
         db.close()
 
 
-@app.route('/api/learned-rules/<int:rule_id>', methods=['PUT'])
+@app.route("/api/learned-rules/<int:rule_id>", methods=["PUT"])
 @limiter.limit("30 per minute")
 def update_learned_rule(rule_id):
     """Edit a learned rule (rule_text, is_active, confidence)."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -2998,7 +3139,7 @@ def update_learned_rule(rule_id):
     if not data:
         return jsonify({"error": "Missing request body"}), 400
 
-    allowed_fields = {'rule_text', 'is_active', 'confidence', 'rule_data'}
+    allowed_fields = {"rule_text", "is_active", "confidence", "rule_data"}
     updates = {k: v for k, v in data.items() if k in allowed_fields}
 
     if not updates:
@@ -3010,25 +3151,27 @@ def update_learned_rule(rule_id):
         if not rule:
             return jsonify({"error": "Rule not found"}), 404
 
-        return jsonify({
-            "id": rule.id,
-            "rule_type": rule.rule_type,
-            "rule_text": rule.rule_text,
-            "is_active": rule.is_active,
-            "confidence": rule.confidence,
-            "updated_at": rule.updated_at.isoformat() + 'Z',
-        })
+        return jsonify(
+            {
+                "id": rule.id,
+                "rule_type": rule.rule_type,
+                "rule_text": rule.rule_text,
+                "is_active": rule.is_active,
+                "confidence": rule.confidence,
+                "updated_at": rule.updated_at.isoformat() + "Z",
+            }
+        )
     finally:
         db.close()
 
 
-@app.route('/api/learned-rules/<int:rule_id>', methods=['DELETE'])
+@app.route("/api/learned-rules/<int:rule_id>", methods=["DELETE"])
 @limiter.limit("10 per minute")
 def delete_learned_rule(rule_id):
     """Delete a learned rule."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3044,7 +3187,7 @@ def delete_learned_rule(rule_id):
         db.close()
 
 
-@app.route('/api/feedback', methods=['POST'])
+@app.route("/api/feedback", methods=["POST"])
 @limiter.limit("30 per minute")
 def submit_feedback():
     """Submit explicit feedback for a query response.
@@ -3058,8 +3201,8 @@ def submit_feedback():
         }
     """
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3069,13 +3212,13 @@ def submit_feedback():
     if not data:
         return jsonify({"error": "Missing request body"}), 400
 
-    query_id = data.get('query_id')
-    feedback = data.get('feedback')
-    note = data.get('note')
+    query_id = data.get("query_id")
+    feedback = data.get("feedback")
+    note = data.get("note")
 
     if not query_id:
         return jsonify({"error": "Missing query_id"}), 400
-    if feedback not in ('positive', 'negative'):
+    if feedback not in ("positive", "negative"):
         return jsonify({"error": "feedback must be 'positive' or 'negative'"}), 400
 
     db = get_db()
@@ -3087,11 +3230,13 @@ def submit_feedback():
             return jsonify({"error": "Query not found"}), 404
 
         # If negative feedback, also mark tool executions as unhelpful
-        if feedback == 'negative':
+        if feedback == "negative":
             from pkm_bridge.db_repository import ToolExecutionLogExtendedRepository
+
             ToolExecutionLogExtendedRepository.mark_unhelpful(db, query_id)
-        elif feedback == 'positive':
+        elif feedback == "positive":
             from pkm_bridge.db_repository import ToolExecutionLogExtendedRepository
+
             ToolExecutionLogExtendedRepository.mark_helpful(db, query_id)
 
         logger.info(f"Explicit feedback recorded: {feedback} for query {query_id}")
@@ -3100,19 +3245,20 @@ def submit_feedback():
         db.close()
 
 
-@app.route('/api/note-proposals/pending-count', methods=['GET'])
+@app.route("/api/note-proposals/pending-count", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_note_proposals_pending_count():
     """Count pending note-organization proposals (drives the chat header badge)."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
     from pkm_bridge.curation.repository import NoteProposalRepository
+
     db = get_db()
     try:
         return jsonify({"pending": NoteProposalRepository.count_pending(db)})
@@ -3120,13 +3266,13 @@ def get_note_proposals_pending_count():
         db.close()
 
 
-@app.route('/api/prompt-amendments', methods=['GET'])
+@app.route("/api/prompt-amendments", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_prompt_amendments():
     """List pending prompt amendment proposals from retrospective."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3135,29 +3281,40 @@ def get_prompt_amendments():
     db = get_db()
     try:
         from pkm_bridge.database import LearnedRule as LR
-        amendments = db.query(LR).filter(
-            LR.rule_type == 'prompt_amendment',
-            LR.is_active == True,
-        ).order_by(LR.created_at.desc()).all()
 
-        return jsonify([{
-            "id": a.id,
-            "rule_text": a.rule_text,
-            "rule_data": a.rule_data,
-            "confidence": a.confidence,
-            "created_at": a.created_at.isoformat() + 'Z',
-        } for a in amendments])
+        amendments = (
+            db.query(LR)
+            .filter(
+                LR.rule_type == "prompt_amendment",
+                LR.is_active.is_(True),
+            )
+            .order_by(LR.created_at.desc())
+            .all()
+        )
+
+        return jsonify(
+            [
+                {
+                    "id": a.id,
+                    "rule_text": a.rule_text,
+                    "rule_data": a.rule_data,
+                    "confidence": a.confidence,
+                    "created_at": a.created_at.isoformat() + "Z",
+                }
+                for a in amendments
+            ]
+        )
     finally:
         db.close()
 
 
-@app.route('/api/prompt-amendments/<int:rule_id>/approve', methods=['POST'])
+@app.route("/api/prompt-amendments/<int:rule_id>/approve", methods=["POST"])
 @limiter.limit("10 per minute")
 def approve_prompt_amendment(rule_id):
     """Approve a prompt amendment (changes it to approved_amendment type)."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3165,9 +3322,7 @@ def approve_prompt_amendment(rule_id):
 
     db = get_db()
     try:
-        rule = LearnedRuleRepository.update(
-            db, rule_id, rule_type='approved_amendment'
-        )
+        rule = LearnedRuleRepository.update(db, rule_id, rule_type="approved_amendment")
         if not rule:
             return jsonify({"error": "Amendment not found"}), 404
 
@@ -3177,13 +3332,13 @@ def approve_prompt_amendment(rule_id):
         db.close()
 
 
-@app.route('/api/prompt-amendments/<int:rule_id>/reject', methods=['POST'])
+@app.route("/api/prompt-amendments/<int:rule_id>/reject", methods=["POST"])
 @limiter.limit("10 per minute")
 def reject_prompt_amendment(rule_id):
     """Reject a prompt amendment (deactivates it)."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3201,20 +3356,20 @@ def reject_prompt_amendment(rule_id):
         db.close()
 
 
-@app.route('/admin/retrospective', methods=['POST'])
+@app.route("/admin/retrospective", methods=["POST"])
 @limiter.limit("5 per hour")
 def trigger_retrospective():
     """Manually trigger a retrospective analysis run (legacy endpoint, redirects to SI agent)."""
     return trigger_self_improve()
 
 
-@app.route('/admin/self-improve', methods=['POST'])
+@app.route("/admin/self-improve", methods=["POST"])
 @limiter.limit("5 per hour")
 def trigger_self_improve():
     """Manually trigger the self-improvement agent."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3233,29 +3388,28 @@ def trigger_self_improve():
         thread = threading.Thread(target=run_agent, daemon=True)
         thread.start()
 
-        return jsonify({
-            "status": "started",
-            "message": "Self-improvement agent started in background"
-        })
+        return jsonify(
+            {"status": "started", "message": "Self-improvement agent started in background"}
+        )
     except Exception as e:
         logger.error(f"Failed to trigger SI agent: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/admin/retrospective-log', methods=['GET'])
+@app.route("/admin/retrospective-log", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_retrospective_log():
     """View last run results and feedback stats (legacy endpoint)."""
     return get_self_improve_log()
 
 
-@app.route('/admin/self-improve/log', methods=['GET'])
+@app.route("/admin/self-improve/log", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_self_improve_log():
     """View last self-improvement run and recent run history."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3269,36 +3423,40 @@ def get_self_improve_log():
         recent_runs = AgentRunLogRepository.get_recent(db, limit=10)
         runs_data = []
         for run in recent_runs:
-            runs_data.append({
-                "id": run.id,
-                "started_at": run.started_at.isoformat() if run.started_at else None,
-                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                "trigger": run.trigger,
-                "turns_used": run.turns_used,
-                "input_tokens": run.input_tokens,
-                "output_tokens": run.output_tokens,
-                "actions_summary": run.actions_summary,
-                "summary": run.summary,
-                "error": run.error,
-                "run_file": run.run_file,
-            })
+            runs_data.append(
+                {
+                    "id": run.id,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                    "trigger": run.trigger,
+                    "turns_used": run.turns_used,
+                    "input_tokens": run.input_tokens,
+                    "output_tokens": run.output_tokens,
+                    "actions_summary": run.actions_summary,
+                    "summary": run.summary,
+                    "error": run.error,
+                    "run_file": run.run_file,
+                }
+            )
 
-        return jsonify({
-            "last_run": si_agent.last_run_result,
-            "recent_runs": runs_data,
-            "feedback_stats": stats,
-        })
+        return jsonify(
+            {
+                "last_run": si_agent.last_run_result,
+                "recent_runs": runs_data,
+                "feedback_stats": stats,
+            }
+        )
     finally:
         db.close()
 
 
-@app.route('/admin/self-improve/memory', methods=['GET'])
+@app.route("/admin/self-improve/memory", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_self_improve_memory():
     """View all agent memory files."""
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('Bearer '):
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
             return jsonify({"error": "Missing authorization"}), 401
         token = auth_header[7:]
         if not auth_manager.verify_token(token):
@@ -3319,7 +3477,8 @@ def get_self_improve_memory():
 # Skills API
 # -------------------------
 
-@app.route('/api/skills', methods=['GET'])
+
+@app.route("/api/skills", methods=["GET"])
 @limiter.limit("30 per minute")
 def list_skills():
     """List all saved skills with metadata."""
@@ -3332,27 +3491,29 @@ def list_skills():
     skills_dir = _get_skills_dir(config.org_dir)
     skills = []
     for filepath in sorted(skills_dir.iterdir()):
-        if filepath.suffix not in ('.sh', '.md'):
+        if filepath.suffix not in (".sh", ".md"):
             continue
         parsed = _parse_skill_file(filepath)
         if not parsed:
             continue
-        skills.append({
-            'name': parsed.get('name', filepath.stem),
-            'type': parsed.get('_type', 'unknown'),
-            'description': parsed.get('description', ''),
-            'trigger': parsed.get('trigger', ''),
-            'tags': parsed.get('tags', []),
-            'created': parsed.get('created', ''),
-            'last_used': parsed.get('last_used', ''),
-            'use_count': parsed.get('use_count', 0),
-            'body': parsed.get('_body', ''),
-        })
+        skills.append(
+            {
+                "name": parsed.get("name", filepath.stem),
+                "type": parsed.get("_type", "unknown"),
+                "description": parsed.get("description", ""),
+                "trigger": parsed.get("trigger", ""),
+                "tags": parsed.get("tags", []),
+                "created": parsed.get("created", ""),
+                "last_used": parsed.get("last_used", ""),
+                "use_count": parsed.get("use_count", 0),
+                "body": parsed.get("_body", ""),
+            }
+        )
 
     return jsonify(skills)
 
 
-@app.route('/api/skills/<name>', methods=['GET'])
+@app.route("/api/skills/<name>", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_skill(name: str):
     """Get a single skill's full content."""
@@ -3363,27 +3524,29 @@ def get_skill(name: str):
     from pkm_bridge.tools.skills import _get_skills_dir, _parse_skill_file
 
     skills_dir = _get_skills_dir(config.org_dir)
-    for ext in ('.sh', '.md'):
-        filepath = skills_dir / f'{name}{ext}'
+    for ext in (".sh", ".md"):
+        filepath = skills_dir / f"{name}{ext}"
         if filepath.exists():
             parsed = _parse_skill_file(filepath)
             if parsed:
-                return jsonify({
-                    'name': parsed.get('name', name),
-                    'type': parsed.get('_type', 'unknown'),
-                    'description': parsed.get('description', ''),
-                    'trigger': parsed.get('trigger', ''),
-                    'tags': parsed.get('tags', []),
-                    'created': parsed.get('created', ''),
-                    'last_used': parsed.get('last_used', ''),
-                    'use_count': parsed.get('use_count', 0),
-                    'body': parsed.get('_body', ''),
-                })
+                return jsonify(
+                    {
+                        "name": parsed.get("name", name),
+                        "type": parsed.get("_type", "unknown"),
+                        "description": parsed.get("description", ""),
+                        "trigger": parsed.get("trigger", ""),
+                        "tags": parsed.get("tags", []),
+                        "created": parsed.get("created", ""),
+                        "last_used": parsed.get("last_used", ""),
+                        "use_count": parsed.get("use_count", 0),
+                        "body": parsed.get("_body", ""),
+                    }
+                )
 
     return jsonify({"error": f"Skill '{name}' not found"}), 404
 
 
-@app.route('/api/skills/<name>', methods=['PUT'])
+@app.route("/api/skills/<name>", methods=["PUT"])
 @limiter.limit("10 per minute")
 def update_skill(name: str):
     """Update a skill's metadata and/or body."""
@@ -3392,9 +3555,13 @@ def update_skill(name: str):
         return auth_err
 
     import stat
+
     from pkm_bridge.tools.skills import (
-        _get_skills_dir, _parse_skill_file, _parse_shell_frontmatter,
-        _parse_md_frontmatter, _build_shell_frontmatter, _build_md_frontmatter,
+        _build_md_frontmatter,
+        _build_shell_frontmatter,
+        _get_skills_dir,
+        _parse_md_frontmatter,
+        _parse_shell_frontmatter,
     )
 
     data = request.get_json(silent=True) or {}
@@ -3402,8 +3569,8 @@ def update_skill(name: str):
 
     # Find existing file
     filepath = None
-    for ext in ('.sh', '.md'):
-        candidate = skills_dir / f'{name}{ext}'
+    for ext in (".sh", ".md"):
+        candidate = skills_dir / f"{name}{ext}"
         if candidate.exists():
             filepath = candidate
             break
@@ -3411,39 +3578,39 @@ def update_skill(name: str):
     if not filepath:
         return jsonify({"error": f"Skill '{name}' not found"}), 404
 
-    content = filepath.read_text(encoding='utf-8')
-    if filepath.suffix == '.sh':
+    content = filepath.read_text(encoding="utf-8")
+    if filepath.suffix == ".sh":
         metadata, body = _parse_shell_frontmatter(content)
     else:
         metadata, body = _parse_md_frontmatter(content)
 
     # Update fields if provided
-    if 'description' in data:
-        metadata['description'] = data['description']
-    if 'trigger' in data:
-        metadata['trigger'] = data['trigger']
-    if 'tags' in data:
-        metadata['tags'] = data['tags']
-    if 'body' in data:
-        body = data['body']
+    if "description" in data:
+        metadata["description"] = data["description"]
+    if "trigger" in data:
+        metadata["trigger"] = data["trigger"]
+    if "tags" in data:
+        metadata["tags"] = data["tags"]
+    if "body" in data:
+        body = data["body"]
 
     # Rebuild file
-    if filepath.suffix == '.sh':
+    if filepath.suffix == ".sh":
         fm = _build_shell_frontmatter(metadata)
-        file_content = fm + '\n' + body.lstrip('\n')
+        file_content = fm + "\n" + body.lstrip("\n")
     else:
         fm = _build_md_frontmatter(metadata)
-        file_content = fm + '\n\n' + body.lstrip('\n')
+        file_content = fm + "\n\n" + body.lstrip("\n")
 
-    filepath.write_text(file_content, encoding='utf-8')
+    filepath.write_text(file_content, encoding="utf-8")
 
-    if filepath.suffix == '.sh':
+    if filepath.suffix == ".sh":
         filepath.chmod(filepath.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
 
     return jsonify({"status": "saved"})
 
 
-@app.route('/api/skills/<name>', methods=['DELETE'])
+@app.route("/api/skills/<name>", methods=["DELETE"])
 @limiter.limit("10 per minute")
 def delete_skill(name: str):
     """Delete a skill."""
@@ -3454,8 +3621,8 @@ def delete_skill(name: str):
     from pkm_bridge.tools.skills import _get_skills_dir
 
     skills_dir = _get_skills_dir(config.org_dir)
-    for ext in ('.sh', '.md'):
-        filepath = skills_dir / f'{name}{ext}'
+    for ext in (".sh", ".md"):
+        filepath = skills_dir / f"{name}{ext}"
         if filepath.exists():
             filepath.unlink()
             return jsonify({"status": "deleted"})
@@ -3467,6 +3634,7 @@ def delete_skill(name: str):
 # Scheduled Tasks API
 # -------------------------
 
+
 def _check_auth(allow_query_token: bool = False):
     """Check auth if enabled. Returns error response or None.
 
@@ -3476,10 +3644,10 @@ def _check_auth(allow_query_token: bool = False):
             <img>) — mirrors the /assets endpoint.
     """
     if config.auth_enabled:
-        auth_header = request.headers.get('Authorization', '')
-        token = auth_header[7:] if auth_header.startswith('Bearer ') else ''
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header[7:] if auth_header.startswith("Bearer ") else ""
         if not token and allow_query_token:
-            token = request.args.get('token', '')
+            token = request.args.get("token", "")
         if not token:
             return jsonify({"error": "Missing authorization"}), 401
         if not auth_manager.verify_token(token):
@@ -3487,7 +3655,7 @@ def _check_auth(allow_query_token: bool = False):
     return None
 
 
-@app.route('/api/scheduled-tasks', methods=['GET'])
+@app.route("/api/scheduled-tasks", methods=["GET"])
 @limiter.limit("30 per minute")
 def list_scheduled_tasks():
     """List all scheduled tasks."""
@@ -3498,32 +3666,34 @@ def list_scheduled_tasks():
     db = get_db()
     try:
         tasks = ScheduledTaskRepository.get_all(db)
-        return jsonify([
-            {
-                "id": t.id,
-                "name": t.name,
-                "description": t.description,
-                "prompt": t.prompt,
-                "schedule_type": t.schedule_type,
-                "schedule_expr": t.schedule_expr,
-                "tools_allowed": t.tools_allowed,
-                "is_heartbeat": t.is_heartbeat,
-                "enabled": t.enabled,
-                "max_turns": t.max_turns,
-                "max_input_tokens": t.max_input_tokens,
-                "max_output_tokens": t.max_output_tokens,
-                "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
-                "next_run_at": t.next_run_at.isoformat() if t.next_run_at else None,
-                "created_by": t.created_by,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-            }
-            for t in tasks
-        ])
+        return jsonify(
+            [
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "description": t.description,
+                    "prompt": t.prompt,
+                    "schedule_type": t.schedule_type,
+                    "schedule_expr": t.schedule_expr,
+                    "tools_allowed": t.tools_allowed,
+                    "is_heartbeat": t.is_heartbeat,
+                    "enabled": t.enabled,
+                    "max_turns": t.max_turns,
+                    "max_input_tokens": t.max_input_tokens,
+                    "max_output_tokens": t.max_output_tokens,
+                    "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+                    "next_run_at": t.next_run_at.isoformat() if t.next_run_at else None,
+                    "created_by": t.created_by,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                }
+                for t in tasks
+            ]
+        )
     finally:
         db.close()
 
 
-@app.route('/api/scheduled-tasks', methods=['POST'])
+@app.route("/api/scheduled-tasks", methods=["POST"])
 @limiter.limit("10 per minute")
 def create_scheduled_task():
     """Create a new scheduled task."""
@@ -3535,41 +3705,50 @@ def create_scheduled_task():
     if not data:
         return jsonify({"error": "JSON body required"}), 400
 
-    required = ['name', 'prompt', 'schedule_type', 'schedule_expr']
+    required = ["name", "prompt", "schedule_type", "schedule_expr"]
     missing = [f for f in required if not data.get(f)]
     if missing:
         return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
 
-    if data['schedule_type'] not in ('cron', 'interval'):
+    if data["schedule_type"] not in ("cron", "interval"):
         return jsonify({"error": "schedule_type must be 'cron' or 'interval'"}), 400
 
     db = get_db()
     try:
-        existing = ScheduledTaskRepository.get_by_name(db, data['name'])
+        existing = ScheduledTaskRepository.get_by_name(db, data["name"])
         if existing:
             return jsonify({"error": f"Task '{data['name']}' already exists"}), 409
 
         task = ScheduledTaskRepository.create(
             db,
-            name=data['name'],
-            description=data.get('description', ''),
-            prompt=data['prompt'],
-            schedule_type=data['schedule_type'],
-            schedule_expr=data['schedule_expr'],
-            tools_allowed=data.get('tools_allowed'),
-            max_turns=data.get('max_turns', 10),
-            max_input_tokens=data.get('max_input_tokens', 200_000),
-            max_output_tokens=data.get('max_output_tokens', 10_000),
-            created_by='user',
+            name=data["name"],
+            description=data.get("description", ""),
+            prompt=data["prompt"],
+            schedule_type=data["schedule_type"],
+            schedule_expr=data["schedule_expr"],
+            tools_allowed=data.get("tools_allowed"),
+            max_turns=data.get("max_turns", 10),
+            max_input_tokens=data.get("max_input_tokens", 200_000),
+            max_output_tokens=data.get("max_output_tokens", 10_000),
+            created_by="user",
         )
-        return jsonify({"id": task.id, "name": task.name, "next_run_at": task.next_run_at.isoformat() if task.next_run_at else None}), 201
+        return (
+            jsonify(
+                {
+                    "id": task.id,
+                    "name": task.name,
+                    "next_run_at": task.next_run_at.isoformat() if task.next_run_at else None,
+                }
+            ),
+            201,
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     finally:
         db.close()
 
 
-@app.route('/api/scheduled-tasks/<int:task_id>', methods=['PUT'])
+@app.route("/api/scheduled-tasks/<int:task_id>", methods=["PUT"])
 @limiter.limit("10 per minute")
 def update_scheduled_task(task_id):
     """Update a scheduled task."""
@@ -3582,8 +3761,15 @@ def update_scheduled_task(task_id):
         return jsonify({"error": "JSON body required"}), 400
 
     allowed_fields = {
-        'name', 'description', 'prompt', 'schedule_type', 'schedule_expr',
-        'tools_allowed', 'max_turns', 'max_input_tokens', 'max_output_tokens',
+        "name",
+        "description",
+        "prompt",
+        "schedule_type",
+        "schedule_expr",
+        "tools_allowed",
+        "max_turns",
+        "max_input_tokens",
+        "max_output_tokens",
     }
     updates = {k: v for k, v in data.items() if k in allowed_fields}
 
@@ -3592,14 +3778,20 @@ def update_scheduled_task(task_id):
         task = ScheduledTaskRepository.update(db, task_id, **updates)
         if not task:
             return jsonify({"error": "Task not found"}), 404
-        return jsonify({"id": task.id, "name": task.name, "next_run_at": task.next_run_at.isoformat() if task.next_run_at else None})
+        return jsonify(
+            {
+                "id": task.id,
+                "name": task.name,
+                "next_run_at": task.next_run_at.isoformat() if task.next_run_at else None,
+            }
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     finally:
         db.close()
 
 
-@app.route('/api/scheduled-tasks/<int:task_id>', methods=['DELETE'])
+@app.route("/api/scheduled-tasks/<int:task_id>", methods=["DELETE"])
 @limiter.limit("10 per minute")
 def delete_scheduled_task(task_id):
     """Delete a scheduled task."""
@@ -3620,7 +3812,7 @@ def delete_scheduled_task(task_id):
         db.close()
 
 
-@app.route('/api/scheduled-tasks/<int:task_id>/toggle', methods=['POST'])
+@app.route("/api/scheduled-tasks/<int:task_id>/toggle", methods=["POST"])
 @limiter.limit("10 per minute")
 def toggle_scheduled_task(task_id):
     """Enable or disable a scheduled task."""
@@ -3640,7 +3832,7 @@ def toggle_scheduled_task(task_id):
         db.close()
 
 
-@app.route('/api/scheduled-tasks/<int:task_id>/run', methods=['POST'])
+@app.route("/api/scheduled-tasks/<int:task_id>/run", methods=["POST"])
 @limiter.limit("5 per hour")
 def run_scheduled_task_now(task_id):
     """Trigger a scheduled task to run immediately."""
@@ -3657,13 +3849,14 @@ def run_scheduled_task_now(task_id):
         db.close()
 
     import threading
+
     thread = threading.Thread(target=task_dispatcher.run_task_now, args=(task_id,), daemon=True)
     thread.start()
 
     return jsonify({"status": "started", "task_id": task_id, "task_name": task.name})
 
 
-@app.route('/api/scheduled-tasks/runs', methods=['GET'])
+@app.route("/api/scheduled-tasks/runs", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_scheduled_task_runs():
     """Get recent task runs, optionally filtered by task_id."""
@@ -3671,32 +3864,34 @@ def get_scheduled_task_runs():
     if auth_err:
         return auth_err
 
-    task_id = request.args.get('task_id', type=int)
-    limit = request.args.get('limit', default=20, type=int)
+    task_id = request.args.get("task_id", type=int)
+    limit = request.args.get("limit", default=20, type=int)
 
     db = get_db()
     try:
         runs = ScheduledTaskRunRepository.get_recent(db, limit=min(limit, 100), task_id=task_id)
-        return jsonify([
-            {
-                "id": r.id,
-                "task_id": r.task_id,
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
-                "status": r.status,
-                "turns_used": r.turns_used,
-                "input_tokens": r.input_tokens,
-                "output_tokens": r.output_tokens,
-                "summary": r.summary,
-                "error": r.error,
-            }
-            for r in runs
-        ])
+        return jsonify(
+            [
+                {
+                    "id": r.id,
+                    "task_id": r.task_id,
+                    "started_at": r.started_at.isoformat() if r.started_at else None,
+                    "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                    "status": r.status,
+                    "turns_used": r.turns_used,
+                    "input_tokens": r.input_tokens,
+                    "output_tokens": r.output_tokens,
+                    "summary": r.summary,
+                    "error": r.error,
+                }
+                for r in runs
+            ]
+        )
     finally:
         db.close()
 
 
-@app.route('/api/scheduled-tasks/budget', methods=['GET'])
+@app.route("/api/scheduled-tasks/budget", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_scheduled_task_budget():
     """Get today's token usage vs daily limits."""
@@ -3707,27 +3902,30 @@ def get_scheduled_task_budget():
     db = get_db()
     try:
         usage = DailyTokenUsageRepository.get_today(db)
-        input_limit = int(os.environ.get('CRON_DAILY_INPUT_TOKEN_LIMIT', 2_000_000))
-        output_limit = int(os.environ.get('CRON_DAILY_OUTPUT_TOKEN_LIMIT', 200_000))
-        return jsonify({
-            "date": usage.date,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "task_runs": usage.task_runs,
-            "input_limit": input_limit,
-            "output_limit": output_limit,
-            "input_pct": round(usage.input_tokens / max(input_limit, 1) * 100, 1),
-            "output_pct": round(usage.output_tokens / max(output_limit, 1) * 100, 1),
-        })
+        input_limit = int(os.environ.get("CRON_DAILY_INPUT_TOKEN_LIMIT", 2_000_000))
+        output_limit = int(os.environ.get("CRON_DAILY_OUTPUT_TOKEN_LIMIT", 200_000))
+        return jsonify(
+            {
+                "date": usage.date,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "task_runs": usage.task_runs,
+                "input_limit": input_limit,
+                "output_limit": output_limit,
+                "input_pct": round(usage.input_tokens / max(input_limit, 1) * 100, 1),
+                "output_pct": round(usage.output_tokens / max(output_limit, 1) * 100, 1),
+            }
+        )
     finally:
         db.close()
 
 
-@app.route('/api/events')
+@app.route("/api/events")
 def sse_events():
     """Server-Sent Events endpoint for real-time notifications."""
     import json
     import queue
+
     from flask import request
 
     # EventSource can't set headers, so accept the token from ?token= too.
@@ -3736,7 +3934,7 @@ def sse_events():
         return auth_err
 
     # Get session_id from query parameter
-    session_id = request.args.get('session_id', None)
+    session_id = request.args.get("session_id", None)
 
     def event_stream():
         """Generator for SSE events."""
@@ -3744,7 +3942,7 @@ def sse_events():
         keepalive_count = 0
         try:
             # Send initial connection event
-            yield f"data: {json.dumps({'type': 'connected', 'data': {}, 'timestamp': int(time.time())})}\n\n"
+            yield f"data: {json.dumps({'type': 'connected', 'data': {}, 'timestamp': int(time.time())})}\n\n"  # noqa: E501
 
             # Stream events from queue
             while True:
@@ -3755,8 +3953,10 @@ def sse_events():
                 except queue.Empty:
                     # Send keepalive event every 30 seconds
                     keepalive_count += 1
-                    logger.debug(f"SSE: Sending keepalive #{keepalive_count} to session {session_id}")
-                    yield f"data: {json.dumps({'type': 'keepalive', 'data': {}, 'timestamp': int(time.time())})}\n\n"
+                    logger.debug(
+                        f"SSE: Sending keepalive #{keepalive_count} to session {session_id}"
+                    )
+                    yield f"data: {json.dumps({'type': 'keepalive', 'data': {}, 'timestamp': int(time.time())})}\n\n"  # noqa: E501
         except GeneratorExit:
             # Client disconnected, clean up
             logger.info(f"SSE: Client disconnected normally (keepalives sent: {keepalive_count})")
@@ -3768,16 +3968,16 @@ def sse_events():
 
     return app.response_class(
         event_stream(),
-        mimetype='text/event-stream',
+        mimetype="text/event-stream",
         headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',  # Disable nginx buffering
-            'Connection': 'keep-alive'
-        }
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "Connection": "keep-alive",
+        },
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("gco-pkm-llm Bridge Server")
     logger.info("=" * 60)

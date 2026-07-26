@@ -6,7 +6,7 @@ embedding similarity search.
 """
 
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 from .database import get_db
 from .db_repository import LearnedRuleRepository
@@ -34,8 +34,8 @@ class QueryEnhancer:
                 new_cache = []
                 for rule in rules:
                     data = rule.rule_data or {}
-                    user_term = data.get('user_term', '').lower()
-                    note_terms = data.get('note_terms', [])
+                    user_term = data.get("user_term", "").lower()
+                    note_terms = data.get("note_terms", [])
                     if user_term and note_terms:
                         if isinstance(note_terms, str):
                             note_terms = [note_terms]

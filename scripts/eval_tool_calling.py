@@ -59,27 +59,30 @@ from config.settings import Config  # noqa: E402
 from pkm_bridge.llm import LLMClient  # noqa: E402
 from pkm_bridge.models import get_available_models  # noqa: E402
 from pkm_bridge.tools.base import BaseTool  # noqa: E402
-from pkm_bridge.tools.registry import ToolRegistry  # noqa: E402
-from pkm_bridge.tools.shell import ExecuteShellTool, WriteAndExecuteScriptTool  # noqa: E402
 from pkm_bridge.tools.files import ListFilesTool  # noqa: E402
-from pkm_bridge.tools.search_notes import SearchNotesTool  # noqa: E402
 from pkm_bridge.tools.find_context import FindContextTool  # noqa: E402
 from pkm_bridge.tools.open_file import OpenFileTool  # noqa: E402
-from pkm_bridge.tools.skills import (  # noqa: E402
-    SaveSkillTool, ListSkillsTool, UseSkillTool, NoteToSelfTool,
-)
+from pkm_bridge.tools.registry import ToolRegistry  # noqa: E402
 from pkm_bridge.tools.schedule_task import ScheduleTaskTool  # noqa: E402
-
+from pkm_bridge.tools.search_notes import SearchNotesTool  # noqa: E402
+from pkm_bridge.tools.shell import ExecuteShellTool, WriteAndExecuteScriptTool  # noqa: E402
+from pkm_bridge.tools.skills import (  # noqa: E402
+    ListSkillsTool,
+    NoteToSelfTool,
+    SaveSkillTool,
+    UseSkillTool,
+)
 
 # ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Scenario:
     id: str
     prompt: str
-    expected_tools: list[str]   # pass if ANY of these is called at least once
+    expected_tools: list[str]  # pass if ANY of these is called at least once
     notes: str = ""
 
 
@@ -98,7 +101,8 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         id="search-gmail",
-        prompt="Search my gmail for anything recent mentioning 'rehearsal' and summarize the top hit.",
+        prompt="Search my gmail for anything recent mentioning 'rehearsal' "
+        "and summarize the top hit.",
         expected_tools=["google_gmail"],
         notes="Gmail tool. Requires google_gmail_oauth to be configured.",
     ),
@@ -134,8 +138,13 @@ SCENARIOS: list[Scenario] = [
         id="setlist-today",
         prompt="Start a setlist for today.",
         expected_tools=[
-            "search_notes", "find_context", "semantic_search", "list_files",
-            "execute_shell", "write_and_execute_script", "open_file",
+            "search_notes",
+            "find_context",
+            "semantic_search",
+            "list_files",
+            "execute_shell",
+            "write_and_execute_script",
+            "open_file",
         ],
         notes=(
             "Deliberately underspecified. Good model should search for prior setlists, "
@@ -149,10 +158,11 @@ SCENARIOS: list[Scenario] = [
 # Trace data model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class TraceTurn:
     turn: int
-    kind: str                  # "llm" | "tool" | "error"
+    kind: str  # "llm" | "tool" | "error"
     text: str = ""
     tool_name: str = ""
     tool_input: dict = field(default_factory=dict)
@@ -179,7 +189,7 @@ class ScenarioRun:
     total_output_tokens: int = 0
     total_cache_read_tokens: int = 0
     passed: bool = False
-    status: str = ""           # "ok" | "capped" | "error"
+    status: str = ""  # "ok" | "capped" | "error"
     error: str = ""
 
 
@@ -191,7 +201,7 @@ class ScenarioRun:
 # Coarse but deliberately over-broad: in dry-run we prefer false positives
 # (skipping a read by mistake) over false negatives (silently mutating files).
 _SHELL_MUTATION_PATTERNS = [
-    r"(?<![&0-9])>",      # stdout redirection (> or >>), not 2>&1/>&2/1>&2
+    r"(?<![&0-9])>",  # stdout redirection (> or >>), not 2>&1/>&2/1>&2
     r"\btee\b",
     r"\bsed\s+-i\b",
     r"\brm\b",
@@ -265,6 +275,7 @@ def apply_dry_run(registry: ToolRegistry, logger: logging.Logger) -> None:
 # Tool registry builder — mirrors pkm-bridge-server.py, minus Flask/scheduler
 # ---------------------------------------------------------------------------
 
+
 def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
     """Build a tool registry with every tool that the server would register,
     subject to which provider keys are present. Optional integrations silently
@@ -272,12 +283,14 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
     registry = ToolRegistry()
 
     # Shell + scripting
-    registry.register(ExecuteShellTool(
-        logger, config.dangerous_patterns, config.org_dir, config.logseq_dir
-    ))
-    registry.register(WriteAndExecuteScriptTool(
-        logger, config.dangerous_patterns, config.org_dir, config.logseq_dir
-    ))
+    registry.register(
+        ExecuteShellTool(logger, config.dangerous_patterns, config.org_dir, config.logseq_dir)
+    )
+    registry.register(
+        WriteAndExecuteScriptTool(
+            logger, config.dangerous_patterns, config.org_dir, config.logseq_dir
+        )
+    )
 
     # File + search
     registry.register(ListFilesTool(logger, config.org_dir, config.logseq_dir))
@@ -289,6 +302,7 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
     try:
         from pkm_bridge.ticktick_oauth import TickTickOAuth
         from pkm_bridge.tools.ticktick import TickTickTool
+
         ticktick_oauth = TickTickOAuth()
         registry.register(TickTickTool(logger, ticktick_oauth))
         logger.info("TickTick tool registered")
@@ -299,6 +313,7 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
     try:
         from pkm_bridge.google_oauth import GoogleOAuth
         from pkm_bridge.tools.google_calendar import GoogleCalendarTool
+
         google_oauth = GoogleOAuth()
         registry.register(GoogleCalendarTool(logger, google_oauth))
         logger.info("Google Calendar tool registered")
@@ -309,6 +324,7 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
     try:
         from pkm_bridge.google_oauth import GoogleOAuth
         from pkm_bridge.tools.google_gmail import GoogleGmailTool
+
         gmail_oauth = GoogleOAuth(
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
             redirect_uri_env="GOOGLE_GMAIL_REDIRECT_URI",
@@ -325,6 +341,7 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
             from pkm_bridge.context_retriever import ContextRetriever
             from pkm_bridge.embeddings.voyage_client import VoyageClient
             from pkm_bridge.tools.semantic_search import SemanticSearchTool
+
             voyage = VoyageClient(api_key=voyage_key)
             retriever = ContextRetriever(voyage)
             registry.register(SemanticSearchTool(logger, retriever))
@@ -345,6 +362,7 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+
 
 def _text_from_response(response: Any) -> str:
     """Extract concatenated text from an LLMResponse or Anthropic response."""
@@ -394,13 +412,17 @@ def run_scenario(
         result.total_input_tokens += in_tok
         result.total_output_tokens += out_tok
         result.total_cache_read_tokens += cache_read
-        result.turns.append(TraceTurn(
-            turn=turn_idx, kind="llm",
-            text=_text_from_response(response)[:2000],
-            duration_s=round(time.time() - t0, 3),
-            input_tokens=in_tok, output_tokens=out_tok,
-            stop_reason=getattr(response, "stop_reason", "") or "",
-        ))
+        result.turns.append(
+            TraceTurn(
+                turn=turn_idx,
+                kind="llm",
+                text=_text_from_response(response)[:2000],
+                duration_s=round(time.time() - t0, 3),
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                stop_reason=getattr(response, "stop_reason", "") or "",
+            )
+        )
 
         while getattr(response, "stop_reason", "") == "tool_use" and turn_idx < max_turns:
             tool_results = []
@@ -421,25 +443,41 @@ def run_scenario(
                     except Exception as e:
                         out = f"❌ Tool crashed: {e}"
                     is_err = isinstance(out, str) and out.startswith("❌")
-                    result.turns.append(TraceTurn(
-                        turn=turn_idx, kind="tool",
-                        tool_name=tname,
-                        tool_input=tinput if isinstance(raw_input, dict) else {"_raw": str(raw_input)[:200]},
-                        tool_output_head=(out or "")[:1000],
-                        tool_output_len=len(out or ""),
-                        tool_error=is_err,
-                        duration_s=round(time.time() - t_tool, 3),
-                    ))
+                    result.turns.append(
+                        TraceTurn(
+                            turn=turn_idx,
+                            kind="tool",
+                            tool_name=tname,
+                            tool_input=(
+                                tinput
+                                if isinstance(raw_input, dict)
+                                else {"_raw": str(raw_input)[:200]}
+                            ),
+                            tool_output_head=(out or "")[:1000],
+                            tool_output_len=len(out or ""),
+                            tool_error=is_err,
+                            duration_s=round(time.time() - t_tool, 3),
+                        )
+                    )
                     # Keep tool_result content short-ish for cheaper follow-up
-                    tr_content = out if len(out) <= 8000 else out[:8000] + "\n\n[... truncated for eval]"
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tid,
-                        "content": tr_content,
-                    })
-                    assistant_blocks.append({
-                        "type": "tool_use", "id": tid, "name": tname, "input": dict(tinput),
-                    })
+                    tr_content = (
+                        out if len(out) <= 8000 else out[:8000] + "\n\n[... truncated for eval]"
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tid,
+                            "content": tr_content,
+                        }
+                    )
+                    assistant_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tid,
+                            "name": tname,
+                            "input": dict(tinput),
+                        }
+                    )
                 elif btype == "text":
                     txt = getattr(block, "text", "") or ""
                     if txt.strip():
@@ -464,13 +502,17 @@ def run_scenario(
             result.total_input_tokens += in_tok
             result.total_output_tokens += out_tok
             result.total_cache_read_tokens += cache_read
-            result.turns.append(TraceTurn(
-                turn=turn_idx, kind="llm",
-                text=_text_from_response(response)[:2000],
-                duration_s=round(time.time() - t0, 3),
-                input_tokens=in_tok, output_tokens=out_tok,
-                stop_reason=getattr(response, "stop_reason", "") or "",
-            ))
+            result.turns.append(
+                TraceTurn(
+                    turn=turn_idx,
+                    kind="llm",
+                    text=_text_from_response(response)[:2000],
+                    duration_s=round(time.time() - t0, 3),
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    stop_reason=getattr(response, "stop_reason", "") or "",
+                )
+            )
 
         result.final_text = _text_from_response(response)
         if turn_idx >= max_turns and getattr(response, "stop_reason", "") == "tool_use":
@@ -480,10 +522,13 @@ def run_scenario(
 
     except Exception as e:
         logger.error(f"[{model}/{scenario.id}] runner error: {e}")
-        result.turns.append(TraceTurn(
-            turn=len(result.turns) + 1, kind="error",
-            text=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
-        ))
+        result.turns.append(
+            TraceTurn(
+                turn=len(result.turns) + 1,
+                kind="error",
+                text=f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+            )
+        )
         result.status = "error"
         result.error = f"{type(e).__name__}: {e}"
 
@@ -496,24 +541,43 @@ def run_scenario(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _safe_name(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", s).strip("_")
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", action="append", default=None,
-                   help="Model ID to test (repeatable). Omit to see available models.")
-    p.add_argument("--scenario", action="append", default=None,
-                   help="Scenario id(s) to run (repeatable). Default: all.")
-    p.add_argument("--max-turns", type=int, default=8,
-                   help="Max LLM turns per scenario (safety cap). Default: 8.")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Stub mutating tool calls (shell writes, script execution, "
-                        "save_skill, schedule_task) instead of letting them run. "
-                        "Reads still execute so the model sees real data.")
-    p.add_argument("--out-dir", default=None,
-                   help="Directory for trace dumps. Default: traces/<timestamp>/.")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--model",
+        action="append",
+        default=None,
+        help="Model ID to test (repeatable). Omit to see available models.",
+    )
+    p.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        help="Scenario id(s) to run (repeatable). Default: all.",
+    )
+    p.add_argument(
+        "--max-turns",
+        type=int,
+        default=8,
+        help="Max LLM turns per scenario (safety cap). Default: 8.",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Stub mutating tool calls (shell writes, script execution, "
+        "save_skill, schedule_task) instead of letting them run. "
+        "Reads still execute so the model sees real data.",
+    )
+    p.add_argument(
+        "--out-dir", default=None, help="Directory for trace dumps. Default: traces/<timestamp>/."
+    )
     p.add_argument("--list-models", action="store_true", help="List available models and exit.")
     p.add_argument("--list-scenarios", action="store_true", help="List scenarios and exit.")
     p.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging.")
@@ -540,6 +604,7 @@ def main() -> int:
     # Differs slightly from Config(), which picks one or the other — here we
     # want the union so eval sees every key the user has anywhere.
     from dotenv import load_dotenv
+
     if Path(".env").exists():
         load_dotenv(".env")
     if Path(".env.local").exists():
@@ -555,7 +620,10 @@ def main() -> int:
         print("No --model given. Available models:")
         for m in available:
             print(f"  {m['id']:50s}  {m['name']}  [{m['provider']}/{m['tier']}]")
-        print("\nExample: scripts/eval_tool_calling.py --model claude-haiku-4-5 --scenario search-pkm-text")
+        print(
+            "\nExample: scripts/eval_tool_calling.py --model claude-haiku-4-5"
+            " --scenario search-pkm-text"
+        )
         return 2
 
     # Filter scenarios
@@ -576,6 +644,7 @@ def main() -> int:
     # on invocation, which is fine (the trace will show the error).
     try:
         from pkm_bridge.database import init_db
+
         init_db()
         logger.info("Database initialized")
     except Exception as e:
@@ -594,8 +663,10 @@ def main() -> int:
     tz_str = config.timezone.key if config.timezone is not None else None
     system_prompt = config.get_system_prompt_blocks(user_timezone=tz_str)
 
-    out_dir = Path(args.out_dir) if args.out_dir else (
-        REPO_ROOT / "traces" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = (
+        Path(args.out_dir)
+        if args.out_dir
+        else (REPO_ROOT / "traces" / datetime.now().strftime("%Y%m%d-%H%M%S"))
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Trace dir: {out_dir}")
@@ -607,9 +678,12 @@ def main() -> int:
             print(f"\n=== [{model}] {scenario.id} ===")
             print(f"    prompt: {scenario.prompt}")
             run = run_scenario(
-                llm_client=llm_client, registry=registry,
-                model=model, scenario=scenario,
-                system_prompt=system_prompt, max_turns=args.max_turns,
+                llm_client=llm_client,
+                registry=registry,
+                model=model,
+                scenario=scenario,
+                system_prompt=system_prompt,
+                max_turns=args.max_turns,
                 logger=logger,
             )
             runs.append(run)
@@ -625,7 +699,9 @@ def main() -> int:
             if run.status == "error":
                 print(f"    error: {run.error}")
             if run.final_text:
-                final_head = run.final_text.strip().splitlines()[0][:200] if run.final_text.strip() else ""
+                final_head = (
+                    run.final_text.strip().splitlines()[0][:200] if run.final_text.strip() else ""
+                )
                 print(f"    final: {final_head}")
 
             # Dump full trace
@@ -636,7 +712,10 @@ def main() -> int:
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"{'model':42s} {'scenario':22s} {'status':7s} {'pass':5s} {'turns':5s} {'tools':6s} {'in→out tok':14s} {'cache':8s} {'time':6s}")
+    print(
+        f"{'model':42s} {'scenario':22s} {'status':7s} {'pass':5s} {'turns':5s} "
+        f"{'tools':6s} {'in→out tok':14s} {'cache':8s} {'time':6s}"
+    )
     for r in runs:
         print(
             f"{r.model[:42]:42s} {r.scenario_id[:22]:22s} {r.status:7s} "

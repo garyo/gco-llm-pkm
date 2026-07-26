@@ -6,16 +6,16 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from ..database import ScheduledTask, ScheduledTaskRun, DailyTokenUsage
+from ..database import DailyTokenUsage, ScheduledTask, ScheduledTaskRun
 
 
 def _parse_interval(expr: str) -> timedelta:
     """Parse an interval expression like '4h', '30m', '1d' into a timedelta."""
-    match = re.match(r'^(\d+)\s*([smhd])$', expr.strip().lower())
+    match = re.match(r"^(\d+)\s*([smhd])$", expr.strip().lower())
     if not match:
         raise ValueError(f"Invalid interval expression: '{expr}'. Use e.g. '4h', '30m', '1d'.")
     value, unit = int(match.group(1)), match.group(2)
-    units = {'s': 'seconds', 'm': 'minutes', 'h': 'hours', 'd': 'days'}
+    units = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
     return timedelta(**{units[unit]: value})
 
 
@@ -31,7 +31,7 @@ def compute_next_run(task: ScheduledTask, after: datetime | None = None) -> date
     """
     after = after or datetime.utcnow()
 
-    if task.schedule_type == 'interval':
+    if task.schedule_type == "interval":
         delta = _parse_interval(task.schedule_expr)
         base = task.last_run_at or task.created_at or after
         # Find the next interval tick after `after`
@@ -43,8 +43,9 @@ def compute_next_run(task: ScheduledTask, after: datetime | None = None) -> date
         ticks = int(elapsed / interval_s) + 1
         return base + timedelta(seconds=ticks * interval_s)
 
-    elif task.schedule_type == 'cron':
+    elif task.schedule_type == "cron":
         from croniter import croniter
+
         cron = croniter(task.schedule_expr, after)
         return cron.get_next(datetime)
 
@@ -102,7 +103,7 @@ class ScheduledTaskRepository:
             if hasattr(task, key):
                 setattr(task, key, value)
         # Recompute next_run if schedule changed
-        if 'schedule_type' in kwargs or 'schedule_expr' in kwargs:
+        if "schedule_type" in kwargs or "schedule_expr" in kwargs:
             task.next_run_at = compute_next_run(task)
         task.updated_at = datetime.utcnow()
         db.commit()
@@ -165,7 +166,7 @@ class DailyTokenUsageRepository:
 
     @staticmethod
     def get_today(db: Session) -> DailyTokenUsage:
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.utcnow().strftime("%Y-%m-%d")
         row = db.query(DailyTokenUsage).filter_by(date=today).first()
         if not row:
             row = DailyTokenUsage(date=today, input_tokens=0, output_tokens=0, task_runs=0)
@@ -175,9 +176,7 @@ class DailyTokenUsageRepository:
         return row
 
     @staticmethod
-    def record_usage(
-        db: Session, input_tokens: int, output_tokens: int
-    ) -> DailyTokenUsage:
+    def record_usage(db: Session, input_tokens: int, output_tokens: int) -> DailyTokenUsage:
         row = DailyTokenUsageRepository.get_today(db)
         row.input_tokens += input_tokens
         row.output_tokens += output_tokens

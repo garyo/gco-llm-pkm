@@ -81,13 +81,9 @@ def _get_tool_registry():
     registry.register(ScheduleTaskTool(tool_logger))
 
     # Note-organization proposal tools (curation review workflow)
-    registry.register(
-        ProposeNoteOrganizationTool(tool_logger, config.org_dir, config.logseq_dir)
-    )
+    registry.register(ProposeNoteOrganizationTool(tool_logger, config.org_dir, config.logseq_dir))
     registry.register(ListNoteProposalsTool(tool_logger))
-    registry.register(
-        ResolveNoteProposalTool(tool_logger, config.org_dir, config.logseq_dir)
-    )
+    registry.register(ResolveNoteProposalTool(tool_logger, config.org_dir, config.logseq_dir))
 
     # Optional: TickTick (reads credentials from env vars internally)
     try:
@@ -233,7 +229,8 @@ def register_all_tools(mcp: FastMCP):
         context: int = 3,
         limit: int = 15000,
     ) -> str:
-        """Search PKM notes for a regex pattern. Returns matches from journals and pages (newest first).
+        """Search PKM notes for a regex pattern. Returns matches from journals and pages
+        (newest first).
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
@@ -241,11 +238,14 @@ def register_all_tools(mcp: FastMCP):
             limit: Approximate character limit for results (default 15000; raise it
                 if you need more matches and the result was truncated)
         """
-        return _execute_tool("search_notes", {
-            "pattern": pattern,
-            "context": context,
-            "limit": limit,
-        })
+        return _execute_tool(
+            "search_notes",
+            {
+                "pattern": pattern,
+                "context": context,
+                "limit": limit,
+            },
+        )
 
     @mcp.tool()
     def find_context(
@@ -315,11 +315,14 @@ def register_all_tools(mcp: FastMCP):
             show_stats: Show file sizes and modification times
             directory: Which directory: 'both' (default), 'org-mode', or 'logseq'
         """
-        return _execute_tool("list_files", {
-            "pattern": pattern,
-            "show_stats": show_stats,
-            "directory": directory,
-        })
+        return _execute_tool(
+            "list_files",
+            {
+                "pattern": pattern,
+                "show_stats": show_stats,
+                "directory": directory,
+            },
+        )
 
     @mcp.tool()
     def read_file(path: str) -> str:
@@ -341,7 +344,11 @@ def register_all_tools(mcp: FastMCP):
             _log_tool_execution("read_file", {"path": path}, f"({len(content)} bytes)", duration_ms)
             return f"[mtime={mtime}]\n{content}"
         except Exception as e:
-            return f"Error reading file '{path}': {type(e).__name__}: {e}. Use list_files to verify the path exists. Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
+            return (
+                f"Error reading file '{path}': {type(e).__name__}: {e}. "
+                "Use list_files to verify the path exists. "
+                "Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
+            )
 
     @mcp.tool()
     def write_file(
@@ -374,10 +381,15 @@ def register_all_tools(mcp: FastMCP):
             )
             duration_ms = int((time.time() - start) * 1000)
             _log_tool_execution(
-                "write_file", {"path": path, "create_only": create_only},
-                f"status={result['status']}", duration_ms,
+                "write_file",
+                {"path": path, "create_only": create_only},
+                f"status={result['status']}",
+                duration_ms,
             )
-            msg = f"File {result['status']}: {result.get('path', path)} ({result.get('size', 0)} bytes)"
+            msg = (
+                f"File {result['status']}: {result.get('path', path)}"
+                f" ({result.get('size', 0)} bytes)"
+            )
             if expected_mtime is None and result["status"] == "saved" and not create_only:
                 msg += (
                     "\n\nTip: pass expected_mtime from read_file's [mtime=...] header"
@@ -391,7 +403,10 @@ def register_all_tools(mcp: FastMCP):
                 "content and mtime, then retry your write."
             )
         except Exception as e:
-            return f"Error writing file '{path}': {type(e).__name__}: {e}. Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
+            return (
+                f"Error writing file '{path}': {type(e).__name__}: {e}. "
+                "Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
+            )
 
     # --- Shell tools ---
 
@@ -480,6 +495,7 @@ def register_all_tools(mcp: FastMCP):
             params["query"] = query
         if reminders is not None:
             import json as _json
+
             try:
                 params["reminders"] = _json.loads(reminders)
             except (ValueError, TypeError):
@@ -513,20 +529,24 @@ def register_all_tools(mcp: FastMCP):
 
         Args:
             skill_name: Kebab-case name (e.g., 'weekly-review'). Max 50 chars, [a-z0-9-].
-            skill_type: 'shell' for .sh scripts, 'python' for .py scripts, 'recipe' for .md procedures
+            skill_type: 'shell' for .sh scripts, 'python' for .py scripts,
+                'recipe' for .md procedures
             description: Brief description of what the skill does
             content: Shell script code or markdown procedure steps
             trigger: When to use this skill (e.g., 'user asks for weekly review')
             tags: Tags for categorization
         """
-        return _execute_tool("save_skill", {
-            "skill_name": skill_name,
-            "skill_type": skill_type,
-            "description": description,
-            "content": content,
-            "trigger": trigger,
-            "tags": tags or [],
-        })
+        return _execute_tool(
+            "save_skill",
+            {
+                "skill_name": skill_name,
+                "skill_type": skill_type,
+                "description": description,
+                "content": content,
+                "trigger": trigger,
+                "tags": tags or [],
+            },
+        )
 
     @mcp.tool()
     def list_skills(tag: str = "", search: str = "") -> str:
@@ -571,10 +591,14 @@ def register_all_tools(mcp: FastMCP):
             note: The note to save
             category: One of: user_preference, discovery, strategy, correction, other
         """
-        return _execute_tool("note_to_self", {
-            "note": note,
-            "category": category,
-        }, context={"session_id": "mcp"})
+        return _execute_tool(
+            "note_to_self",
+            {
+                "note": note,
+                "category": category,
+            },
+            context={"session_id": "mcp"},
+        )
 
     # --- New MCP-specific tools ---
 
@@ -595,9 +619,7 @@ def register_all_tools(mcp: FastMCP):
         mcp_prompt_file = Path(__file__).parent.parent / "config" / "system_prompt_mcp.txt"
         if mcp_prompt_file.exists():
             prompt_text = mcp_prompt_file.read_text(encoding="utf-8")
-            editor_base = os.getenv(
-                "EDITOR_BASE_URL", "https://pkm.oberbrunner.com/editor"
-            )
+            editor_base = os.getenv("EDITOR_BASE_URL", "https://pkm.oberbrunner.com/editor")
             prompt_text = prompt_text.replace("{EDITOR_BASE_URL}", editor_base)
             prompt_text = prompt_text.replace("{ORG_DIR}", str(config.org_dir))
             prompt_text = prompt_text.replace("{LOGSEQ_DIR}", str(config.logseq_dir))
@@ -700,9 +722,7 @@ def register_all_tools(mcp: FastMCP):
                     tool_error_count=0,
                     total_tool_calls=0,
                     explicit_feedback=(
-                        feedback_type
-                        if feedback_type in ("positive", "negative")
-                        else None
+                        feedback_type if feedback_type in ("positive", "negative") else None
                     ),
                     feedback_note=message,
                 )
@@ -712,7 +732,10 @@ def register_all_tools(mcp: FastMCP):
             finally:
                 db.close()
         except Exception as e:
-            return f"Failed to log feedback: {type(e).__name__}: {e}. This is a non-critical error; feedback was not saved but the session can continue."
+            return (
+                f"Failed to log feedback: {type(e).__name__}: {e}. This is a non-critical "
+                "error; feedback was not saved but the session can continue."
+            )
 
     @mcp.tool()
     def open_in_editor(
@@ -876,6 +899,4 @@ def register_all_tools(mcp: FastMCP):
             params["page_file"] = page_file
         if page_content is not None:
             params["page_content"] = page_content
-        return _execute_tool(
-            "propose_note_organization", params, context={"session_id": "mcp"}
-        )
+        return _execute_tool("propose_note_organization", params, context={"session_id": "mcp"})

@@ -23,8 +23,8 @@ Usage:
   ./test-ticktick.py completed 2025-10-01 2025-10-31  # Get completed tasks
 """
 
-import sys
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -32,13 +32,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-from pkm_bridge.database import init_db, get_db
+
+from pkm_bridge.database import get_db, init_db
 from pkm_bridge.db_repository import OAuthRepository
 from pkm_bridge.ticktick_client import TickTickClient
 
 # Load environment
 load_dotenv()
-load_dotenv('.env.local', override=True)
+load_dotenv(".env.local", override=True)
 
 
 def get_client() -> TickTickClient:
@@ -49,9 +50,11 @@ def get_client() -> TickTickClient:
     # Get access token from database
     db = get_db()
     try:
-        token_obj = OAuthRepository.get_token(db, service='ticktick', user_id='default')
+        token_obj = OAuthRepository.get_token(db, service="ticktick", user_id="default")
         if not token_obj:
-            print("Error: No TickTick access token found. Please authenticate via the web UI first.")
+            print(
+                "Error: No TickTick access token found. Please authenticate via the web UI first."
+            )
             sys.exit(1)
         return TickTickClient(token_obj.access_token)
     finally:
@@ -74,7 +77,7 @@ def cmd_list(client: TickTickClient):
         print(f"  Priority: {task.get('priority', 0)} (0=None, 1=Low, 3=Medium, 5=High)")
         print(f"  Due: {task.get('dueDate', 'No due date')}")
         print(f"  Project: {task.get('projectId', 'None')}")
-        if task.get('content'):
+        if task.get("content"):
             print(f"  Content: {task['content'][:100]}")
         print()
 
@@ -98,7 +101,7 @@ def cmd_get(client: TickTickClient, task_id: str):
     """Get specific task details."""
     # Find the task
     all_tasks = client.list_tasks()
-    task = next((t for t in all_tasks if t['id'] == task_id), None)
+    task = next((t for t in all_tasks if t["id"] == task_id), None)
 
     if not task:
         print(f"Task {task_id} not found")
@@ -108,6 +111,7 @@ def cmd_get(client: TickTickClient, task_id: str):
 
     # Pretty print all fields
     import json
+
     print(json.dumps(task, indent=2))
 
 
@@ -118,7 +122,7 @@ def cmd_update(client: TickTickClient, task_id: str, updates: dict):
 
     # First, get the current task to have all fields
     all_tasks = client.list_tasks()
-    task = next((t for t in all_tasks if t['id'] == task_id), None)
+    task = next((t for t in all_tasks if t["id"] == task_id), None)
 
     if not task:
         print(f"Task {task_id} not found")
@@ -129,60 +133,62 @@ def cmd_update(client: TickTickClient, task_id: str, updates: dict):
 
     # Apply updates
     for key, value in updates.items():
-        if key == 'dueDate':
+        if key == "dueDate":
             # Convert date string to TickTick format
             # Input: YYYY-MM-DD, Output: YYYY-MM-DDTHH:MM:SS+0000
             try:
-                dt = datetime.strptime(value, '%Y-%m-%d')
-                if task.get('isAllDay'):
+                dt = datetime.strptime(value, "%Y-%m-%d")
+                if task.get("isAllDay"):
                     # For all-day tasks, use 04:00:00 (UTC) like the original
-                    transformed['dueDate'] = dt.strftime('%Y-%m-%dT04:00:00.000+0000')
+                    transformed["dueDate"] = dt.strftime("%Y-%m-%dT04:00:00.000+0000")
                     # Also update startDate to match
-                    transformed['startDate'] = dt.strftime('%Y-%m-%dT04:00:00.000+0000')
+                    transformed["startDate"] = dt.strftime("%Y-%m-%dT04:00:00.000+0000")
                 else:
-                    transformed['dueDate'] = dt.strftime('%Y-%m-%dT00:00:00.000+0000')
+                    transformed["dueDate"] = dt.strftime("%Y-%m-%dT00:00:00.000+0000")
             except ValueError:
                 print(f"Invalid date format: {value}. Use YYYY-MM-DD")
                 return
-        elif key == 'priority':
+        elif key == "priority":
             # Convert to int
-            transformed['priority'] = int(value)
+            transformed["priority"] = int(value)
         else:
             transformed[key] = value
 
-    print(f"\nSending to API:")
+    print("\nSending to API:")
     import json
+
     print(json.dumps(transformed, indent=2))
 
     try:
         result = client.update_task(task_id, **transformed)
         print("\n✓ Task updated successfully!")
-        print(f"\nUpdated task:")
+        print("\nUpdated task:")
         print(f"  Title: {result.get('title', 'Untitled')}")
         print(f"  Priority: {result.get('priority', 0)}")
         print(f"  Due: {result.get('dueDate', 'No due date')}")
-        if result.get('startDate'):
+        if result.get("startDate"):
             print(f"  Start: {result.get('startDate')}")
     except Exception as e:
         print(f"\n✗ Update failed: {e}")
         # Try to get response body if available
-        if hasattr(e, 'response') and e.response is not None:
+        if hasattr(e, "response") and e.response is not None:
             print(f"Response status: {e.response.status_code}")
             print(f"Response body: {e.response.text}")
         import traceback
+
         traceback.print_exc()
 
 
 def cmd_create(client: TickTickClient, title: str):
     """Create an all-day test task."""
-    print(f"\n=== Creating All-Day Test Task ===\n")
+    print("\n=== Creating All-Day Test Task ===\n")
 
     # Create all-day task - set time to midnight
     tomorrow = datetime.now() + timedelta(days=1)
     tomorrow = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Get timezone from env or default
-    timezone = os.getenv('USER_TIMEZONE', 'America/New_York')
+    timezone = os.getenv("USER_TIMEZONE", "America/New_York")
 
     try:
         result = client.create_task(
@@ -191,7 +197,7 @@ def cmd_create(client: TickTickClient, title: str):
             due_date=tomorrow,
             priority=3,  # Medium
             user_timezone=timezone,
-            is_all_day=True  # Explicitly set as all-day
+            is_all_day=True,  # Explicitly set as all-day
         )
         print("\n✓ All-day task created successfully!")
         print(f"  ID: {result['id']}")
@@ -199,10 +205,11 @@ def cmd_create(client: TickTickClient, title: str):
         print(f"  Due: {result.get('dueDate', 'No due date')}")
         print(f"  IsAllDay: {result.get('isAllDay', 'Unknown')}")
         print(f"  Priority: {result.get('priority', 0)}")
-        print(f"\nCheck TickTick UI - task should show as all-day with no specific time")
+        print("\nCheck TickTick UI - task should show as all-day with no specific time")
     except Exception as e:
         print(f"\n✗ Creation failed: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -220,12 +227,13 @@ def cmd_completed(client: TickTickClient, start: str, end: str):
         for task in tasks:
             print(f"✓ {task.get('title', 'Untitled')}")
             print(f"  Completed: {task.get('completedTime', 'Unknown')}")
-            if task.get('dueDate'):
+            if task.get("dueDate"):
                 print(f"  Due: {task.get('dueDate')}")
             print()
     except Exception as e:
         print(f"\n✗ Failed: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -236,11 +244,11 @@ def cmd_create_timed(client: TickTickClient, title: str, time_str: str):
         title: Task title
         time_str: Time in HH:MM format (e.g., "14:30")
     """
-    print(f"\n=== Creating Timed Task ===\n")
+    print("\n=== Creating Timed Task ===\n")
 
     # Parse time
     try:
-        hour, minute = map(int, time_str.split(':'))
+        hour, minute = map(int, time_str.split(":"))
         if not (0 <= hour < 24 and 0 <= minute < 60):
             raise ValueError("Invalid time range")
     except (ValueError, AttributeError):
@@ -252,7 +260,7 @@ def cmd_create_timed(client: TickTickClient, title: str, time_str: str):
     due_date = tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     # Get timezone from env or default
-    timezone = os.getenv('USER_TIMEZONE', 'America/New_York')
+    timezone = os.getenv("USER_TIMEZONE", "America/New_York")
 
     print(f"Creating timed task for: {due_date.strftime('%Y-%m-%d %H:%M')}")
     print(f"Timezone: {timezone}")
@@ -264,7 +272,7 @@ def cmd_create_timed(client: TickTickClient, title: str, time_str: str):
             due_date=due_date,
             priority=3,  # Medium
             user_timezone=timezone,
-            is_all_day=False  # Explicitly set as timed task
+            is_all_day=False,  # Explicitly set as timed task
         )
         print("\n✓ Timed task created successfully!")
         print(f"  ID: {result['id']}")
@@ -276,6 +284,7 @@ def cmd_create_timed(client: TickTickClient, title: str, time_str: str):
     except Exception as e:
         print(f"\n✗ Creation failed: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -286,11 +295,11 @@ def cmd_create_with_reminders(client: TickTickClient, title: str, time_str: str)
         title: Task title
         time_str: Time in HH:MM format (e.g., "10:00")
     """
-    print(f"\n=== Creating Timed Task with Reminders ===\n")
+    print("\n=== Creating Timed Task with Reminders ===\n")
 
     # Parse time
     try:
-        hour, minute = map(int, time_str.split(':'))
+        hour, minute = map(int, time_str.split(":"))
         if not (0 <= hour < 24 and 0 <= minute < 60):
             raise ValueError("Invalid time range")
     except (ValueError, AttributeError):
@@ -302,17 +311,17 @@ def cmd_create_with_reminders(client: TickTickClient, title: str, time_str: str)
     due_date = day_after.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     # Get timezone from env or default
-    timezone = os.getenv('USER_TIMEZONE', 'America/New_York')
+    timezone = os.getenv("USER_TIMEZONE", "America/New_York")
 
     # Set up reminders
     reminders = [
         "TRIGGER:-PT30M",  # 30 minutes before
-        "TRIGGER:-PT1H",   # 1 hour before
+        "TRIGGER:-PT1H",  # 1 hour before
     ]
 
     print(f"Creating timed task for: {due_date.strftime('%Y-%m-%d %H:%M')}")
     print(f"Timezone: {timezone}")
-    print(f"Reminders: 30 minutes before, 1 hour before")
+    print("Reminders: 30 minutes before, 1 hour before")
 
     try:
         result = client.create_task(
@@ -322,7 +331,7 @@ def cmd_create_with_reminders(client: TickTickClient, title: str, time_str: str)
             priority=5,  # High
             user_timezone=timezone,
             reminders=reminders,
-            is_all_day=False  # Explicitly set as timed task
+            is_all_day=False,  # Explicitly set as timed task
         )
         print("\n✓ Timed task with reminders created successfully!")
         print(f"  ID: {result['id']}")
@@ -331,12 +340,13 @@ def cmd_create_with_reminders(client: TickTickClient, title: str, time_str: str)
         print(f"  IsAllDay: {result.get('isAllDay', 'Unknown')}")
         print(f"  Reminders: {result.get('reminders', [])}")
         print(f"  Priority: {result.get('priority', 0)}")
-        print(f"\nCheck TickTick UI - task should show:")
+        print("\nCheck TickTick UI - task should show:")
         print(f"  - Time: {time_str} in your timezone")
-        print(f"  - 2 reminders set (30 min and 1 hour before)")
+        print("  - 2 reminders set (30 min and 1 hour before)")
     except Exception as e:
         print(f"\n✗ Creation failed: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -373,10 +383,10 @@ def main():
         # Parse field=value pairs
         updates = {}
         for arg in sys.argv[3:]:
-            if '=' not in arg:
+            if "=" not in arg:
                 print(f"Invalid update format: {arg}. Use field=value")
                 sys.exit(1)
-            key, value = arg.split('=', 1)
+            key, value = arg.split("=", 1)
             # Remove quotes if present
             value = value.strip('"').strip("'")
             updates[key] = value
@@ -385,21 +395,21 @@ def main():
 
     elif command == "create":
         if len(sys.argv) < 3:
-            print("Usage: ./test-ticktick.py create \"Task title\"")
+            print('Usage: ./test-ticktick.py create "Task title"')
             sys.exit(1)
         cmd_create(client, sys.argv[2])
 
     elif command == "create-timed":
         if len(sys.argv) < 4:
-            print("Usage: ./test-ticktick.py create-timed \"Task title\" HH:MM")
-            print("  Example: ./test-ticktick.py create-timed \"Meeting prep\" 14:30")
+            print('Usage: ./test-ticktick.py create-timed "Task title" HH:MM')
+            print('  Example: ./test-ticktick.py create-timed "Meeting prep" 14:30')
             sys.exit(1)
         cmd_create_timed(client, sys.argv[2], sys.argv[3])
 
     elif command == "create-with-reminders":
         if len(sys.argv) < 4:
-            print("Usage: ./test-ticktick.py create-with-reminders \"Task title\" HH:MM")
-            print("  Example: ./test-ticktick.py create-with-reminders \"Doctor appointment\" 10:00")
+            print('Usage: ./test-ticktick.py create-with-reminders "Task title" HH:MM')
+            print('  Example: ./test-ticktick.py create-with-reminders "Doctor appointment" 10:00')
             sys.exit(1)
         cmd_create_with_reminders(client, sys.argv[2], sys.argv[3])
 
@@ -416,6 +426,5 @@ def main():
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

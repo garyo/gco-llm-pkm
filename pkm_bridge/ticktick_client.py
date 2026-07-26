@@ -3,8 +3,9 @@
 import os
 import time
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
+
 import requests
 
 
@@ -22,10 +23,9 @@ class TickTickClient:
         """
         self.access_token = access_token
         self.session = requests.Session()
-        self.session.headers.update({
-            'Authorization': f'Bearer {access_token}',
-            'Content-Type': 'application/json'
-        })
+        self.session.headers.update(
+            {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        )
         self._projects_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
         self._tasks_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
 
@@ -33,7 +33,6 @@ class TickTickClient:
         """Invalidate all caches."""
         self._projects_cache = None
         self._tasks_cache = None
-
 
     def list_projects(self) -> List[Dict[str, Any]]:
         """Get all projects (cached for _cache_ttl seconds).
@@ -57,7 +56,9 @@ class TickTickClient:
             self._projects_cache = (now, result)
             return result
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to list projects: {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to list projects: {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             raise Exception(f"Failed to list projects: {str(e)}")
 
@@ -84,13 +85,13 @@ class TickTickClient:
                 all_tasks = []
 
                 # Try to get inbox tasks if configured
-                inbox_id = os.getenv('TICKTICK_INBOX_ID')
+                inbox_id = os.getenv("TICKTICK_INBOX_ID")
                 if inbox_id:
                     try:
                         response = self.session.get(f"{self.BASE_URL}/project/{inbox_id}/data")
                         response.raise_for_status()
                         data = response.json()
-                        inbox_tasks = data.get('tasks', [])
+                        inbox_tasks = data.get("tasks", [])
                         all_tasks.extend(inbox_tasks)
                     except Exception:
                         # Inbox access failed, continue without it
@@ -98,13 +99,13 @@ class TickTickClient:
 
                 # Get tasks from all regular projects
                 for project in projects:
-                    proj_id = project.get('id')
+                    proj_id = project.get("id")
                     if proj_id:
                         try:
                             response = self.session.get(f"{self.BASE_URL}/project/{proj_id}/data")
                             response.raise_for_status()
                             data = response.json()
-                            tasks = data.get('tasks', [])
+                            tasks = data.get("tasks", [])
                             all_tasks.extend(tasks)
                         except Exception:
                             # Skip projects that fail to load
@@ -117,7 +118,7 @@ class TickTickClient:
                 response = self.session.get(f"{self.BASE_URL}/project/{project_id}/data")
                 response.raise_for_status()
                 data = response.json()
-                return data.get('tasks', [])
+                return data.get("tasks", [])
 
         except Exception as e:
             raise Exception(f"TickTick API Error: {e}")
@@ -126,7 +127,8 @@ class TickTickClient:
         """Get tasks due today or overdue.
 
         Args:
-            user_timezone: User's timezone string (e.g., 'America/New_York'). If None, uses server local time.
+            user_timezone: User's timezone string (e.g., 'America/New_York').
+                If None, uses server local time.
 
         Returns:
             List of tasks due today or overdue
@@ -146,13 +148,13 @@ class TickTickClient:
         today_tasks = []
         for task in all_tasks:
             # Check if task has a due date
-            due_date = task.get('dueDate')
+            due_date = task.get("dueDate")
             if not due_date:
                 continue
 
             # Parse due date (format: 2025-10-29T00:00:00+0000)
             try:
-                task_date = datetime.fromisoformat(due_date.replace('Z', '+00:00')).date()
+                task_date = datetime.fromisoformat(due_date.replace("Z", "+00:00")).date()
                 if task_date <= today:
                     today_tasks.append(task)
             except (ValueError, AttributeError):
@@ -169,7 +171,7 @@ class TickTickClient:
         project_id: Optional[str] = None,
         user_timezone: str = None,
         reminders: Optional[List[str]] = None,
-        is_all_day: Optional[bool] = None
+        is_all_day: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Create a new task.
 
@@ -179,9 +181,11 @@ class TickTickClient:
             due_date: Due date for the task (datetime object or None)
             priority: Priority level (0=None, 1=Low, 3=Medium, 5=High)
             project_id: Project ID to add task to
-            user_timezone: User's timezone (e.g., 'America/New_York'). Used for timezone-aware tasks.
+            user_timezone: User's timezone (e.g., 'America/New_York').
+                Used for timezone-aware tasks.
             reminders: List of reminder trigger strings in ISO 8601 duration format.
-                      Examples: ['TRIGGER:-PT30M'] (30 min before), ['TRIGGER:-PT1H'] (1 hour before)
+                      Examples: ['TRIGGER:-PT30M'] (30 min before),
+                      ['TRIGGER:-PT1H'] (1 hour before)
             is_all_day: Whether this is an all-day task. If None, auto-detected from due_date time.
 
         Returns:
@@ -192,18 +196,18 @@ class TickTickClient:
         """
         self._invalidate_cache()
         try:
-            task_data = {
-                'title': title
-            }
+            task_data = {"title": title}
 
             if content:
-                task_data['content'] = content
+                task_data["content"] = content
 
             if due_date:
                 # Auto-detect if this is an all-day task based on time component
                 # If time is midnight (00:00:00), treat as all-day unless explicitly specified
                 if is_all_day is None:
-                    is_all_day = (due_date.hour == 0 and due_date.minute == 0 and due_date.second == 0)
+                    is_all_day = (
+                        due_date.hour == 0 and due_date.minute == 0 and due_date.second == 0
+                    )
 
                 if is_all_day:
                     # All-day task: convert to midnight in user's timezone, then to UTC
@@ -212,23 +216,31 @@ class TickTickClient:
                             tz = ZoneInfo(user_timezone)
                             # Ensure due_date is timezone-aware at midnight in user's timezone
                             if due_date.tzinfo is None:
-                                due_date_local = due_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=tz)
+                                due_date_local = due_date.replace(
+                                    hour=0, minute=0, second=0, microsecond=0, tzinfo=tz
+                                )
                             else:
-                                due_date_local = due_date.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+                                due_date_local = due_date.astimezone(tz).replace(
+                                    hour=0, minute=0, second=0, microsecond=0
+                                )
                             # Convert to UTC
-                            due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
+                            due_date_utc = due_date_local.astimezone(ZoneInfo("UTC"))
                             # Format with milliseconds as TickTick expects
-                            task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                            task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                            task_data['timeZone'] = user_timezone
+                            task_data["dueDate"] = due_date_utc.strftime(
+                                "%Y-%m-%dT%H:%M:%S.000+0000"
+                            )
+                            task_data["startDate"] = due_date_utc.strftime(
+                                "%Y-%m-%dT%H:%M:%S.000+0000"
+                            )
+                            task_data["timeZone"] = user_timezone
                         except Exception:
                             # Fallback to simple format
-                            task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                            task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data["dueDate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+                            task_data["startDate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
                     else:
                         # No timezone provided, use UTC
-                        task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                        task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                        task_data["dueDate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+                        task_data["startDate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
                 else:
                     # Timed task: preserve the time component
                     if user_timezone:
@@ -240,39 +252,45 @@ class TickTickClient:
                             else:
                                 due_date_local = due_date.astimezone(tz)
                             # Convert to UTC
-                            due_date_utc = due_date_local.astimezone(ZoneInfo('UTC'))
+                            due_date_utc = due_date_local.astimezone(ZoneInfo("UTC"))
                             # Format with milliseconds as TickTick expects
-                            task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                            task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                            task_data['timeZone'] = user_timezone
+                            task_data["dueDate"] = due_date_utc.strftime(
+                                "%Y-%m-%dT%H:%M:%S.000+0000"
+                            )
+                            task_data["startDate"] = due_date_utc.strftime(
+                                "%Y-%m-%dT%H:%M:%S.000+0000"
+                            )
+                            task_data["timeZone"] = user_timezone
                         except Exception:
                             # Fallback to simple format
-                            task_data['dueDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                            task_data['startDate'] = due_date.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            task_data["dueDate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+                            task_data["startDate"] = due_date.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
                     else:
                         # No timezone provided, assume UTC
                         if due_date.tzinfo is None:
-                            due_date = due_date.replace(tzinfo=ZoneInfo('UTC'))
-                        due_date_utc = due_date.astimezone(ZoneInfo('UTC'))
-                        task_data['dueDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
-                        task_data['startDate'] = due_date_utc.strftime('%Y-%m-%dT%H:%M:%S.000+0000')
+                            due_date = due_date.replace(tzinfo=ZoneInfo("UTC"))
+                        due_date_utc = due_date.astimezone(ZoneInfo("UTC"))
+                        task_data["dueDate"] = due_date_utc.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+                        task_data["startDate"] = due_date_utc.strftime("%Y-%m-%dT%H:%M:%S.000+0000")
 
-                task_data['isAllDay'] = is_all_day
+                task_data["isAllDay"] = is_all_day
 
             if priority:
-                task_data['priority'] = priority
+                task_data["priority"] = priority
 
             if project_id:
-                task_data['projectId'] = project_id
+                task_data["projectId"] = project_id
 
             if reminders:
-                task_data['reminders'] = reminders
+                task_data["reminders"] = reminders
 
             response = self.session.post(f"{self.BASE_URL}/task", json=task_data)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to create task '{title}': {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to create task '{title}': {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             raise Exception(f"Failed to create task '{title}': {str(e)}")
 
@@ -294,7 +312,7 @@ class TickTickClient:
             # If project_id not provided, find it by searching all projects
             if not project_id:
                 projects = self.list_projects()
-                inbox_id = os.getenv('TICKTICK_INBOX_ID')
+                inbox_id = os.getenv("TICKTICK_INBOX_ID")
 
                 # Check inbox first if configured
                 if inbox_id:
@@ -302,8 +320,8 @@ class TickTickClient:
                         response = self.session.get(f"{self.BASE_URL}/project/{inbox_id}/data")
                         if response.ok:
                             data = response.json()
-                            for task in data.get('tasks', []):
-                                if task.get('id') == task_id:
+                            for task in data.get("tasks", []):
+                                if task.get("id") == task_id:
                                     project_id = inbox_id
                                     break
                     except Exception:
@@ -312,14 +330,16 @@ class TickTickClient:
                 # Check regular projects if not found in inbox
                 if not project_id:
                     for project in projects:
-                        proj_id = project.get('id')
+                        proj_id = project.get("id")
                         if proj_id:
                             try:
-                                response = self.session.get(f"{self.BASE_URL}/project/{proj_id}/data")
+                                response = self.session.get(
+                                    f"{self.BASE_URL}/project/{proj_id}/data"
+                                )
                                 if response.ok:
                                     data = response.json()
-                                    for task in data.get('tasks', []):
-                                        if task.get('id') == task_id:
+                                    for task in data.get("tasks", []):
+                                        if task.get("id") == task_id:
                                             project_id = proj_id
                                             break
                             except Exception:
@@ -331,13 +351,17 @@ class TickTickClient:
                     raise Exception(f"Could not find project for task {task_id}")
 
             # Complete the task using the correct endpoint
-            response = self.session.post(f"{self.BASE_URL}/project/{project_id}/task/{task_id}/complete")
+            response = self.session.post(
+                f"{self.BASE_URL}/project/{project_id}/task/{task_id}/complete"
+            )
             response.raise_for_status()
 
             # API returns empty response on success
             return {"success": True, "task_id": task_id}
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to complete task {task_id}: {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to complete task {task_id}: {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             if "Could not find project" in str(e):
                 raise
@@ -363,7 +387,7 @@ class TickTickClient:
             all_tasks = self.list_tasks()
             existing_task = None
             for task in all_tasks:
-                if task.get('id') == task_id:
+                if task.get("id") == task_id:
                     existing_task = task
                     break
 
@@ -378,7 +402,7 @@ class TickTickClient:
             response.raise_for_status()
 
             # Handle empty response (TickTick sometimes returns empty string or no content)
-            if not response.text or response.text.strip() == '':
+            if not response.text or response.text.strip() == "":
                 # Return the merged task
                 return updated_task
 
@@ -389,7 +413,9 @@ class TickTickClient:
                 # JSON parsing failed, but request succeeded - return merged task
                 return updated_task
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to update task {task_id}: {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to update task {task_id}: {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             raise Exception(f"Failed to update task {task_id}: {str(e)}")
 
@@ -407,15 +433,14 @@ class TickTickClient:
             response = self.session.delete(f"{self.BASE_URL}/task/{task_id}")
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to delete task {task_id}: {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to delete task {task_id}: {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             raise Exception(f"Failed to delete task {task_id}: {str(e)}")
 
     def get_completed_tasks(
-        self,
-        start_date: str,
-        end_date: str,
-        limit: int = 100
+        self, start_date: str, end_date: str, limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Get completed tasks within a date range.
 
@@ -442,12 +467,7 @@ class TickTickClient:
             "Workaround: Use list_tasks() and filter by status == 2 for completed tasks."
         )
 
-    def move_task(
-        self,
-        task_id: str,
-        from_project_id: str,
-        to_project_id: str
-    ) -> Dict[str, Any]:
+    def move_task(self, task_id: str, from_project_id: str, to_project_id: str) -> Dict[str, Any]:
         """Move a task from one project to another.
 
         Args:
@@ -464,25 +484,24 @@ class TickTickClient:
         self._invalidate_cache()
         try:
             endpoint = f"{self.BASE_URL}/project/{from_project_id}/task/{task_id}/move"
-            data = {'taskId': task_id, 'projectId': to_project_id}
+            data = {"taskId": task_id, "projectId": to_project_id}
             response = self.session.post(endpoint, json=data)
             response.raise_for_status()
 
             result = response.json()
-            if not result or result == '':
+            if not result or result == "":
                 return {"success": True, "task_id": task_id, "new_project": to_project_id}
 
             return result
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to move task {task_id}: {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to move task {task_id}: {e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             raise Exception(f"Failed to move task {task_id}: {str(e)}")
 
     def make_subtask(
-        self,
-        parent_task_id: str,
-        child_task_id: str,
-        project_id: Optional[str] = None
+        self, parent_task_id: str, child_task_id: str, project_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Make a task a subtask of another task.
 
@@ -502,27 +521,30 @@ class TickTickClient:
             # If project_id not provided, find it from the parent task
             if not project_id:
                 all_tasks = self.list_tasks()
-                parent_task = next((t for t in all_tasks if t['id'] == parent_task_id), None)
+                parent_task = next((t for t in all_tasks if t["id"] == parent_task_id), None)
                 if not parent_task:
                     raise Exception(f"Parent task {parent_task_id} not found")
-                project_id = parent_task.get('projectId')
+                project_id = parent_task.get("projectId")
 
             if not project_id:
                 raise Exception(f"Could not determine project ID for parent task {parent_task_id}")
 
             # Update the child task to set its parent
             endpoint = f"{self.BASE_URL}/task/{child_task_id}"
-            data = {'parentId': parent_task_id, 'projectId': project_id}
+            data = {"parentId": parent_task_id, "projectId": project_id}
             response = self.session.post(endpoint, json=data)
             response.raise_for_status()
 
             result = response.json()
-            if not result or result == '':
+            if not result or result == "":
                 return {"success": True, "child_id": child_task_id, "parent_id": parent_task_id}
 
             return result
         except requests.exceptions.HTTPError as e:
-            raise Exception(f"Failed to create subtask relationship: {e.response.status_code} - {e.response.text}")
+            raise Exception(
+                f"Failed to create subtask relationship: "
+                f"{e.response.status_code} - {e.response.text}"
+            )
         except Exception as e:
             raise Exception(f"Failed to create subtask relationship: {str(e)}")
 
@@ -540,8 +562,8 @@ class TickTickClient:
 
         matching_tasks = []
         for task in all_tasks:
-            title = task.get('title', '').lower()
-            content = task.get('content', '').lower()
+            title = task.get("title", "").lower()
+            content = task.get("content", "").lower()
 
             if query_lower in title or query_lower in content:
                 matching_tasks.append(task)
@@ -564,28 +586,28 @@ class TickTickClient:
         Returns:
             Formatted task summary string
         """
-        title = task.get('title', 'Untitled')
-        task_id = task.get('id', '')
-        due_date = task.get('dueDate', '')
-        priority = task.get('priority', 0)
+        title = task.get("title", "Untitled")
+        task_id = task.get("id", "")
+        due_date = task.get("dueDate", "")
+        priority = task.get("priority", 0)
 
         # Priority mapping
-        priority_map = {0: '', 1: '(Low)', 3: '(Medium)', 5: '(High)'}
-        priority_str = priority_map.get(priority, '')
+        priority_map = {0: "", 1: "(Low)", 3: "(Medium)", 5: "(High)"}
+        priority_str = priority_map.get(priority, "")
 
         # Format due date
-        due_str = ''
+        due_str = ""
         if due_date:
             try:
-                dt = datetime.fromisoformat(due_date.replace('Z', '+00:00'))
+                dt = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
                 due_str = f" - Due: {dt.strftime('%Y-%m-%d')}"
             except (ValueError, AttributeError):
                 pass
 
         # Project prefix
-        proj_str = f"[{project_name}] " if project_name else ''
+        proj_str = f"[{project_name}] " if project_name else ""
 
         # Include ID as ticktick marker for interactive checkboxes
-        id_str = f" {{ticktick:{task_id}}}" if include_id and task_id else ''
+        id_str = f" {{ticktick:{task_id}}}" if include_id and task_id else ""
 
         return f"{proj_str}{title} {priority_str}{due_str}{id_str}".strip()

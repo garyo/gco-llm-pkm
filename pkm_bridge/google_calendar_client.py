@@ -1,9 +1,9 @@
 """Google Calendar API client for event management."""
 
-import os
 import logging
+import os
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Any
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from google.oauth2.credentials import Credentials
@@ -29,12 +29,12 @@ class GoogleCalendarClient:
             token=access_token,
             refresh_token=refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv('GOOGLE_CLIENT_ID'),
-            client_secret=os.getenv('GOOGLE_CLIENT_SECRET')
+            client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         )
 
         # Build Calendar API service
-        self.service = build('calendar', 'v3', credentials=self.credentials)
+        self.service = build("calendar", "v3", credentials=self.credentials)
 
     def list_calendars(self) -> List[Dict[str, Any]]:
         """Get all calendars.
@@ -47,18 +47,18 @@ class GoogleCalendarClient:
         """
         try:
             calendar_list = self.service.calendarList().list().execute()
-            return calendar_list.get('items', [])
+            return calendar_list.get("items", [])
         except HttpError as e:
             raise Exception(f"Failed to list calendars: {e}")
 
     def get_events(
         self,
-        calendar_id: str = 'primary',
+        calendar_id: str = "primary",
         time_min: Optional[datetime] = None,
         time_max: Optional[datetime] = None,
         max_results: int = 50,
         single_events: bool = True,
-        order_by: str = 'startTime'
+        order_by: str = "startTime",
     ) -> List[Dict[str, Any]]:
         """Get events from a calendar.
 
@@ -88,32 +88,35 @@ class GoogleCalendarClient:
             # instead of having their wall-clock time reinterpreted as UTC.
             def _rfc3339_utc(dt: datetime) -> str:
                 if dt.tzinfo is not None:
-                    return dt.astimezone(ZoneInfo('UTC')).isoformat().replace('+00:00', 'Z')
-                return dt.isoformat() + 'Z'
+                    return dt.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z")
+                return dt.isoformat() + "Z"
 
             params = {
-                'calendarId': calendar_id,
-                'timeMin': _rfc3339_utc(time_min),
-                'maxResults': max_results,
-                'singleEvents': single_events,
-                'orderBy': order_by
+                "calendarId": calendar_id,
+                "timeMin": _rfc3339_utc(time_min),
+                "maxResults": max_results,
+                "singleEvents": single_events,
+                "orderBy": order_by,
             }
 
             if time_max:
-                params['timeMax'] = _rfc3339_utc(time_max)
+                params["timeMax"] = _rfc3339_utc(time_max)
 
             events_result = self.service.events().list(**params).execute()
-            return events_result.get('items', [])
+            return events_result.get("items", [])
 
         except HttpError as e:
             raise Exception(f"Failed to list events: {e}")
 
-    def get_today_events(self, calendar_id: str = 'primary', user_timezone: str = None) -> List[Dict[str, Any]]:
+    def get_today_events(
+        self, calendar_id: str = "primary", user_timezone: str = None
+    ) -> List[Dict[str, Any]]:
         """Get events for today.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
-            user_timezone: User's timezone string (e.g., 'America/New_York'). If None, uses server local time.
+            user_timezone: User's timezone string (e.g., 'America/New_York').
+                If None, uses server local time.
 
         Returns:
             List of today's events
@@ -125,7 +128,9 @@ class GoogleCalendarClient:
                 now = datetime.now(tz)
                 logger.info(f"Getting today's events. Current time in {user_timezone}: {now}")
             except Exception as e:
-                logger.warning(f"Invalid timezone '{user_timezone}', falling back to server local: {e}")
+                logger.warning(
+                    f"Invalid timezone '{user_timezone}', falling back to server local: {e}"
+                )
                 now = datetime.now()
                 logger.info(f"Getting today's events. Current server local time: {now}")
         else:
@@ -139,30 +144,33 @@ class GoogleCalendarClient:
         logger.info(f"Local time range: {time_min} to {time_max}")
 
         # Convert to UTC for API query (remove tzinfo after conversion)
-        time_min_utc = time_min.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
-        time_max_utc = time_max.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+        time_min_utc = time_min.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        time_max_utc = time_max.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
         logger.info(f"UTC time range for API: {time_min_utc} to {time_max_utc}")
 
         events = self.get_events(
-            calendar_id=calendar_id,
-            time_min=time_min_utc,
-            time_max=time_max_utc
+            calendar_id=calendar_id, time_min=time_min_utc, time_max=time_max_utc
         )
 
         logger.info(f"Found {len(events)} events for today")
         for event in events:
-            start = event.get('start', {})
-            logger.debug(f"  Event: {event.get('summary')} at {start.get('dateTime') or start.get('date')}")
+            start = event.get("start", {})
+            logger.debug(
+                f"  Event: {event.get('summary')} at {start.get('dateTime') or start.get('date')}"
+            )
 
         return events
 
-    def get_week_events(self, calendar_id: str = 'primary', user_timezone: str = None) -> List[Dict[str, Any]]:
+    def get_week_events(
+        self, calendar_id: str = "primary", user_timezone: str = None
+    ) -> List[Dict[str, Any]]:
         """Get events for the next 7 days.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
-            user_timezone: User's timezone string (e.g., 'America/New_York'). If None, uses server local time.
+            user_timezone: User's timezone string (e.g., 'America/New_York').
+                If None, uses server local time.
 
         Returns:
             List of this week's events
@@ -174,7 +182,9 @@ class GoogleCalendarClient:
                 now = datetime.now(tz)
                 logger.info(f"Getting week's events. Current time in {user_timezone}: {now}")
             except Exception as e:
-                logger.warning(f"Invalid timezone '{user_timezone}', falling back to server local: {e}")
+                logger.warning(
+                    f"Invalid timezone '{user_timezone}', falling back to server local: {e}"
+                )
                 now = datetime.now()
                 logger.info(f"Getting week's events. Current server local time: {now}")
         else:
@@ -188,15 +198,13 @@ class GoogleCalendarClient:
         logger.info(f"Local time range: {time_min} to {time_max}")
 
         # Convert to UTC for API query (remove tzinfo after conversion)
-        time_min_utc = time_min.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
-        time_max_utc = time_max.astimezone(ZoneInfo('UTC')).replace(tzinfo=None)
+        time_min_utc = time_min.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        time_max_utc = time_max.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
         logger.info(f"UTC time range for API: {time_min_utc} to {time_max_utc}")
 
         events = self.get_events(
-            calendar_id=calendar_id,
-            time_min=time_min_utc,
-            time_max=time_max_utc
+            calendar_id=calendar_id, time_min=time_min_utc, time_max=time_max_utc
         )
 
         logger.info(f"Found {len(events)} events for the week")
@@ -211,8 +219,8 @@ class GoogleCalendarClient:
         description: Optional[str] = None,
         location: Optional[str] = None,
         attendees: Optional[List[str]] = None,
-        calendar_id: str = 'primary',
-        timezone: str = 'UTC'
+        calendar_id: str = "primary",
+        timezone: str = "UTC",
     ) -> Dict[str, Any]:
         """Create a new calendar event.
 
@@ -234,30 +242,29 @@ class GoogleCalendarClient:
         """
         try:
             event = {
-                'summary': summary,
-                'start': {
-                    'dateTime': start.isoformat(),
-                    'timeZone': timezone,
+                "summary": summary,
+                "start": {
+                    "dateTime": start.isoformat(),
+                    "timeZone": timezone,
                 },
-                'end': {
-                    'dateTime': end.isoformat(),
-                    'timeZone': timezone,
-                }
+                "end": {
+                    "dateTime": end.isoformat(),
+                    "timeZone": timezone,
+                },
             }
 
             if description:
-                event['description'] = description
+                event["description"] = description
 
             if location:
-                event['location'] = location
+                event["location"] = location
 
             if attendees:
-                event['attendees'] = [{'email': email} for email in attendees]
+                event["attendees"] = [{"email": email} for email in attendees]
 
-            created_event = self.service.events().insert(
-                calendarId=calendar_id,
-                body=event
-            ).execute()
+            created_event = (
+                self.service.events().insert(calendarId=calendar_id, body=event).execute()
+            )
 
             return created_event
 
@@ -265,10 +272,7 @@ class GoogleCalendarClient:
             raise Exception(f"Failed to create event '{summary}': {e}")
 
     def update_event(
-        self,
-        event_id: str,
-        calendar_id: str = 'primary',
-        **updates
+        self, event_id: str, calendar_id: str = "primary", **updates
     ) -> Dict[str, Any]:
         """Update an existing event.
 
@@ -285,32 +289,25 @@ class GoogleCalendarClient:
         """
         try:
             # First, get the current event
-            event = self.service.events().get(
-                calendarId=calendar_id,
-                eventId=event_id
-            ).execute()
+            event = self.service.events().get(calendarId=calendar_id, eventId=event_id).execute()
 
             # Apply updates
             for key, value in updates.items():
                 event[key] = value
 
             # Update the event
-            updated_event = self.service.events().update(
-                calendarId=calendar_id,
-                eventId=event_id,
-                body=event
-            ).execute()
+            updated_event = (
+                self.service.events()
+                .update(calendarId=calendar_id, eventId=event_id, body=event)
+                .execute()
+            )
 
             return updated_event
 
         except HttpError as e:
             raise Exception(f"Failed to update event {event_id}: {e}")
 
-    def delete_event(
-        self,
-        event_id: str,
-        calendar_id: str = 'primary'
-    ) -> None:
+    def delete_event(self, event_id: str, calendar_id: str = "primary") -> None:
         """Delete an event.
 
         Args:
@@ -321,19 +318,13 @@ class GoogleCalendarClient:
             Exception: If deletion fails
         """
         try:
-            self.service.events().delete(
-                calendarId=calendar_id,
-                eventId=event_id
-            ).execute()
+            self.service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
 
         except HttpError as e:
             raise Exception(f"Failed to delete event {event_id}: {e}")
 
     def search_events(
-        self,
-        query: str,
-        calendar_id: str = 'primary',
-        max_results: int = 50
+        self, query: str, calendar_id: str = "primary", max_results: int = 50
     ) -> List[Dict[str, Any]]:
         """Search for events by text query.
 
@@ -346,15 +337,19 @@ class GoogleCalendarClient:
             List of matching events
         """
         try:
-            events_result = self.service.events().list(
-                calendarId=calendar_id,
-                q=query,
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
+            events_result = (
+                self.service.events()
+                .list(
+                    calendarId=calendar_id,
+                    q=query,
+                    maxResults=max_results,
+                    singleEvents=True,
+                    orderBy="startTime",
+                )
+                .execute()
+            )
 
-            return events_result.get('items', [])
+            return events_result.get("items", [])
 
         except HttpError as e:
             raise Exception(f"Failed to search events for '{query}': {e}")
@@ -369,35 +364,31 @@ class GoogleCalendarClient:
         Returns:
             Formatted event summary string
         """
-        summary = event.get('summary', 'Untitled Event')
-        event_id = event.get('id', '')
+        summary = event.get("summary", "Untitled Event")
+        event_id = event.get("id", "")
 
         # Get start time
-        start = event.get('start', {})
-        start_str = ''
+        start = event.get("start", {})
+        start_str = ""
 
-        if 'dateTime' in start:
+        if "dateTime" in start:
             # Timed event
-            start_dt = datetime.fromisoformat(start['dateTime'].replace('Z', '+00:00'))
-            start_str = start_dt.strftime('%Y-%m-%d %H:%M')
-        elif 'date' in start:
+            start_dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00"))
+            start_str = start_dt.strftime("%Y-%m-%d %H:%M")
+        elif "date" in start:
             # All-day event
             start_str = f"{start['date']} (all day)"
 
         # Get location if present
-        location = event.get('location', '')
-        location_str = f" @ {location}" if location else ''
+        location = event.get("location", "")
+        location_str = f" @ {location}" if location else ""
 
         # Include ID if requested (useful for updates/deletes)
-        id_str = f" [ID: {event_id}]" if include_id and event_id else ''
+        id_str = f" [ID: {event_id}]" if include_id and event_id else ""
 
         return f"{summary} - {start_str}{location_str}{id_str}"
 
-    def quick_add_event(
-        self,
-        text: str,
-        calendar_id: str = 'primary'
-    ) -> Dict[str, Any]:
+    def quick_add_event(self, text: str, calendar_id: str = "primary") -> Dict[str, Any]:
         """Create an event from a natural language text string.
 
         Uses Google's Quick Add feature to parse text like:
@@ -415,10 +406,9 @@ class GoogleCalendarClient:
             Exception: If quick add fails
         """
         try:
-            created_event = self.service.events().quickAdd(
-                calendarId=calendar_id,
-                text=text
-            ).execute()
+            created_event = (
+                self.service.events().quickAdd(calendarId=calendar_id, text=text).execute()
+            )
 
             return created_event
 

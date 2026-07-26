@@ -19,12 +19,12 @@ import yaml
 from .base import BaseTool
 
 # Regex for valid skill names
-SKILL_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$')
+SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$")
 
 # YAML frontmatter delimiters
-SHELL_FM_START = '# ---'
-SHELL_FM_END = '# ---'
-MD_FM_DELIM = '---'
+SHELL_FM_START = "# ---"
+SHELL_FM_END = "# ---"
+MD_FM_DELIM = "---"
 
 
 def _atomic_write(filepath: Path, content: str) -> None:
@@ -54,11 +54,11 @@ def _get_skills_dir(org_dir: Path) -> Path:
 
     Falls back to .pkm-skills/ if .pkm/ doesn't exist yet (pre-migration).
     """
-    pkm_skills_dir = org_dir / '.pkm' / 'skills'
+    pkm_skills_dir = org_dir / ".pkm" / "skills"
     if pkm_skills_dir.exists():
         return pkm_skills_dir
     # Create .pkm/skills/ if .pkm/ dir exists
-    pkm_dir = org_dir / '.pkm'
+    pkm_dir = org_dir / ".pkm"
     if pkm_dir.exists():
         pkm_skills_dir.mkdir(exist_ok=True)
         return pkm_skills_dir
@@ -70,7 +70,7 @@ def _get_skills_dir(org_dir: Path) -> Path:
 
 def _parse_shell_frontmatter(content: str) -> tuple[dict, str]:
     """Parse YAML frontmatter from a shell script (# --- delimited)."""
-    lines = content.split('\n')
+    lines = content.split("\n")
     if not lines or lines[0].strip() != SHELL_FM_START:
         return {}, content
 
@@ -82,24 +82,24 @@ def _parse_shell_frontmatter(content: str) -> tuple[dict, str]:
             break
         # Strip leading '# ' from frontmatter lines
         stripped = line
-        if stripped.startswith('# '):
+        if stripped.startswith("# "):
             stripped = stripped[2:]
-        elif stripped.startswith('#'):
+        elif stripped.startswith("#"):
             stripped = stripped[1:]
         fm_lines.append(stripped)
 
     try:
-        metadata = yaml.safe_load('\n'.join(fm_lines)) or {}
+        metadata = yaml.safe_load("\n".join(fm_lines)) or {}
     except yaml.YAMLError:
         metadata = {}
 
-    body = '\n'.join(lines[body_start:])
+    body = "\n".join(lines[body_start:])
     return metadata, body
 
 
 def _parse_md_frontmatter(content: str) -> tuple[dict, str]:
     """Parse YAML frontmatter from a markdown file (--- delimited)."""
-    lines = content.split('\n')
+    lines = content.split("\n")
     if not lines or lines[0].strip() != MD_FM_DELIM:
         return {}, content
 
@@ -112,45 +112,45 @@ def _parse_md_frontmatter(content: str) -> tuple[dict, str]:
         fm_lines.append(line)
 
     try:
-        metadata = yaml.safe_load('\n'.join(fm_lines)) or {}
+        metadata = yaml.safe_load("\n".join(fm_lines)) or {}
     except yaml.YAMLError:
         metadata = {}
 
-    body = '\n'.join(lines[body_start:])
+    body = "\n".join(lines[body_start:])
     return metadata, body
 
 
 def _build_shell_frontmatter(metadata: dict) -> str:
     """Build shell script frontmatter block."""
     yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False).strip()
-    fm_lines = [f'# {line}' for line in yaml_str.split('\n')]
-    return SHELL_FM_START + '\n' + '\n'.join(fm_lines) + '\n' + SHELL_FM_END
+    fm_lines = [f"# {line}" for line in yaml_str.split("\n")]
+    return SHELL_FM_START + "\n" + "\n".join(fm_lines) + "\n" + SHELL_FM_END
 
 
 def _build_md_frontmatter(metadata: dict) -> str:
     """Build markdown frontmatter block."""
     yaml_str = yaml.dump(metadata, default_flow_style=False, sort_keys=False).strip()
-    return MD_FM_DELIM + '\n' + yaml_str + '\n' + MD_FM_DELIM
+    return MD_FM_DELIM + "\n" + yaml_str + "\n" + MD_FM_DELIM
 
 
 def _parse_skill_file(filepath: Path) -> Optional[dict]:
     """Parse a skill file and return its metadata + content."""
     try:
-        content = filepath.read_text(encoding='utf-8')
+        content = filepath.read_text(encoding="utf-8")
     except (OSError, IOError):
         return None
 
     ext = filepath.suffix
-    if ext in ('.sh', '.py'):
+    if ext in (".sh", ".py"):
         metadata, body = _parse_shell_frontmatter(content)
-    elif ext == '.md':
+    elif ext == ".md":
         metadata, body = _parse_md_frontmatter(content)
     else:
         return None
 
-    metadata['_file'] = filepath.name
-    metadata['_type'] = {'.sh': 'shell', '.py': 'python', '.md': 'recipe'}[ext]
-    metadata['_body'] = body.strip()
+    metadata["_file"] = filepath.name
+    metadata["_type"] = {".sh": "shell", ".py": "python", ".md": "recipe"}[ext]
+    metadata["_body"] = body.strip()
     return metadata
 
 
@@ -181,56 +181,60 @@ class SaveSkillTool(BaseTool):
             "properties": {
                 "skill_name": {
                     "type": "string",
-                    "description": "Kebab-case name for the skill (e.g., 'weekly-review', 'search-music-notes'). Max 50 chars, [a-z0-9-]."
+                    "description": "Kebab-case name for the skill (e.g., 'weekly-review', "
+                    "'search-music-notes'). Max 50 chars, [a-z0-9-].",
                 },
                 "skill_type": {
                     "type": "string",
                     "enum": ["shell", "python", "recipe"],
-                    "description": "Type: 'shell' for .sh scripts, 'python' for .py scripts, 'recipe' for .md procedure descriptions."
+                    "description": "Type: 'shell' for .sh scripts, 'python' for .py scripts, "
+                    "'recipe' for .md procedure descriptions.",
                 },
                 "description": {
                     "type": "string",
-                    "description": "Brief description of what the skill does."
+                    "description": "Brief description of what the skill does.",
                 },
                 "content": {
                     "type": "string",
-                    "description": "The skill content: shell script code or markdown procedure steps."
+                    "description": "The skill content: shell script code or markdown "
+                    "procedure steps.",
                 },
                 "trigger": {
                     "type": "string",
-                    "description": "When to use this skill (e.g., 'user asks for weekly review')."
+                    "description": "When to use this skill (e.g., 'user asks for weekly review').",
                 },
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Tags for categorization."
-                }
+                    "description": "Tags for categorization.",
+                },
             },
-            "required": ["skill_name", "skill_type", "description", "content"]
+            "required": ["skill_name", "skill_type", "description", "content"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
-        skill_name = params['skill_name']
-        skill_type = params['skill_type']
-        description = params['description']
-        content = params['content']
-        trigger = params.get('trigger', '')
-        tags = params.get('tags', [])
+        skill_name = params["skill_name"]
+        skill_type = params["skill_type"]
+        description = params["description"]
+        content = params["content"]
+        trigger = params.get("trigger", "")
+        tags = params.get("tags", [])
 
         # Validate name
         if not SKILL_NAME_RE.match(skill_name):
             return "Error: skill_name must be 2-50 chars, kebab-case [a-z0-9-]."
 
         # For shell/python skills, check dangerous patterns
-        if skill_type in ('shell', 'python'):
+        if skill_type in ("shell", "python"):
             from .shell import validate_command
+
             is_valid, error = validate_command(content, self.dangerous_patterns)
             if not is_valid:
                 return f"Error: Skill content blocked by safety check: {error}"
 
         skills_dir = _get_skills_dir(self.org_dir)
-        ext = {'.sh': '.sh', 'shell': '.sh', 'python': '.py', 'recipe': '.md'}[skill_type]
-        filepath = skills_dir / f'{skill_name}{ext}'
+        ext = {".sh": ".sh", "shell": ".sh", "python": ".py", "recipe": ".md"}[skill_type]
+        filepath = skills_dir / f"{skill_name}{ext}"
 
         # Check if updating existing skill
         existing_metadata = {}
@@ -239,35 +243,35 @@ class SaveSkillTool(BaseTool):
             if parsed:
                 existing_metadata = parsed
 
-        now = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         metadata = {
-            'name': skill_name,
-            'description': description,
-            'trigger': trigger,
-            'tags': tags,
-            'created': existing_metadata.get('created', now),
-            'last_used': existing_metadata.get('last_used', now),
-            'use_count': existing_metadata.get('use_count', 0),
+            "name": skill_name,
+            "description": description,
+            "trigger": trigger,
+            "tags": tags,
+            "created": existing_metadata.get("created", now),
+            "last_used": existing_metadata.get("last_used", now),
+            "use_count": existing_metadata.get("use_count", 0),
         }
 
         # Build file content
-        if skill_type == 'shell':
+        if skill_type == "shell":
             fm = _build_shell_frontmatter(metadata)
-            file_content = fm + '\n#!/bin/bash\nset -euo pipefail\n\n' + content.strip() + '\n'
-        elif skill_type == 'python':
+            file_content = fm + "\n#!/bin/bash\nset -euo pipefail\n\n" + content.strip() + "\n"
+        elif skill_type == "python":
             fm = _build_shell_frontmatter(metadata)
-            file_content = fm + '\n#!/usr/bin/env python3\n\n' + content.strip() + '\n'
+            file_content = fm + "\n#!/usr/bin/env python3\n\n" + content.strip() + "\n"
         else:
             fm = _build_md_frontmatter(metadata)
-            file_content = fm + '\n\n' + content.strip() + '\n'
+            file_content = fm + "\n\n" + content.strip() + "\n"
 
         _atomic_write(filepath, file_content)
 
         # Make shell/python scripts executable
-        if skill_type in ('shell', 'python'):
+        if skill_type in ("shell", "python"):
             filepath.chmod(filepath.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
 
-        action = 'Updated' if existing_metadata else 'Created'
+        action = "Updated" if existing_metadata else "Created"
         self.logger.info(f"Skill {action.lower()}: {skill_name} ({skill_type})")
         return f"{action} skill '{skill_name}' ({skill_type}) at .pkm/skills/{skill_name}{ext}"
 
@@ -295,60 +299,59 @@ class ListSkillsTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "tag": {
-                    "type": "string",
-                    "description": "Optional tag filter."
-                },
+                "tag": {"type": "string", "description": "Optional tag filter."},
                 "search": {
                     "type": "string",
-                    "description": "Optional search text to match in name/description."
-                }
-            }
+                    "description": "Optional search text to match in name/description.",
+                },
+            },
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
-        tag_filter = params.get('tag', '')
-        search_text = params.get('search', '').lower()
+        tag_filter = params.get("tag", "")
+        search_text = params.get("search", "").lower()
 
         skills_dir = _get_skills_dir(self.org_dir)
         skills = []
 
         for filepath in sorted(skills_dir.iterdir()):
-            if filepath.suffix not in ('.sh', '.py', '.md'):
+            if filepath.suffix not in (".sh", ".py", ".md"):
                 continue
             parsed = _parse_skill_file(filepath)
             if not parsed:
                 continue
 
             # Apply filters
-            if tag_filter and tag_filter not in parsed.get('tags', []):
+            if tag_filter and tag_filter not in parsed.get("tags", []):
                 continue
             if search_text:
-                name = parsed.get('name', '').lower()
-                desc = parsed.get('description', '').lower()
+                name = parsed.get("name", "").lower()
+                desc = parsed.get("description", "").lower()
                 if search_text not in name and search_text not in desc:
                     continue
 
             skills.append(parsed)
 
         if not skills:
-            return "No skills found." + (" Try without filters." if tag_filter or search_text else "")
+            return "No skills found." + (
+                " Try without filters." if tag_filter or search_text else ""
+            )
 
         lines = [f"Found {len(skills)} skill(s):\n"]
         for s in skills:
-            stype = s.get('_type', 'unknown')
-            name = s.get('name', s.get('_file', '?'))
-            desc = s.get('description', '')
-            use_count = s.get('use_count', 0)
-            last_used = s.get('last_used', 'never')
-            tags = ', '.join(s.get('tags', []))
+            stype = s.get("_type", "unknown")
+            name = s.get("name", s.get("_file", "?"))
+            desc = s.get("description", "")
+            use_count = s.get("use_count", 0)
+            last_used = s.get("last_used", "never")
+            tags = ", ".join(s.get("tags", []))
             lines.append(
                 f"- **{name}** ({stype}) — {desc}\n"
                 f"  Uses: {use_count} | Last used: {last_used}"
                 + (f" | Tags: {tags}" if tags else "")
             )
 
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
 
 class UseSkillTool(BaseTool):
@@ -378,28 +381,25 @@ class UseSkillTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "skill_name": {
-                    "type": "string",
-                    "description": "Name of the skill to load."
-                },
+                "skill_name": {"type": "string", "description": "Name of the skill to load."},
                 "args": {
                     "type": "string",
                     "description": "Arguments to pass when executing a shell/python skill. "
-                    "When provided, the skill is executed and output returned."
-                }
+                    "When provided, the skill is executed and output returned.",
+                },
             },
-            "required": ["skill_name"]
+            "required": ["skill_name"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
-        skill_name = params['skill_name']
-        args = params.get('args')
+        skill_name = params["skill_name"]
+        args = params.get("args")
         skills_dir = _get_skills_dir(self.org_dir)
 
         # Try all extensions
         filepath = None
-        for ext in ('.sh', '.py', '.md'):
-            candidate = skills_dir / f'{skill_name}{ext}'
+        for ext in (".sh", ".py", ".md"):
+            candidate = skills_dir / f"{skill_name}{ext}"
             if candidate.exists():
                 filepath = candidate
                 break
@@ -409,43 +409,42 @@ class UseSkillTool(BaseTool):
 
         parsed = _parse_skill_file(filepath)
         if not parsed:
-            return f"Error reading skill '{skill_name}': file exists at {filepath.name} but could not be parsed. Check that it has valid YAML frontmatter."
+            return (
+                f"Error reading skill '{skill_name}': file exists at {filepath.name} "
+                "but could not be parsed. Check that it has valid YAML frontmatter."
+            )
 
         # Bump use_count and last_used
-        now = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
-        content = filepath.read_text(encoding='utf-8')
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        content = filepath.read_text(encoding="utf-8")
 
-        if filepath.suffix in ('.sh', '.py'):
+        if filepath.suffix in (".sh", ".py"):
             metadata, body = _parse_shell_frontmatter(content)
-            metadata['use_count'] = metadata.get('use_count', 0) + 1
-            metadata['last_used'] = now
+            metadata["use_count"] = metadata.get("use_count", 0) + 1
+            metadata["last_used"] = now
             fm = _build_shell_frontmatter(metadata)
-            updated = fm + '\n' + body.lstrip('\n')
+            updated = fm + "\n" + body.lstrip("\n")
         else:
             metadata, body = _parse_md_frontmatter(content)
-            metadata['use_count'] = metadata.get('use_count', 0) + 1
-            metadata['last_used'] = now
+            metadata["use_count"] = metadata.get("use_count", 0) + 1
+            metadata["last_used"] = now
             fm = _build_md_frontmatter(metadata)
-            updated = fm + '\n\n' + body.lstrip('\n')
+            updated = fm + "\n\n" + body.lstrip("\n")
 
         _atomic_write(filepath, updated)
 
-        stype = parsed.get('_type', 'unknown')
-        body_content = parsed.get('_body', '')
-        desc = parsed.get('description', '')
+        stype = parsed.get("_type", "unknown")
+        body_content = parsed.get("_body", "")
+        desc = parsed.get("description", "")
 
         self.logger.info(f"Skill loaded: {skill_name} (use_count now {metadata['use_count']})")
 
         # Auto-execute if args provided and skill is executable
-        if args is not None and filepath.suffix in ('.sh', '.py'):
+        if args is not None and filepath.suffix in (".sh", ".py"):
             return self._execute_skill(filepath, args, skill_name, stype, desc)
 
         # Return content for inspection / recipe following
-        return (
-            f"**Skill: {skill_name}** ({stype})\n"
-            f"{desc}\n\n"
-            f"```\n{body_content}\n```"
-        )
+        return f"**Skill: {skill_name}** ({stype})\n" f"{desc}\n\n" f"```\n{body_content}\n```"
 
     def _execute_skill(
         self, filepath: Path, args: str, skill_name: str, stype: str, desc: str
@@ -454,7 +453,7 @@ class UseSkillTool(BaseTool):
         from .shell import validate_command
 
         # Use python3 explicitly for .py skills since the shebang is after the frontmatter
-        if filepath.suffix == '.py':
+        if filepath.suffix == ".py":
             command = f"python3 {filepath} {args}"
         else:
             command = f"{filepath} {args}"
@@ -467,7 +466,7 @@ class UseSkillTool(BaseTool):
             result = subprocess.run(
                 command,
                 shell=True,
-                executable='/bin/bash',
+                executable="/bin/bash",
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -480,16 +479,11 @@ class UseSkillTool(BaseTool):
                 output_parts.append(result.stdout.rstrip())
             if result.stderr:
                 output_parts.append(f"[stderr]\n{result.stderr.rstrip()}")
-            output = '\n'.join(output_parts) or "(no output)"
+            output = "\n".join(output_parts) or "(no output)"
 
             status = "OK" if result.returncode == 0 else f"exit code {result.returncode}"
-            self.logger.info(
-                f"Skill executed: {skill_name} ({status}, {elapsed}ms)"
-            )
-            return (
-                f"**Executed skill: {skill_name}** ({stype}) — {status}\n"
-                f"{desc}\n\n{output}"
-            )
+            self.logger.info(f"Skill executed: {skill_name} ({status}, {elapsed}ms)")
+            return f"**Executed skill: {skill_name}** ({stype}) — {status}\n" f"{desc}\n\n{output}"
         except subprocess.TimeoutExpired:
             return f"Error: Skill '{skill_name}' timed out after 60 seconds."
         except Exception as e:
@@ -510,7 +504,8 @@ class NoteToSelfTool(BaseTool):
     def description(self) -> str:
         return (
             "Save a note to your per-session working memory. Notes persist across queries "
-            "within the same session and survive history truncation (they're in the system prompt). "
+            "within the same session and survive history truncation (they're in the system "
+            "prompt). "
             "Use for: user preferences discovered mid-session, effective strategies, "
             "corrections to remember, or any context you want to retain."
         )
@@ -520,23 +515,20 @@ class NoteToSelfTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "note": {
-                    "type": "string",
-                    "description": "The note to save."
-                },
+                "note": {"type": "string", "description": "The note to save."},
                 "category": {
                     "type": "string",
                     "enum": ["user_preference", "discovery", "strategy", "correction", "other"],
-                    "description": "Category for the note."
-                }
+                    "description": "Category for the note.",
+                },
             },
-            "required": ["note"]
+            "required": ["note"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
-        note = params['note']
-        category = params.get('category', 'other')
-        session_id = context.get('session_id', 'default') if context else 'default'
+        note = params["note"]
+        category = params.get("category", "other")
+        session_id = context.get("session_id", "default") if context else "default"
 
         try:
             from ..database import get_db

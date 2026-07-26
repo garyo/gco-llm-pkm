@@ -34,7 +34,8 @@ class SemanticSearchTool(BaseTool):
         return """Search notes using hybrid retrieval: semantic similarity (understands meaning)
 blended with exact keyword matching (rescues names, codes, filenames).
 
-Use this tool when auto-retrieved context is insufficient and you need MORE or DIFFERENT information.
+Use this tool when auto-retrieved context is insufficient and you need MORE or DIFFERENT
+information.
 
 IMPORTANT: You already have auto-retrieved context in your system prompt. Only use this tool if:
 - The auto-retrieved excerpts don't contain what the user is asking about
@@ -64,26 +65,23 @@ Results are sorted by hybrid relevance (best first).
         return {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Natural language search query"
-                },
+                "query": {"type": "string", "description": "Natural language search query"},
                 "limit": {
                     "type": "number",
                     "default": 10,
-                    "description": "Maximum number of results"
+                    "description": "Maximum number of results",
                 },
                 "min_similarity": {
                     "type": "number",
                     "default": DEFAULT_MIN_SIMILARITY,
-                    "description": "Minimum cosine similarity threshold (0-1)"
+                    "description": "Minimum cosine similarity threshold (0-1)",
                 },
                 "newer": {
                     "type": "string",
-                    "description": "Optional YYYY-MM-DD date filter (only notes >= this date)"
-                }
+                    "description": "Optional YYYY-MM-DD date filter (only notes >= this date)",
+                },
             },
-            "required": ["query"]
+            "required": ["query"],
         }
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
@@ -101,43 +99,35 @@ Results are sorted by hybrid relevance (best first).
         min_similarity = params.get("min_similarity", DEFAULT_MIN_SIMILARITY)
         newer_date = params.get("newer")
 
-        self.logger.info(f"Semantic search: '{query[:50]}...' (limit={limit}, min_sim={min_similarity})")
+        self.logger.info(
+            f"Semantic search: '{query[:50]}...' (limit={limit}, min_sim={min_similarity})"
+        )
 
         # Retrieve relevant chunks. The date filter is applied inside the SQL
         # query (before the LIMIT) so recent matches ranked below the top-N
         # by similarity are still reachable.
         try:
             chunks = self.context_retriever.retrieve_context(
-                query=query,
-                limit=limit,
-                min_similarity=min_similarity,
-                newer=newer_date
+                query=query, limit=limit, min_similarity=min_similarity, newer=newer_date
             )
         except Exception as e:
             self.logger.error(f"Semantic search failed: {e}")
-            return yaml.dump({
-                'error': str(e),
-                'query': query
-            })
+            return yaml.dump({"error": str(e), "query": query})
 
         # Format results
         results = []
         for chunk in chunks:
             result = {
-                'filename': chunk['filename'],
-                'file_type': 'org' if chunk['filename'].endswith('.org') else 'md',
-                'similarity': chunk['similarity'],
-                'date': chunk.get('date'),
-                'heading_path': chunk.get('heading_path'),
-                'content': chunk['content'],
-                'start_line': chunk.get('start_line')
+                "filename": chunk["filename"],
+                "file_type": "org" if chunk["filename"].endswith(".org") else "md",
+                "similarity": chunk["similarity"],
+                "date": chunk.get("date"),
+                "heading_path": chunk.get("heading_path"),
+                "content": chunk["content"],
+                "start_line": chunk.get("start_line"),
             }
             results.append(result)
 
-        output = {
-            'query': query,
-            'total_results': len(results),
-            'results': results
-        }
+        output = {"query": query, "total_results": len(results), "results": results}
 
         return yaml.dump(output, default_flow_style=False, allow_unicode=True, sort_keys=False)

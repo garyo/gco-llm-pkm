@@ -4,8 +4,8 @@ Speech-to-text client wrapping Groq/OpenAI Whisper API.
 Uses the HTTP API directly with requests (no extra dependencies).
 """
 
-import os
 import logging
+import os
 from typing import BinaryIO
 
 import requests
@@ -28,7 +28,9 @@ class STTClient:
             self.api_url = "https://api.openai.com/v1/audio/transcriptions"
             self.model = "whisper-1"
         else:
-            raise ValueError(f"Unknown STT_PROVIDER: {self.provider!r} (expected 'groq' or 'openai')")
+            raise ValueError(
+                f"Unknown STT_PROVIDER: {self.provider!r} (expected 'groq' or 'openai')"
+            )
 
         if not self.api_key:
             key_name = "GROQ_API_KEY" if self.provider == "groq" else "OPENAI_API_KEY"

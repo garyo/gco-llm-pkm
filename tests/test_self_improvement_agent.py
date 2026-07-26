@@ -5,7 +5,6 @@ All tests use tmp_path fixtures and mocked DB — no real database or API requir
 
 import json
 import logging
-from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +13,6 @@ import pytest
 # ---------------------------------------------------------------------------
 # Budget
 # ---------------------------------------------------------------------------
-
 from pkm_bridge.self_improvement.budget import Budget
 
 
@@ -77,7 +75,6 @@ class TestBudget:
 # ---------------------------------------------------------------------------
 
 from pkm_bridge.self_improvement.filesystem import (
-    MEMORY_CATEGORIES,
     ensure_pkm_structure,
     get_memory_dir,
     get_pkm_dir,
@@ -160,12 +157,12 @@ class TestFilesystem:
 # ---------------------------------------------------------------------------
 
 from pkm_bridge.self_improvement.meta_tools import (
+    DeleteSkillTool,
     InspectSkillsTool,
+    InspectSystemPromptTool,
     ReadMemoryTool,
     WriteMemoryTool,
     WriteSkillTool,
-    DeleteSkillTool,
-    InspectSystemPromptTool,
 )
 from pkm_bridge.tools.skills import _build_md_frontmatter
 
@@ -258,17 +255,20 @@ class TestInspectSystemPromptTool:
 # Meta-tools (action)
 # ---------------------------------------------------------------------------
 
+
 class TestWriteSkillTool:
     def test_create_recipe(self, logger, tmp_path: Path):
         ensure_pkm_structure(tmp_path)
         tool = WriteSkillTool(logger, tmp_path)
-        result = tool.execute({
-            "skill_name": "new-skill",
-            "skill_type": "recipe",
-            "description": "A new skill",
-            "content": "## Steps\n1. Do it",
-            "tags": ["test"],
-        })
+        result = tool.execute(
+            {
+                "skill_name": "new-skill",
+                "skill_type": "recipe",
+                "description": "A new skill",
+                "content": "## Steps\n1. Do it",
+                "tags": ["test"],
+            }
+        )
         assert "Created" in result
         assert (tmp_path / ".pkm" / "skills" / "new-skill.md").exists()
         assert len(tool._run_log) == 1
@@ -276,12 +276,14 @@ class TestWriteSkillTool:
     def test_bad_name(self, logger, tmp_path: Path):
         ensure_pkm_structure(tmp_path)
         tool = WriteSkillTool(logger, tmp_path)
-        result = tool.execute({
-            "skill_name": "BAD NAME!",
-            "skill_type": "recipe",
-            "description": "bad",
-            "content": "nope",
-        })
+        result = tool.execute(
+            {
+                "skill_name": "BAD NAME!",
+                "skill_type": "recipe",
+                "description": "bad",
+                "content": "nope",
+            }
+        )
         assert "Error" in result
 
 
@@ -440,12 +442,17 @@ class TestAgentLoop:
         ensure_pkm_structure(tmp_path)
 
         agent = SelfImprovementAgent(
-            mock_client, logging.getLogger("test"), mock_config,
-            max_turns=5, max_actions=3,
+            mock_client,
+            logging.getLogger("test"),
+            mock_config,
+            max_turns=5,
+            max_actions=3,
         )
 
-        with patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}), \
-             patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"):
+        with (
+            patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}),
+            patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"),
+        ):
             result = agent.run(trigger="manual")
 
         assert result["error"] is None
@@ -468,12 +475,17 @@ class TestAgentLoop:
         ensure_pkm_structure(tmp_path)
 
         agent = SelfImprovementAgent(
-            mock_client, logging.getLogger("test"), mock_config,
-            max_turns=5, max_actions=3,
+            mock_client,
+            logging.getLogger("test"),
+            mock_config,
+            max_turns=5,
+            max_actions=3,
         )
 
-        with patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}), \
-             patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"):
+        with (
+            patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}),
+            patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"),
+        ):
             result = agent.run()
 
         assert result["error"] is None
@@ -490,12 +502,17 @@ class TestAgentLoop:
         ensure_pkm_structure(tmp_path)
 
         agent = SelfImprovementAgent(
-            mock_client, logging.getLogger("test"), mock_config,
-            max_turns=2, max_actions=3,
+            mock_client,
+            logging.getLogger("test"),
+            mock_config,
+            max_turns=2,
+            max_actions=3,
         )
 
-        with patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}), \
-             patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"):
+        with (
+            patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}),
+            patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"),
+        ):
             result = agent.run()
 
         assert result["error"] is None
@@ -511,12 +528,16 @@ class TestAgentLoop:
         ensure_pkm_structure(tmp_path)
 
         agent = SelfImprovementAgent(
-            mock_client, logging.getLogger("test"), mock_config,
+            mock_client,
+            logging.getLogger("test"),
+            mock_config,
         )
 
-        with patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}), \
-             patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"):
-            result = agent.run()
+        with (
+            patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}),
+            patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"),
+        ):
+            agent.run()
 
         runs_dir = tmp_path / ".pkm" / "runs"
         run_files = list(runs_dir.glob("*.md"))
@@ -529,8 +550,12 @@ class TestAgentLoop:
         mock_client = MagicMock()
         # Agent tries write_memory (an action tool) twice, then finishes
         mock_client.complete.side_effect = [
-            self._make_tool_response("write_memory", {"category": "observations", "content": "test"}, "t1"),
-            self._make_tool_response("write_memory", {"category": "plans", "content": "test2"}, "t2"),
+            self._make_tool_response(
+                "write_memory", {"category": "observations", "content": "test"}, "t1"
+            ),
+            self._make_tool_response(
+                "write_memory", {"category": "plans", "content": "test2"}, "t2"
+            ),
             self._make_mock_response("Done."),
         ]
 
@@ -539,12 +564,17 @@ class TestAgentLoop:
         ensure_pkm_structure(tmp_path)
 
         agent = SelfImprovementAgent(
-            mock_client, logging.getLogger("test"), mock_config,
-            max_turns=5, max_actions=1,  # Only 1 action allowed
+            mock_client,
+            logging.getLogger("test"),
+            mock_config,
+            max_turns=5,
+            max_actions=1,  # Only 1 action allowed
         )
 
-        with patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}), \
-             patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"):
+        with (
+            patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}),
+            patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db"),
+        ):
             result = agent.run()
 
         # First action succeeds, second should be blocked

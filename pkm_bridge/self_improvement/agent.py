@@ -10,13 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..models import get_role_model, supports_caching
 from ..tools.registry import ToolRegistry
 from .budget import Budget
 from .filesystem import ensure_pkm_structure, get_runs_dir
 from .meta_tools import create_action_tools, create_inspection_tools
 from .prompt import build_system_prompt, gather_run_stats
-
-from ..models import get_role_model, supports_caching
 
 # Action tool names that consume the write budget. These mutate the shared
 # knowledge base (skills, rules, amendments, memory). `write_learned_patterns`
@@ -24,10 +23,15 @@ from ..models import get_role_model, supports_caching
 # just serialize the current curated state at end of run, so the agent must
 # always be able to refresh the live-injected block even after spending its
 # mutation budget.
-ACTION_TOOL_NAMES = frozenset({
-    "write_skill", "delete_skill", "manage_rules",
-    "propose_amendment", "write_memory",
-})
+ACTION_TOOL_NAMES = frozenset(
+    {
+        "write_skill",
+        "delete_skill",
+        "manage_rules",
+        "propose_amendment",
+        "write_memory",
+    }
+)
 
 
 def mark_last_message_for_cache(messages: List[Dict[str, Any]]) -> None:
@@ -301,17 +305,19 @@ class SelfImprovementAgent:
                     # Check action budget
                     is_action = tool_name in ACTION_TOOL_NAMES
                     if is_action and not budget.can_act:
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": (
-                                f"Action budget exhausted "
-                                f"({budget.actions_used}/{budget.max_actions}). "
-                                "You can still use inspection tools or finish with "
-                                "write_memory, write_learned_patterns, and "
-                                "write_rules_snapshot (these don't consume budget)."
-                            ),
-                        })
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": (
+                                    f"Action budget exhausted "
+                                    f"({budget.actions_used}/{budget.max_actions}). "
+                                    "You can still use inspection tools or finish with "
+                                    "write_memory, write_learned_patterns, and "
+                                    "write_rules_snapshot (these don't consume budget)."
+                                ),
+                            }
+                        )
                         continue
 
                     # Execute the tool
@@ -331,11 +337,13 @@ class SelfImprovementAgent:
                     if is_empty:
                         result_text = "[Empty result]"
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result_text,
+                        }
+                    )
 
                 # Build message content for the response (serialize like the main server)
                 response_content = []
@@ -343,12 +351,14 @@ class SelfImprovementAgent:
                     if getattr(block, "type", "") == "text":
                         response_content.append({"type": "text", "text": block.text})
                     elif getattr(block, "type", "") == "tool_use":
-                        response_content.append({
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        })
+                        response_content.append(
+                            {
+                                "type": "tool_use",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            }
+                        )
 
                 messages.append({"role": "assistant", "content": response_content})
                 messages.append({"role": "user", "content": tool_results})
@@ -370,14 +380,16 @@ class SelfImprovementAgent:
         runs_dir = get_runs_dir(self.org_dir)
         run_file = runs_dir / run_file_name
 
-        self._write_run_file(
-            run_file, budget, actions_log, agent_summary, result.get("error")
-        )
+        self._write_run_file(run_file, budget, actions_log, agent_summary, result.get("error"))
 
         # Save to DB
         self._save_run_to_db(
-            started_at, budget, actions_log, agent_summary,
-            run_file_name, result.get("error"),
+            started_at,
+            budget,
+            actions_log,
+            agent_summary,
+            run_file_name,
+            result.get("error"),
         )
 
         # Mark feedback as processed — only on a successful run. A crashed run

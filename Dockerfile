@@ -55,8 +55,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_SYSTEM_PYTHON=1
 
 # Install Python dependencies first (for better layer caching)
-COPY pyproject.toml ./
-RUN uv pip compile pyproject.toml -o requirements.txt
+COPY pyproject.toml uv.lock ./
+# Install exactly what uv.lock pins, so a rebuild months from now installs the
+# same versions this was tested against. --locked fails the build if the lock
+# and pyproject.toml have drifted, rather than quietly resolving something new.
+RUN uv export --locked --no-emit-project --format requirements-txt -o requirements.txt
 RUN uv pip install --no-cache -r requirements.txt
 
 # Copy Python application

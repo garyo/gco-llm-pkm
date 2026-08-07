@@ -2948,7 +2948,9 @@ def health():
         health_data["database"] = "error"
         health_data["status"] = "degraded"
 
-    return jsonify(health_data)
+    # Degraded must be a non-2xx: the Docker healthcheck and the deploy script
+    # both judge by status code, so a 200 here would call a dead database well.
+    return jsonify(health_data), 200 if health_data["status"] == "ok" else 503
 
 
 _embedding_in_progress = threading.Lock()

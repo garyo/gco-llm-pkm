@@ -24,7 +24,10 @@ services:
         max-file: "3"
 
   pkm-bridge:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: pkm-bridge-server
     restart: unless-stopped
     depends_on:

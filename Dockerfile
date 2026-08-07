@@ -87,5 +87,11 @@ EXPOSE 8000 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health && curl -f http://localhost:8001/health || exit 1
 
+# Stamp the image with the commit it was built from, so a deploy can verify
+# that the code now running is the code it pushed. Last, to keep it out of
+# the cached layers.
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.revision=$GIT_SHA
+
 # Run entrypoint script (runs migrations, then starts server)
 CMD ["./docker-entrypoint.sh"]

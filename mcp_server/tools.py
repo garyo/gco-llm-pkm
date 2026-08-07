@@ -764,6 +764,66 @@ def register_all_tools(mcp: FastMCP):
         _log_tool_execution("open_in_editor", {"file_path": file_path, "line": line}, url, 0)
         return url
 
+    # --- Push notifications ---
+
+    @mcp.tool()
+    def notify(
+        message: str,
+        title: str | None = None,
+        priority: str = "default",
+        tags: list[str] | None = None,
+        click_url: str | None = None,
+        topic: str | None = None,
+        markdown: bool = False,
+    ) -> str:
+        """Send a push notification to the user's phone via ntfy.
+
+        Use this to surface something the user asked to be alerted about — a
+        scheduled task finding new items, a long job finishing, a deadline.
+        Do not use it for ordinary conversational replies: the user is already
+        reading those. Send ONE notification per event, with all items in the
+        body, rather than one per item.
+
+        Credentials and the default topic come from the server environment, so
+        no secret is needed here.
+
+        Args:
+            message: Notification body. Multiline is fine — one line per item.
+            title: Short title shown on the lock screen.
+            priority: 'min', 'low', 'default', 'high', or 'urgent'.
+            tags: Emoji shortcodes shown as icons, e.g. ['bell'] or ['warning'].
+            click_url: URL opened when the notification is tapped.
+            topic: ntfy topic to publish to. Defaults to the server's configured
+                topic; set it explicitly to route to a different one.
+            markdown: Render the body as Markdown in supporting clients.
+        """
+        from pkm_bridge.ntfy import NtfyError
+        from pkm_bridge.ntfy import send as send_ntfy
+
+        start = time.time()
+        try:
+            result = send_ntfy(
+                message,
+                title=title,
+                topic=topic,
+                priority=priority,
+                tags=tags,
+                click_url=click_url,
+                markdown=markdown,
+            )
+        except NtfyError as e:
+            return f"Notification NOT sent: {e}"
+
+        duration_ms = int((time.time() - start) * 1000)
+        _log_tool_execution(
+            "notify",
+            {"title": title, "priority": priority, "topic": topic},
+            f"sent ({len(message)} chars)",
+            duration_ms,
+        )
+        msg_id = result.get("id", "")
+        return f"Notification sent{f' (id {msg_id})' if msg_id else ''}: {(title or message)[:80]}"
+
     # --- Schedule task ---
 
     @mcp.tool()

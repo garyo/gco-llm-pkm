@@ -86,6 +86,7 @@ TOOLS:
 - ticktick_query: Use this to query and manage TODOs (aka Tasks) in Ticktick
 - open_file: Open a file in the web editor interface. Use when user asks to edit or view a specific file.
 - read_note: Read a note file by path (org: or logseq: prefixed).
+- notify: Send a push notification to the user's phone. Only for things the user asked to be alerted about (a scheduled task's findings, a long job finishing, a deadline) — never for ordinary replies they're already reading. One notification per event, all items in the body.
 - list_note_proposals / resolve_note_proposal: Review note-organization proposals from the background curator (see NOTE ORGANIZATION PROPOSALS below).
 - propose_note_organization: File an organization proposal yourself if you notice an opportunity while helping the user (never edit notes for organization directly — propose instead).
 

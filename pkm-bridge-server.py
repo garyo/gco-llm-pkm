@@ -139,6 +139,7 @@ from pkm_bridge.tools.note_proposals import (
     ProposeNoteOrganizationTool,
     ResolveNoteProposalTool,
 )
+from pkm_bridge.tools.notify import NotifyTool
 from pkm_bridge.tools.open_file import OpenFileTool
 
 # Import tool components
@@ -410,6 +411,7 @@ tool_registry.register(ReadNoteTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(SearchNotesTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(FindContextTool(logger, config.org_dir, config.logseq_dir))
 tool_registry.register(OpenFileTool(logger, config.org_dir, config.logseq_dir))
+tool_registry.register(NotifyTool(logger))
 
 # Register TickTick tool if configured
 if ticktick_oauth:

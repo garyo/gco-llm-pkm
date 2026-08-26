@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -102,7 +103,10 @@ HEADING_RE = re.compile(r"^(\*+)\s+(.*?)\s*$")
 TAGS_RE = re.compile(r"\s+(:[A-Za-z0-9_@#%]+(?::[A-Za-z0-9_@#%]+)*:)$")
 DRAWER_START_RE = re.compile(r"^\s*:([A-Z][A-Z0-9_]*):\s*$")
 KEYWORD_RE = re.compile(r"^#\+([a-zA-Z_]+):\s*(.*)$")
-ID_RE = re.compile(r"^\s*:ID:\s+(\S+)\s*$")
+ID_RE = re.compile(r"^\s*:ID:\s+(.+?)\s*$")
+UUID_RE = re.compile(
+    r"^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$"
+)
 ORG_LINK_RE = re.compile(r"\[\[([^\]]+)\](?:\[([^\]]*)\])?\]")
 ACTIVE_TS_RE = re.compile(r"<(\d{4}-\d{2}-\d{2}[^>\n]*)>")
 INACTIVE_TS_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2}[^\]\n]*)\]")
@@ -153,6 +157,23 @@ def is_journal(rel: Path) -> bool:
 # --------------------------------------------------------------------------
 
 
+def note_id(raw: str, rel: Path, report: list | None = None) -> str:
+    """Return a usable ID for RAW, minting one if RAW is not a UUID.
+
+    Nine journals in this corpus carry an unexpanded shell command as their
+    :ID: -- `$(uuidgen)` and friends -- written by something that built the
+    file by hand instead of using the journal skill.  Those notes have no
+    real identity, so mint one deterministically from the path: both the
+    index pass and the convert pass then agree without sharing state.
+    """
+    if UUID_RE.match(raw):
+        return raw
+    minted = str(uuid.uuid5(uuid.NAMESPACE_URL, rel.as_posix())).upper()
+    if report is not None:
+        report.append(f"{rel}: :ID: was not a UUID ({raw!r}); minted {minted}")
+    return minted
+
+
 def build_id_index(files: list[tuple[Path, Path]]) -> dict[str, tuple[Path, str | None]]:
     """Map every :ID: to (relative .md path, anchor-or-None for heading IDs)."""
     index: dict[str, tuple[Path, str | None]] = {}
@@ -160,6 +181,7 @@ def build_id_index(files: list[tuple[Path, Path]]) -> dict[str, tuple[Path, str 
         lines = abs_path.read_text(encoding="utf-8").splitlines()
         last_heading: Heading | None = None
         heading_count = 0
+        have_file_id = False
         for _lineno, line, in_block in iter_lines(lines):
             if in_block:
                 continue
@@ -178,12 +200,17 @@ def build_id_index(files: list[tuple[Path, Path]]) -> dict[str, tuple[Path, str 
             # A file-level ID is one before any heading, or on the very first
             # heading (journals hang their file ID on the date wrapper).
             if last_heading is None or (
-                last_heading.level == 1 and heading_count <= 1
+                not have_file_id and last_heading.level == 1 and heading_count <= 1
             ):
                 anchor = None  # file-level: before any heading, or on the wrapper
+                have_file_id = True
             else:
                 anchor = slugify(last_heading.text)
             index[im.group(1)] = (rel.with_suffix(".md"), anchor)
+            # also index under the minted ID so either spelling resolves
+            fixed = note_id(im.group(1), rel)
+            if fixed != im.group(1):
+                index[fixed] = (rel.with_suffix(".md"), anchor)
     return index
 
 
@@ -262,10 +289,20 @@ def parse(abs_path: Path, rel: Path, index, report: list) -> Note:
                 for b in body:
                     im = ID_RE.match(b)
                     if im and not seen_heading:
-                        note.file_id = im.group(1)
+                        note.file_id = note_id(im.group(1), rel, report)
                         continue
-                    if im and headings and len(headings) == 1 and headings[0].level == 1:
-                        note.file_id = im.group(1)
+                    if (
+                        im
+                        and note.file_id is None
+                        and headings
+                        and len(headings) == 1
+                        and headings[0].level == 1
+                    ):
+                        # A journal hangs its file ID on the date wrapper. Only
+                        # treat a first level-1 heading that way when no drawer
+                        # above it already supplied one -- a page's first
+                        # section is a section, not the file.
+                        note.file_id = note_id(im.group(1), rel, report)
                         continue
                     if im and headings:
                         headings[-1].anchor = slugify(headings[-1].text)
@@ -793,6 +830,11 @@ def apply_anchors_and_tags(md: str, note: Note) -> str:
 
 def convert(abs_path: Path, rel: Path, index, report: list) -> str:
     note = parse(abs_path, rel, index, report)
+    if note.file_id is None:
+        # Without an ID a note cannot be renamed safely or linked reliably,
+        # which is the whole reason file-level IDs survive the conversion.
+        note.file_id = note_id("", rel)
+        report.append(f"{rel}: had no :ID:; minted {note.file_id}")
     lines = adjust_levels(note, report)
 
     body = "\n".join(lines)
@@ -841,8 +883,10 @@ def main() -> int:
 
     files = []
     for p in sorted(src.rglob("*.org")):
-        if "sync-conflict" in p.name:
-            print(f"  skipping sync-conflict artifact: {p.relative_to(src)}")
+        if "sync-conflict" in p.name or ".backup-" in p.name:
+            # Artifacts, not notes -- and a backup shares its original's :ID:,
+            # which would put a duplicate ID in the index.
+            print(f"  skipping artifact: {p.relative_to(src)}")
             continue
         files.append((p, p.relative_to(src)))
 

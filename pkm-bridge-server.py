@@ -111,7 +111,7 @@ from pkm_bridge.google_oauth import GoogleOAuth
 from pkm_bridge.logging_config import setup_logging
 
 # Import org-mode link utilities
-from pkm_bridge.org_links import resolve_attachment_path, resolve_org_id_to_file
+from pkm_bridge.org_links import resolve_org_id_to_file
 from pkm_bridge.query_enhancer import QueryEnhancer
 from pkm_bridge.retrospective import SessionRetrospective
 from pkm_bridge.scheduler.dispatcher import TaskDispatcher
@@ -1841,52 +1841,6 @@ def serve_asset(filepath):
     except Exception as e:
         logger.error(f"Error serving asset {filepath}: {str(e)}")
         return jsonify({"error": "Error serving file"}), 500
-
-
-@app.route("/api/org-attachment/<org_id>/<filename>", methods=["GET"])
-@limiter.limit("100 per minute")
-def serve_org_attachment(org_id, filename):
-    """Serve an org-attach attachment file.
-
-    Attachment files live at: <org_dir>/data/<ID[0:2]>/<ID[2:]>/<filename>
-    where ID is derived from the enclosing heading's :ID: property.
-    """
-    # Auth check (same pattern as serve_asset)
-    if config.auth_enabled:
-        token = None
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-        if not token:
-            token = request.args.get("token", "")
-        if not token:
-            return jsonify({"error": "Missing authorization token"}), 401
-        if not auth_manager.verify_token(token):
-            return jsonify({"error": "Invalid or expired token"}), 401
-
-    # Validate org_id: only hex digits and hyphens
-    import re as _re
-
-    if not _re.fullmatch(r"[A-Fa-f0-9-]+", org_id):
-        return jsonify({"error": "Invalid org ID format"}), 400
-
-    # Validate filename: no path separators
-    if "/" in filename or "\\" in filename or ".." in filename:
-        return jsonify({"error": "Invalid filename"}), 400
-
-    found_path = resolve_attachment_path(config.org_dir, org_id, filename)
-    if not found_path:
-        logger.debug(f"Org attachment not found: {org_id}/{filename}")
-        return jsonify({"error": "File not found"}), 404
-
-    # Path traversal protection
-    resolved = found_path.resolve()
-    allowed_root = config.org_dir.resolve()
-    if not resolved.is_relative_to(allowed_root):
-        logger.warning(f"Path traversal attempt: {org_id}/{filename}")
-        return jsonify({"error": "Invalid file path"}), 403
-
-    return send_from_directory(resolved.parent, resolved.name)
 
 
 @app.route("/api/resolve-org-id/<uuid_str>", methods=["GET"])

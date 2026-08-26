@@ -253,8 +253,8 @@ import EditorInterface from '../components/EditorInterface.astro';
     const div = document.createElement('div');
     div.innerHTML = html;
 
-    // Find all images that point to /assets/ or /api/org-attachment/
-    const images = div.querySelectorAll('img[src^="http://localhost:8000/assets/"], img[src^="/assets/"], img[src^="/api/org-attachment/"], img[src^="http://localhost:8000/api/org-attachment/"]');
+    // Find all images that point to /assets/
+    const images = div.querySelectorAll('img[src^="http://localhost:8000/assets/"], img[src^="/assets/"]');
 
     images.forEach(img => {
       const src = img.getAttribute('src');

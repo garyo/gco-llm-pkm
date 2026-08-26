@@ -2,7 +2,6 @@ import { Decoration, WidgetType, EditorView } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { StateField } from '@codemirror/state';
 import type { EditorState as CMEditorState, Text, Range } from '@codemirror/state';
-import { findHeadingId } from './org-images';
 import { STORAGE_KEYS } from './types';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']);
@@ -52,8 +51,8 @@ function buildOrgLinkDecorations(doc: Text, selection: CMEditorState['selection'
       const overlaps = cursors.some((c) => c.from <= to && c.to >= from);
       if (overlaps) continue;
 
-      // Skip image attachments
-      if (target.startsWith('attachment:')) {
+      // Skip asset images -- orgImageField renders those as block widgets
+      if (/^file:(?:\.\.\/)*assets\//.test(target)) {
         const ext = '.' + target.split('.').pop()?.toLowerCase();
         if (IMAGE_EXTS.has(ext)) continue;
       }
@@ -118,11 +117,9 @@ function resolveFileLink(
   return { path: `${prefix}:${parts.join('/')}`, line };
 }
 
-/** Open an org link target. Handles id:, attachment:, http(s):, and file: links. */
+/** Open an org link target. Handles id:, http(s):, and file: links. */
 function openOrgLinkTarget(
   target: string,
-  view: EditorView,
-  pos: number,
   event: MouseEvent,
   currentFilePath: string,
 ): boolean {
@@ -171,19 +168,6 @@ function openOrgLinkTarget(
     return false;
   }
 
-  if (target.startsWith('attachment:')) {
-    const filename = target.slice('attachment:'.length);
-    const line = view.state.doc.lineAt(pos);
-    const headingId = findHeadingId(view.state.doc, line.number);
-    if (headingId) {
-      event.preventDefault();
-      const authToken = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
-      const tokenParam = authToken ? `?token=${authToken}` : '';
-      window.open(`/api/org-attachment/${headingId}/${filename}${tokenParam}`, '_blank');
-      return true;
-    }
-  }
-
   return false;
 }
 
@@ -201,8 +185,7 @@ export function createOrgLinkClickHandler(currentFilePath: string) {
       if (widgetEl) {
         const target = widgetEl.title;
         if (target) {
-          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-          if (openOrgLinkTarget(target, view, pos ?? 0, event, currentFilePath)) return true;
+          if (openOrgLinkTarget(target, event, currentFilePath)) return true;
         }
       }
 
@@ -223,7 +206,7 @@ export function createOrgLinkClickHandler(currentFilePath: string) {
         const linkStart = match.index;
         const linkEnd = linkStart + match[0].length;
         if (lineOffset >= linkStart && lineOffset <= linkEnd) {
-          if (openOrgLinkTarget(match[1], view, pos, event, currentFilePath)) return true;
+          if (openOrgLinkTarget(match[1], event, currentFilePath)) return true;
         }
       }
       return false;

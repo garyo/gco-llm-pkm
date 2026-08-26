@@ -6,34 +6,10 @@ import { STORAGE_KEYS } from './types';
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']);
 
-/** Walk backward from lineNum to find the enclosing heading's :ID: property. */
-export function findHeadingId(doc: Text, lineNum: number): string | null {
-  let headingLine = -1;
-  for (let i = lineNum; i >= 1; i--) {
-    if (/^\*+\s/.test(doc.line(i).text)) {
-      headingLine = i;
-      break;
-    }
-  }
-
-  let start = headingLine + 1;
-  if (start < 1) start = 1;
-  if (start > doc.lines) return null;
-
-  let idx = start;
-  while (idx <= doc.lines && !doc.line(idx).text.trim()) idx++;
-  if (idx > doc.lines || doc.line(idx).text.trim() !== ':PROPERTIES:') return null;
-
-  idx++;
-  while (idx <= doc.lines) {
-    const text = doc.line(idx).text.trim();
-    if (text === ':END:') break;
-    const m = text.match(/^:ID:\s+(.+)/);
-    if (m) return m[1].trim();
-    idx++;
-  }
-  return null;
-}
+/** `[[file:../assets/NAME]]` or `[[file:assets/NAME]]`, with optional description.
+ *  Images live in one flat assets/ dir, so the filename alone locates them. */
+const ORG_ASSET_IMAGE_RE =
+  /\[\[file:(?:\.\.\/)*assets\/([^\]/]+)\](?:\[([^\]]+)\])?\]/g;
 
 class OrgImageWidget extends WidgetType {
   constructor(
@@ -73,7 +49,7 @@ class OrgImageWidget extends WidgetType {
 
 function buildOrgImageDecorations(doc: Text): DecorationSet {
   const widgets: Range<Decoration>[] = [];
-  const linkRe = /\[\[attachment:([^\]]+)\](?:\[([^\]]+)\])?\]/g;
+  const linkRe = ORG_ASSET_IMAGE_RE;
 
   for (let lineNum = 1; lineNum <= doc.lines; lineNum++) {
     const line = doc.line(lineNum);
@@ -85,10 +61,7 @@ function buildOrgImageDecorations(doc: Text): DecorationSet {
       const ext = '.' + filename.split('.').pop()?.toLowerCase();
       if (!IMAGE_EXTS.has(ext)) continue;
 
-      const headingId = findHeadingId(doc, lineNum);
-      if (!headingId) continue;
-
-      const url = `/api/org-attachment/${headingId}/${filename}`;
+      const url = `/assets/${filename}`;
       const alt = match[2] || filename;
 
       widgets.push(

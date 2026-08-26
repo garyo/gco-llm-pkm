@@ -429,13 +429,8 @@ Default directories searched (if paths not provided):
                     matched_text = match["matched_text"]
 
                     # Rewrite org links to markdown for image/id rendering
-                    section_start = context.get("section_start", 0)
-                    context_str = rewrite_org_links_to_markdown(
-                        context_str, lines, section_start, self.org_dir
-                    )
-                    matched_text = rewrite_org_links_to_markdown(
-                        matched_text, lines, section_start, self.org_dir
-                    )
+                    context_str = rewrite_org_links_to_markdown(context_str)
+                    matched_text = rewrite_org_links_to_markdown(matched_text)
 
                     result = {
                         "filename": str(file_path),

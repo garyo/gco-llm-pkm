@@ -35,30 +35,37 @@ from pathlib import Path
 # that was pasted in and has been hidden ever since; conversion reveals them.
 # The org level given is the level the heading should occupy *before* the
 # journal promotion runs, so it nests where the surrounding org headings put it.
-COMMENT_ACTIONS: dict[str, dict[int, tuple[str, int | None]]] = {
+COMMENT_ACTIONS: dict[str, dict[str, tuple[str, int | None]]] = {
     # Talk outline pasted under `** AI-assisted version` (org level 2).
     "pages/cm-ai-talk-2026.org": {
-        93: ("heading", 3),
-        100: ("heading", 4),
-        110: ("heading", 4),
-        124: ("heading", 4),
-        138: ("heading", 4),
+        "# Envisioning AI: From the Connection Machine to the GPU \u2014 and Beyond": (
+            "heading",
+            3,
+        ),
+        "## I. The Connection Machine Graphics Group (2 min)": ("heading", 4),
+        "## II. From the CM to the GPU (2.5 min)": ("heading", 4),
+        "## III. AI, Creativity, and Closing the Loop (3.5 min)": ("heading", 4),
+        "## IV. Conclusion (1 min)": ("heading", 4),
     },
     # NB: journals/2026-07-13.org has `##` lines too, but they sit inside a
     # #+begin_quote (a pasted Meta support chat).  They are quoted content,
     # not org comments, and block-awareness leaves them alone.
     # Siblings of `** Music`; each is followed by its own `***` children.
     "journals/2025-11-03.org": {
-        14: ("heading", 2),
-        34: ("heading", 2),
+        "## Finance & Ideas": ("heading", 2),
+        "## Long Now Boston": ("heading", 2),
     },
     # Section heading sitting directly under the date wrapper.
-    "journals/2026-06-25.org": {7: ("heading", 2)},
-    # An inline #tag at line start -- must not become a heading.  The
-    # surrounding lines are list items, so it reads correctly as one.
-    "journals/2026-05-16.org": {13: ("listitem", None)},
+    "journals/2026-06-25.org": {"# Music Morningside Thu": ("heading", 2)},
+    # An inline #tag at line start -- must not become a heading, and the
+    # hash belongs to the tag, so the line is kept verbatim as a list item.
+    "journals/2026-05-16.org": {
+        "#usvi Lovango Rum Bar? Looks good!": ("listitem", None)
+    },
     # A real tombstone comment.
-    "journals/2026-01-08a.org": {1: ("htmlcomment", None)},
+    "journals/2026-01-08a.org": {
+        "# This file has been consolidated into 2026-01-07.org": ("htmlcomment", None)
+    },
 }
 
 EXPECTED_COMMENT_LINES = sum(len(v) for v in COMMENT_ACTIONS.values())  # 10
@@ -342,21 +349,25 @@ def parse(abs_path: Path, rel: Path, index, report: list) -> Note:
 
         # Org comments -- every one is an enumerated exception
         if line.startswith("#") and not line.startswith("#+"):
-            if lineno not in comment_actions:
+            # Keyed on the line's text, not its number: these files are still
+            # being edited, and a line-numbered table silently goes stale.
+            key = line.strip()
+            if key not in comment_actions:
                 raise ConversionError(
                     f"{rel}:{lineno}: unhandled org comment: {line[:60]!r}"
                 )
-            action, level = comment_actions[lineno]
-            stripped = line.lstrip("#").strip()
+            action, level = comment_actions[key]
             if action == "heading":
                 assert level is not None
-                headings.append(Heading(level, stripped))
-                out.append(f"{'*' * level} {stripped}")
+                text = key.lstrip("#").strip()
+                headings.append(Heading(level, text))
+                out.append(f"{'*' * level} {text}")
             elif action == "listitem":
-                out.append(f"- {stripped}")
+                # Verbatim: the leading `#` is an inline tag, not a marker.
+                out.append(f"- {key}")
             elif action == "htmlcomment":
                 token = f"@@PKMBLOCK{len(note.blocks)}@@"
-                note.blocks.append(f"<!-- {stripped} -->")
+                note.blocks.append(f"<!-- {key.lstrip('#').strip()} -->")
                 out.extend(["", token, ""])
             else:
                 raise ConversionError(f"{rel}:{lineno}: bad action {action!r}")

@@ -19,7 +19,10 @@ EDITS_SCHEMA = {
         "properties": {
             "file": {
                 "type": "string",
-                "description": "Prefixed path, e.g. 'logseq:pages/Foo.md' or 'org:notes.org'",
+                "description": (
+                    "Prefixed path, e.g. 'logseq:pages/Foo.md', "
+                    "'org:notes.org' or 'org:notes.md'"
+                ),
             },
             "find": {
                 "type": "string",

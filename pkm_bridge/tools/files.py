@@ -28,7 +28,7 @@ class ListFilesTool(BaseTool):
 
     @property
     def description(self) -> str:
-        dirs_info = f"PRIMARY (org-mode): {self.org_dir}"
+        dirs_info = f"PRIMARY (notes, .org and/or .md): {self.org_dir}"
         if self.logseq_dir:
             dirs_info += f"\nSECONDARY (Logseq, read-only): {self.logseq_dir}"
         return f"""List files in PKM directories. Directories:\n{dirs_info}"""
@@ -52,7 +52,10 @@ class ListFilesTool(BaseTool):
                 },
                 "directory": {
                     "type": "string",
-                    "description": "Which directory: 'both' (default), 'org-mode', or 'logseq'",
+                    "description": (
+                        "Which directory: 'both' (default), 'org-mode' "
+                        "(the primary notes dir, holding .org and/or .md), or 'logseq'"
+                    ),
                     "default": "both",
                 },
             },
@@ -161,7 +164,8 @@ class ReadNoteTool(BaseTool):
     def description(self) -> str:
         return (
             "Read a note file. Accepts prefixed paths ('org:notes.org', "
-            "'logseq:pages/Foo.md') or plain relative paths. Large files are "
+            "'org:journals/2026-02-13.md', 'logseq:pages/Foo.md') or plain "
+            "relative paths. Large files are "
             "truncated with an offset hint for paging."
         )
 

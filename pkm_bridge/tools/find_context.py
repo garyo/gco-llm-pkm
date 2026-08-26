@@ -55,7 +55,7 @@ class FindContextTool(BaseTool):
 
     @property
     def description(self) -> str:
-        dirs_info = f"PRIMARY (org-mode): {self.org_dir}"
+        dirs_info = f"PRIMARY (notes, .org and/or .md): {self.org_dir}"
         if self.logseq_dir:
             dirs_info += f"\nSECONDARY (Logseq): {self.logseq_dir}"
 
@@ -77,7 +77,8 @@ Returns YAML with the following fields for each match:
   the matched line)
 
 Context structure:
-- For org files: includes parent headings up to root, current heading, and direct content under
+- For org and heading-structured markdown files: includes parent headings up to root, the
+  current heading, and direct content under
   that heading (stops at child headings)
 - For markdown files: includes parent bullets (less indented), matched line, and child content
   (more indented)
@@ -205,11 +206,32 @@ Default directories searched (if paths not provided):
         }
 
     def _parse_markdown_structure(self, lines: List[str], match_line: int) -> Dict[str, Any]:
-        """Parse markdown/Logseq file structure and extract context for a match.
+        """Parse markdown file structure and extract context for a match.
+
+        Two markdown dialects live here.  Logseq notes are indented bullet
+        outlines, where the parent bullets are the context.  Converted PKM
+        notes are `#` headings with flat bullets underneath, where the
+        enclosing heading is the context -- so both are collected, and
+        whichever the file actually uses is what comes back.
 
         Returns:
-            Dict with parent_bullets and section_content
+            Dict with parent_headings, parent_bullets and section_content
         """
+        # Enclosing heading chain, for heading-structured markdown
+        parent_headings: List[tuple] = []
+        heading_stack: List[tuple] = []
+        for i in range(0, match_line):
+            m = re.match(r"^(#+)\s+(.*?)\s*$", lines[i])
+            if not m:
+                continue
+            level = len(m.group(1))
+            # `## Travel ^travel` -- the anchor is a link target, not text
+            text = re.sub(r"\s+\^[\w-]+$", "", m.group(2))
+            while heading_stack and heading_stack[-1][0] >= level:
+                heading_stack.pop()
+            heading_stack.append((level, text))
+        parent_headings = list(heading_stack)
+
         # Calculate indentation of the matched line
         matched_line = lines[match_line]
         match_indent = len(matched_line) - len(matched_line.lstrip())
@@ -238,6 +260,7 @@ Default directories searched (if paths not provided):
             section_content.append(line.strip())
 
         return {
+            "parent_headings": parent_headings,
             "parent_bullets": parent_bullets,
             "section_content": "\n".join(section_content).strip(),
         }
@@ -452,8 +475,13 @@ Default directories searched (if paths not provided):
                 else:  # markdown
                     context = self._parse_markdown_structure(lines, line_num)
 
-                    # Build full context with parent bullets
+                    # Build full context: headings if the file has them,
+                    # parent bullets for Logseq-style outlines.
                     full_context = []
+                    for level, heading in context.get("parent_headings", []):
+                        full_context.append("#" * level + " " + heading)
+                    if context.get("parent_headings"):
+                        full_context.append("")
                     for indent, bullet in context["parent_bullets"]:
                         full_context.append(" " * indent + bullet)
                     full_context.append(context["section_content"])

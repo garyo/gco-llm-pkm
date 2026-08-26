@@ -11,6 +11,32 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def split_frontmatter(lines: List[str]) -> tuple[Dict[str, str], int]:
+    """Split a YAML frontmatter block off the top of a markdown file.
+
+    Returns the parsed scalar fields and the 0-indexed line where the body
+    starts.  Only the flat `key: value` form the PKM writes is understood --
+    enough for title/id/date/tags, and it degrades to "no frontmatter" rather
+    than guessing at anything richer.
+
+    Applies to the Logseq archive as well: 2069 of its files carry
+    title/updated/created frontmatter from the OneNote import.
+
+    A block with no `key: value` line at all is a horizontal rule, not
+    frontmatter, and is left alone.
+    """
+    if not lines or lines[0].strip() != "---":
+        return {}, 0
+    meta: Dict[str, str] = {}
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            return (meta, i + 1) if meta else ({}, 0)
+        m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", line.strip())
+        if m:
+            meta[m.group(1)] = m.group(2).strip().strip('"')
+    return {}, 0  # unterminated: treat as ordinary content
+
+
 @dataclass
 class Chunk:
     """Represents a semantically coherent chunk of text."""
@@ -253,12 +279,16 @@ class NoteChunker:
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
+        # Frontmatter is metadata, not prose: embedding it would put a UUID in
+        # every file's first chunk.  The title is worth keeping as context.
+        meta, body_start = split_frontmatter(lines)
+
         # Parse heading and bullet structure
         current_chunk_lines: List[str] = []
-        current_start_line = 1
-        current_heading_stack: List[str] = []
+        current_start_line = body_start + 1
+        current_heading_stack: List[str] = [meta["title"]] if meta.get("title") else []
 
-        for line_num, line in enumerate(lines, 1):
+        for line_num, line in enumerate(lines[body_start:], body_start + 1):
             # Match markdown heading (# ## ### etc.)
             heading_match = re.match(r"^(#+)\s+(.+)$", line)
 
@@ -276,6 +306,10 @@ class NoteChunker:
 
                 # Update heading stack
                 heading_text = heading_match.group(2).strip()
+                # `## Travel ^travel` -- the anchor is a link target, not text
+                heading_text = re.sub(r"\s+\^[\w-]+$", "", heading_text)
+                # `# [Emacs](../pages/Emacs.md)` -- embed the label, not the URL
+                heading_text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading_text)
 
                 # Reset for new section
                 current_heading_stack = [heading_text]
@@ -401,7 +435,10 @@ class NoteChunker:
         Returns:
             Chunk object or None if content too small
         """
-        content_text = "".join(content_lines).strip()
+        content_text = "".join(content_lines)
+        # Machine-maintained blocks (backlinks, tombstones) are bookkeeping,
+        # not prose; embedding them just adds dates and paths to the index.
+        content_text = re.sub(r"<!--.*?-->", "", content_text, flags=re.S).strip()
 
         # Skip if too small
         token_count = self.estimate_tokens(content_text)

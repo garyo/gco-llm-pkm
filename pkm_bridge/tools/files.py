@@ -38,7 +38,13 @@ class ListFilesTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Glob pattern ('*.org', '**/*.org')"},
+                "pattern": {
+                    "type": "string",
+                    "description": (
+                        "Glob pattern. Notes are .md or .org "
+                        "('*', '**/*.md', 'journals/*')"
+                    ),
+                },
                 "show_stats": {
                     "type": "boolean",
                     "description": "Show sizes & mtimes",

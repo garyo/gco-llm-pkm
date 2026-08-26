@@ -8,6 +8,8 @@ import { orgFoldService, autoFoldPropertyDrawers } from './org-fold';
 import { orgBlocks } from './org-blocks';
 import { orgImageField } from './org-images';
 import { orgLinkField, createOrgLinkClickHandler } from './org-links';
+import { mdImageField } from './md-images';
+import { createMdLinkClickHandler } from './md-links';
 import { ticktickCheckboxField, ticktickCheckboxClickHandler } from './org-checkboxes';
 
 /** Create and mount a CodeMirror editor for the given file. */
@@ -71,6 +73,10 @@ export function createEditor(
       orgLinkField,
       createOrgLinkClickHandler(filepath),
     );
+  } else {
+    // Markdown gets the same inline images and click-through links org has.
+    // Link syntax is readable as-is, so nothing is folded.
+    extensions.push(mdImageField, createMdLinkClickHandler(filepath));
   }
 
   const view = new EditorView({

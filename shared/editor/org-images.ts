@@ -1,92 +1,11 @@
-import { Decoration, WidgetType, EditorView } from '@codemirror/view';
-import type { DecorationSet } from '@codemirror/view';
-import { StateField } from '@codemirror/state';
-import type { Text, Range } from '@codemirror/state';
-import { STORAGE_KEYS } from './types';
+import { createAssetImageField } from './asset-images';
 
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']);
+/** `[[file:../assets/NAME]]` or `[[file:assets/NAME]]`, with optional description. */
+const ORG_ASSET_IMAGE_RE = /\[\[file:(?:\.\.\/)*assets\/([^\]/]+)\](?:\[([^\]]+)\])?\]/g;
 
-/** `[[file:../assets/NAME]]` or `[[file:assets/NAME]]`, with optional description.
- *  Images live in one flat assets/ dir, so the filename alone locates them. */
-const ORG_ASSET_IMAGE_RE =
-  /\[\[file:(?:\.\.\/)*assets\/([^\]/]+)\](?:\[([^\]]+)\])?\]/g;
-
-class OrgImageWidget extends WidgetType {
-  constructor(
-    private url: string,
-    private alt: string,
-  ) {
-    super();
-  }
-
-  toDOM(): HTMLElement {
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'padding: 4px 0; max-width: 400px;';
-    wrapper.className = 'org-image-preview';
-
-    const img = document.createElement('img');
-    const authToken = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
-    const tokenParam = authToken ? `?token=${authToken}` : '';
-    img.src = this.url + tokenParam;
-    img.alt = this.alt;
-    img.loading = 'lazy';
-    img.style.cssText = 'max-width: 100%; border-radius: 4px; cursor: pointer;';
-    img.title = 'Click to open full size';
-    img.addEventListener('click', () => window.open(img.src, '_blank'));
-
-    wrapper.appendChild(img);
-    return wrapper;
-  }
-
-  eq(other: OrgImageWidget): boolean {
-    return this.url === other.url;
-  }
-
-  get estimatedHeight(): number {
-    return 200;
-  }
-}
-
-function buildOrgImageDecorations(doc: Text): DecorationSet {
-  const widgets: Range<Decoration>[] = [];
-  const linkRe = ORG_ASSET_IMAGE_RE;
-
-  for (let lineNum = 1; lineNum <= doc.lines; lineNum++) {
-    const line = doc.line(lineNum);
-    let match;
-    linkRe.lastIndex = 0;
-
-    while ((match = linkRe.exec(line.text)) !== null) {
-      const filename = match[1];
-      const ext = '.' + filename.split('.').pop()?.toLowerCase();
-      if (!IMAGE_EXTS.has(ext)) continue;
-
-      const url = `/assets/${filename}`;
-      const alt = match[2] || filename;
-
-      widgets.push(
-        Decoration.widget({
-          widget: new OrgImageWidget(url, alt),
-          block: true,
-          side: 1,
-        }).range(line.to)
-      );
-    }
-  }
-
-  return Decoration.set(widgets, true);
-}
-
-/** StateField providing block image decorations for [[attachment:…]] links. */
-export const orgImageField = StateField.define<DecorationSet>({
-  create(state) {
-    return buildOrgImageDecorations(state.doc);
-  },
-  update(value, tr) {
-    if (tr.docChanged) {
-      return buildOrgImageDecorations(tr.state.doc);
-    }
-    return value;
-  },
-  provide: (f) => EditorView.decorations.from(f),
+/** StateField previewing `[[file:…/assets/NAME]]` images. */
+export const orgImageField = createAssetImageField({
+  re: ORG_ASSET_IMAGE_RE,
+  filename: (m) => m[1],
+  alt: (m) => m[2],
 });

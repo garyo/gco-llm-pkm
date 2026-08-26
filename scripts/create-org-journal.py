@@ -23,7 +23,17 @@ def main() -> int:
         print(f"Error: ORG_DIR does not exist: {org_dir}", file=sys.stderr)
         return 1
 
-    date_str = sys.argv[2] if len(sys.argv) > 2 else datetime.now().strftime("%Y-%m-%d")
+    args = sys.argv[2:]
+    fmt = None
+    if "--format" in args:
+        i = args.index("--format")
+        if i + 1 >= len(args) or args[i + 1] not in ("org", "md"):
+            print("Error: --format takes 'org' or 'md'.", file=sys.stderr)
+            return 1
+        fmt = args[i + 1]
+        del args[i : i + 2]
+
+    date_str = args[0] if args else datetime.now().strftime("%Y-%m-%d")
 
     try:
         date = datetime.strptime(date_str, "%Y-%m-%d")
@@ -32,7 +42,9 @@ def main() -> int:
         return 1
 
     journal_dir = org_dir / "journals"
-    filepath = journal_dir / f"{date_str}.org"
+    if fmt is None:
+        fmt = "md" if any(journal_dir.glob("*.md")) else "org"
+    filepath = journal_dir / f"{date_str}.{fmt}"
 
     if filepath.exists():
         print(filepath)
@@ -41,16 +53,26 @@ def main() -> int:
     journal_dir.mkdir(exist_ok=True)
 
     dow = date.strftime("%a")
-    org_uuid = str(uuid.uuid4()).upper()
+    note_id = str(uuid.uuid4()).upper()
 
-    filepath.write_text(
-        f"#+title: {date_str}\n"
-        f"\n"
-        f"* <{date_str} {dow}>\n"
-        f":PROPERTIES:\n"
-        f":ID:       {org_uuid}\n"
-        f":END:\n\n"
-    )
+    if fmt == "md":
+        # The org date wrapper collapses into frontmatter; sections start at #.
+        filepath.write_text(
+            f"---\n"
+            f'title: "{date_str}"\n'
+            f"id: {note_id}\n"
+            f"date: {date_str}\n"
+            f"---\n\n"
+        )
+    else:
+        filepath.write_text(
+            f"#+title: {date_str}\n"
+            f"\n"
+            f"* <{date_str} {dow}>\n"
+            f":PROPERTIES:\n"
+            f":ID:       {note_id}\n"
+            f":END:\n\n"
+        )
 
     print(filepath)
     return 0

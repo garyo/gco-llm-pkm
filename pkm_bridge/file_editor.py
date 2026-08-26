@@ -4,7 +4,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 # Cap for read_file to keep large notes from blowing the LLM token budget.
 # Editor/checkbox callers opt out (max_chars=None) since they need full content.
@@ -146,9 +146,12 @@ class FileEditor:
         """
         files = []
 
-        # Scan org directory for .org files
+        # Scan the notes directory. Both suffixes are listed so the corpus
+        # stays browsable while it is being converted from org to markdown,
+        # and afterwards without further change.
         if self.org_dir and self.org_dir.exists():
-            for file_path in self.org_dir.rglob("*.org"):
+            note_files = (p for pattern in ("*.org", "*.md") for p in self.org_dir.rglob(pattern))
+            for file_path in note_files:
                 if file_path.is_file():
                     rel_path = file_path.relative_to(self.org_dir)
 
@@ -223,7 +226,7 @@ class FileEditor:
         filepath: str,
         offset: int = 0,
         max_chars: int | None = READ_FILE_CHAR_CAP,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """Read file content.
 
         Args:
@@ -276,7 +279,7 @@ class FileEditor:
         content: str,
         create_only: bool = False,
         expected_mtime: float | None = None,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """Write file content.
 
         Args:

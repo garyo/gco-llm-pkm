@@ -2,9 +2,9 @@ import { Decoration, WidgetType, EditorView } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
 import { StateField } from '@codemirror/state';
 import type { EditorState as CMEditorState, Text, Range } from '@codemirror/state';
+import { IMAGE_EXTS } from './asset-images';
+import { navigateTo, openExternal, resolveRelativePath } from './link-target';
 import { STORAGE_KEYS } from './types';
-
-const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp']);
 
 class OrgLinkWidget extends WidgetType {
   constructor(
@@ -82,41 +82,6 @@ export const orgLinkField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-/** Resolve a relative file: link against the current prefixed path
- * ("org:journals/x.org" + "file:../y.org" -> "org:y.org"). Absolute targets
- * can't be mapped into the org:/logseq: namespaces, so they're skipped.
- * A numeric ::suffix becomes a target line; other ::suffixes are dropped. */
-function resolveFileLink(
-  target: string,
-  currentFilePath: string,
-): { path: string; line: number | null } | null {
-  let rel = target.slice('file:'.length);
-  let line: number | null = null;
-
-  const sep = rel.indexOf('::');
-  if (sep >= 0) {
-    const suffix = rel.slice(sep + 2);
-    rel = rel.slice(0, sep);
-    if (/^\d+$/.test(suffix)) line = parseInt(suffix, 10);
-  }
-
-  const colon = currentFilePath.indexOf(':');
-  if (!rel || rel.startsWith('/') || colon < 0) return null;
-
-  const prefix = currentFilePath.slice(0, colon);
-  const parts = currentFilePath.slice(colon + 1).split('/').slice(0, -1);
-  for (const seg of rel.split('/')) {
-    if (seg === '' || seg === '.') continue;
-    if (seg === '..') {
-      if (parts.length === 0) return null; // escapes the prefix root
-      parts.pop();
-    } else {
-      parts.push(seg);
-    }
-  }
-  return { path: `${prefix}:${parts.join('/')}`, line };
-}
-
 /** Open an org link target. Handles id:, http(s):, and file: links. */
 function openOrgLinkTarget(
   target: string,
@@ -127,7 +92,7 @@ function openOrgLinkTarget(
   if (target.startsWith('http://') || target.startsWith('https://')) {
     event.preventDefault();
     event.stopPropagation();
-    window.open(target, '_blank');
+    openExternal(target);
     return true;
   }
 
@@ -141,28 +106,18 @@ function openOrgLinkTarget(
     fetch(`/api/resolve-org-id/${encodeURIComponent(uuid)}`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (data) {
-          window.dispatchEvent(
-            new CustomEvent('editor:navigate', {
-              detail: { path: data.path, line: data.line || null },
-            })
-          );
-        }
+        if (data) navigateTo(data.path, data.line || null);
       })
       .catch((err) => console.error('Failed to resolve org-id:', err));
     return true;
   }
 
   if (target.startsWith('file:')) {
-    const resolved = resolveFileLink(target, currentFilePath);
+    const resolved = resolveRelativePath(target.slice('file:'.length), currentFilePath);
     if (resolved) {
       event.preventDefault();
       event.stopPropagation();
-      window.dispatchEvent(
-        new CustomEvent('editor:navigate', {
-          detail: { path: resolved.path, line: resolved.line },
-        })
-      );
+      navigateTo(resolved.path, resolved.line);
       return true;
     }
     return false;

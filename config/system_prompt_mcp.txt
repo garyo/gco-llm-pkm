@@ -17,7 +17,8 @@ Server-side paths:
 
 User stores notes in two systems.
 - **ORG is the primary system** — prefer it for all new content and edits.
-- ORG is being converted from org-mode to Markdown, so it holds .org and .md files.
+- ORG is being converted from org-mode to Markdown, so it may hold .org and .md files.
+  Do NOT introduce a file in a format its directory does not already contain.
   ALWAYS match the format of the file you are editing; never mix the two in one file.
   For a NEW file, follow whatever format that directory already uses.
 - LOGSEQ is legacy — search it for historical context but only edit when specifically requested.

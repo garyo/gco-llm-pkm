@@ -806,17 +806,8 @@ import EditorInterface from '../components/EditorInterface.astro';
       editorTab?.classList.remove('bg-white/20');
       editorTab?.classList.add('bg-white/0');
 
-      // Flush (don't just cancel) any pending autosave before leaving the
-      // editor tab -- cleanupAutoSaveTimers() alone would drop an edit that
-      // was waiting out its debounce. The Save button is disabled exactly
-      // when the editor is clean, so use it as the dirty signal; clicking it
-      // when no file is loaded/dirty is a harmless no-op in EditorInterface.
-      const saveButton = document.getElementById('save-button') as HTMLButtonElement | null;
-      if (saveButton && !saveButton.disabled) {
-        saveButton.click();
-      }
-      const cleanup = (window as any).cleanupAutoSaveTimers;
-      if (cleanup) cleanup();
+      // Persist the draft and write any pending edit before leaving the editor tab.
+      (window as any).flushEditor?.();
 
       // Scroll chat to bottom when switching to it
       setTimeout(() => {
@@ -838,11 +829,6 @@ import EditorInterface from '../components/EditorInterface.astro';
       editorTab?.classList.add('bg-white/20');
       chatTab?.classList.remove('bg-white/20');
       chatTab?.classList.add('bg-white/0');
-
-      // Refresh auto-save settings when switching to editor
-      // (in case user changed settings in settings page via same tab navigation)
-      const refresh = (window as any).refreshAutoSaveSettings;
-      if (refresh) refresh();
 
       // Rebuild the editor DOM from its state on re-entry. Recovers from any
       // DOM/state desync accumulated while editing (mobile IME quirks) while

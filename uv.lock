@@ -960,6 +960,7 @@ dependencies = [
     { name = "google-auth-oauthlib" },
     { name = "litellm" },
     { name = "mcp", extra = ["cli"] },
+    { name = "merge3" },
     { name = "pgvector" },
     { name = "psycopg2-binary" },
     { name = "pyjwt" },
@@ -996,6 +997,7 @@ requires-dist = [
     { name = "google-auth-oauthlib", specifier = ">=1.2.0" },
     { name = "litellm", specifier = ">=1.50.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.28,<2.0.0" },
+    { name = "merge3", specifier = ">=0.0.16" },
     { name = "pgvector", specifier = ">=0.2.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.9" },
     { name = "pyjwt", specifier = ">=2.8.0" },
@@ -1660,6 +1662,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "merge3"
+version = "0.0.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/71/daaa7978561b9a7bfdcee4ba5ec2ead6162f6a9d2e2edf069def96085c6b/merge3-0.0.16.tar.gz", hash = "sha256:0852de4381cb46be5ef4ed49e3ac20c5a4a0cd46a8ff4bbb870bc27aab543306", size = 15915, upload-time = "2025-10-15T16:22:25.548Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/e9/a94184895f008ecc70ae4d227deb6a4209bb4f86c5f35b79b8cf6fc23ee4/merge3-0.0.16-py3-none-any.whl", hash = "sha256:b9d907b7281213a5dca1d711d168c4f8fe8aca20d74e2456bb177c4f31dfd927", size = 16546, upload-time = "2025-10-15T16:22:24.08Z" },
 ]
 
 [[package]]

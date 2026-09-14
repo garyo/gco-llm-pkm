@@ -1,10 +1,17 @@
 """File editor functionality for PKM notes."""
 
+import fcntl
+import hashlib
 import logging
-import os
 import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Generator, List
+
+from .fileio import atomic_write, content_hash
+from .merge import three_way_merge
+from .version_store import version_store
 
 # Cap for read_file to keep large notes from blowing the LLM token budget.
 # Editor/checkbox callers opt out (max_chars=None) since they need full content.
@@ -12,7 +19,56 @@ READ_FILE_CHAR_CAP = 200_000
 
 
 class ConflictError(Exception):
-    """Raised when a save is rejected due to a stale mtime (optimistic concurrency)."""
+    """A save was rejected because the file changed underneath the caller.
+
+    reason: 'stale' (legacy mtime check), 'overlap' (both sides edited the same
+    lines; `merged` carries the conflict-marked text), or 'base_unknown' (the
+    version the edits were made against is no longer available to merge with).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        reason: str = "stale",
+        theirs: Dict[str, Any] | None = None,
+        merged: str | None = None,
+    ):
+        super().__init__(message)
+        self.reason = reason
+        self.theirs = theirs
+        self.merged = merged
+
+    def to_response(self) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"error": "conflict", "reason": self.reason, "message": str(self)}
+        if self.theirs is not None:
+            body["theirs"] = self.theirs
+        if self.merged is not None:
+            body["merged"] = self.merged
+        return body
+
+
+# Per-path serialisation of check-merge-write. The thread lock covers this
+# process; the flock covers the MCP server, which writes the same files from a
+# sibling process. Lock files live outside the synced note tree.
+_LOCK_DIR = Path(tempfile.gettempdir()) / "pkm-locks"
+_thread_locks: Dict[str, threading.Lock] = {}
+_thread_locks_guard = threading.Lock()
+
+
+@contextmanager
+def _path_lock(full_path: Path) -> Generator[None, None, None]:
+    key = str(full_path)
+    with _thread_locks_guard:
+        lock = _thread_locks.setdefault(key, threading.Lock())
+    with lock:
+        _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+        lock_file = _LOCK_DIR / (hashlib.sha1(key.encode()).hexdigest() + ".lock")
+        with open(lock_file, "w") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 class FileEditor:
@@ -252,6 +308,7 @@ class FileEditor:
             raise ValueError(f"Not a file: {filepath}")
 
         full_content = full_path.read_text(encoding="utf-8")
+        digest = version_store.put(filepath, full_content)
         total_chars = len(full_content)
 
         content = full_content[offset:] if offset else full_content
@@ -265,11 +322,13 @@ class FileEditor:
                 f"Read more with offset={next_offset}.]"
             )
 
+        stat = full_path.stat()
         return {
             "content": content,
             "path": filepath,
-            "modified": full_path.stat().st_mtime,
-            "size": full_path.stat().st_size,
+            "hash": digest,
+            "modified": stat.st_mtime,
+            "size": stat.st_size,
             "truncated": truncated,
         }
 
@@ -279,91 +338,128 @@ class FileEditor:
         content: str,
         create_only: bool = False,
         expected_mtime: float | None = None,
+        base_hash: str | None = None,
     ) -> Dict[str, Any]:
-        """Write file content.
+        """Write file content, merging with concurrent changes when a base is given.
 
         Args:
             filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
             content: File content to write
             create_only: If True, only create the file if it doesn't exist (atomic check)
-            expected_mtime: If set, reject the write if the file's current mtime is newer
-                            (optimistic concurrency control to prevent silent overwrites).
+            expected_mtime: Legacy optimistic-concurrency token: reject if the file's mtime
+                            is newer. Ignored when base_hash is given.
+            base_hash: Hash of the content these edits were made against. If the file has
+                       changed since, the two sets of changes are three-way merged and
+                       the merged text is written (status 'merged', with `content`).
 
         Returns:
-            Dict with status and modified timestamp.
-            Status is 'saved' for new/updated files, 'exists' if create_only and file exists.
+            Dict with status ('saved' | 'merged' | 'unchanged' | 'exists'), path, hash,
+            modified, size, and `content` when merged.
 
         Raises:
             ValueError: If file path is invalid
-            FileExistsError: (via create_only)
-            ConflictError: If expected_mtime is stale (caller should return 409)
+            ConflictError: The file changed and the edits could not be reconciled
+                           (caller should return 409)
         """
         # Fallback keeps edits targeting the existing file (wherever it lives)
         # instead of creating a duplicate at the requested location.
         full_path, filepath = self._resolve_with_fallback(filepath)
-
-        # Ensure parent directory exists
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Optimistic concurrency check: reject if file changed since client loaded it
-        if expected_mtime is not None and full_path.exists():
-            actual_mtime = full_path.stat().st_mtime
-            if actual_mtime > expected_mtime:
-                raise ConflictError(
-                    f"File modified on disk (expected mtime {expected_mtime}, "
-                    f"actual {actual_mtime})"
-                )
-
-        # Write file
         if create_only:
-            # Use exclusive create mode - atomically fails if file exists
-            try:
-                with open(full_path, "x", encoding="utf-8") as f:
-                    f.write(content)
-                self.logger.info(f"Created file: {filepath} ({len(content)} bytes)")
-                return {
-                    "status": "saved",
-                    "path": filepath,
-                    "modified": full_path.stat().st_mtime,
-                    "size": len(content),
-                }
-            except FileExistsError:
-                self.logger.info(f"File already exists (create_only): {filepath}")
-                return {
-                    "status": "exists",
-                    "path": filepath,
-                    "modified": full_path.stat().st_mtime,
-                    "size": full_path.stat().st_size,
-                }
-        else:
-            self._atomic_write(full_path, content)
-            self.logger.info(f"Saved file: {filepath} ({len(content)} bytes)")
-            return {
-                "status": "saved",
-                "path": filepath,
-                "modified": full_path.stat().st_mtime,
-                "size": len(content),
-            }
+            return self._create_exclusive(full_path, filepath, content)
+
+        with _path_lock(full_path):
+            current = full_path.read_text(encoding="utf-8") if full_path.exists() else None
+            status = "saved"
+            if base_hash is not None and current is not None:
+                content, status = self._reconcile(filepath, full_path, base_hash, content, current)
+            elif expected_mtime is not None and current is not None:
+                actual_mtime = full_path.stat().st_mtime
+                if actual_mtime > expected_mtime:
+                    raise ConflictError(
+                        f"File modified on disk (expected mtime {expected_mtime}, "
+                        f"actual {actual_mtime})",
+                        theirs=self._file_data(filepath, full_path, current),
+                    )
+
+            if status == "unchanged":
+                return {"status": status, **self._file_data(filepath, full_path, content)}
+
+            if current is not None:
+                version_store.put(filepath, current)
+            atomic_write(full_path, content)
+            version_store.put(filepath, content)
+
+        self.logger.info(f"{status.capitalize()} file: {filepath} ({len(content)} bytes)")
+        result = {"status": status, **self._file_data(filepath, full_path, content)}
+        if status == "merged":
+            result["content"] = content
+        return result
+
+    def merge_preview(self, filepath: str, content: str, base_hash: str) -> Dict[str, Any]:
+        """What write_file would write for these edits, without writing.
+
+        `hash`/`modified` describe the on-disk version the result is now based on.
+        """
+        full_path, filepath = self._resolve_with_fallback(filepath)
+        if not full_path.exists():
+            raise ValueError(f"File not found: {filepath}")
+        with _path_lock(full_path):
+            current = full_path.read_text(encoding="utf-8")
+            merged, status = self._reconcile(filepath, full_path, base_hash, content, current)
+            disk = self._file_data(filepath, full_path, current)
+            return {"status": status, **disk, "content": merged}
+
+    def _reconcile(
+        self, filepath: str, full_path: Path, base_hash: str, mine: str, current: str
+    ) -> tuple[str, str]:
+        """Combine `mine` (edited against base_hash) with `current` (on disk).
+
+        Returns (text, status). Raises ConflictError when they cannot be combined.
+        """
+        if content_hash(current) == base_hash:
+            return mine, "saved"
+        if mine == current:
+            return mine, "unchanged"
+
+        theirs = self._file_data(filepath, full_path, current)
+        base = version_store.get(base_hash)
+        if base is None:
+            raise ConflictError(
+                "File modified on disk and the base version is no longer available",
+                reason="base_unknown",
+                theirs=theirs,
+            )
+        result = three_way_merge(base, mine, current)
+        if not result.clean:
+            raise ConflictError(
+                "File modified on disk on the same lines you edited",
+                reason="overlap",
+                theirs=theirs,
+                merged=result.merged,
+            )
+        return result.merged, "merged"
+
+    def _create_exclusive(self, full_path: Path, filepath: str, content: str) -> Dict[str, Any]:
+        try:
+            with open(full_path, "x", encoding="utf-8") as f:
+                f.write(content)
+        except FileExistsError:
+            self.logger.info(f"File already exists (create_only): {filepath}")
+            existing = full_path.read_text(encoding="utf-8")
+            return {"status": "exists", **self._file_data(filepath, full_path, existing)}
+        version_store.put(filepath, content)
+        self.logger.info(f"Created file: {filepath} ({len(content)} bytes)")
+        return {"status": "saved", **self._file_data(filepath, full_path, content)}
 
     @staticmethod
-    def _atomic_write(full_path: Path, content: str) -> None:
-        """Write content atomically: temp file in the same dir, then os.replace().
-
-        A crash or a Syncthing read mid-write can never see a partially written note —
-        readers observe either the old or the new file, never a truncated one.
-        """
-        directory = full_path.parent
-        fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{full_path.name}.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_name, full_path)
-        except BaseException:
-            # Best-effort cleanup; os.replace already consumed tmp_name on success.
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+    def _file_data(filepath: str, full_path: Path, content: str) -> Dict[str, Any]:
+        stat = full_path.stat()
+        return {
+            "path": filepath,
+            "content": content,
+            "hash": content_hash(content),
+            "modified": stat.st_mtime,
+            "size": stat.st_size,
+        }

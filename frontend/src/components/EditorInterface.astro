@@ -114,6 +114,12 @@
     </div>
   </div>
 
+  <!-- Conflict banner: shown while a conflict awaits a decision -->
+  <div id="conflict-banner" class="hidden flex items-center justify-between gap-3 px-3 py-2 text-sm bg-amber-100 text-amber-900 border-b border-amber-300">
+    <span>Unsaved changes; this file changed on disk. Autosave is paused.</span>
+    <button id="conflict-resolve" class="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium">Resolve</button>
+  </div>
+
   <!-- Editor Container -->
   <div id="editor-container" class="flex-1 overflow-hidden">
     <!-- CodeMirror will be mounted here -->
@@ -121,49 +127,35 @@
 </div>
 
 <!-- Conflict Resolution Modal -->
-<div id="conflict-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center" onclick="if(event.target === this) hideConflictModal()">
+<div id="conflict-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
   <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-    <h3 class="text-xl font-bold text-gray-800 mb-3">⚠️ File Modified Remotely</h3>
-
-    <p class="text-sm text-gray-700 mb-4">
-      This file was changed on disk while you were editing.
-    </p>
-
+    <h3 class="text-xl font-bold text-gray-800 mb-3">File Changed on Disk</h3>
+    <p id="conflict-reason" class="text-sm text-gray-700 mb-4"></p>
     <div class="bg-gray-50 rounded p-3 mb-4 text-sm space-y-1">
       <div class="flex justify-between">
-        <span class="text-gray-600">Your changes:</span>
+        <span class="text-gray-600">Your version is based on:</span>
         <span class="font-mono text-gray-800" id="conflict-local-time"></span>
       </div>
       <div class="flex justify-between">
-        <span class="text-gray-600">Remote changes:</span>
+        <span class="text-gray-600">Version on disk:</span>
         <span class="font-mono text-gray-800" id="conflict-remote-time"></span>
       </div>
     </div>
-
     <div class="flex flex-col gap-2">
-      <button
-        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-        onclick="resolveConflict('save-mine')"
-      >
-        Save My Version (Overwrite Remote)
+      <button id="conflict-keep-mine" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+        Keep Mine (Overwrite Disk)
       </button>
-      <button
-        class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium"
-        onclick="resolveConflict('reload-remote')"
-      >
-        Reload Remote Version (Discard Mine)
+      <button id="conflict-keep-theirs" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium">
+        Keep Disk Version (Discard Mine)
       </button>
-      <button
-        class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
-        onclick="resolveConflict('backup-and-reload')"
-      >
-        Backup Mine & Reload Remote
+      <button id="conflict-backup-and-reload" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">
+        Back Up Mine &amp; Keep Disk Version
       </button>
-      <button
-        class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium"
-        onclick="hideConflictModal()"
-      >
-        Cancel (Keep Editing)
+      <button id="conflict-edit-merged" class="hidden px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium">
+        Edit Merged (Resolve Markers by Hand)
+      </button>
+      <button id="conflict-cancel" class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">
+        Decide Later (Keep Editing, Autosave Paused)
       </button>
     </div>
   </div>
@@ -194,18 +186,14 @@
 </style>
 
 <script>
-  import { EditorView } from '@codemirror/view';
+  import { EditorView, type ViewUpdate } from '@codemirror/view';
   import { createEditor } from '@pkm/editor/createEditor';
   import { autoFoldPropertyDrawers } from '@pkm/editor/org-fold';
-
-  // Constants for localStorage keys
-  const STORAGE_KEYS = {
-    AUTO_SAVE_ENABLED: 'pkm-autoSave',
-    AUTO_SAVE_DELAY: 'pkm-autoSaveDelay',
-  } as const;
-
-  // Type definitions
-  type ConflictAction = 'save-mine' | 'reload-remote' | 'backup-and-reload';
+  import { FileApi } from '@pkm/editor/file-api';
+  import { DraftStore } from '@pkm/editor/draft-store';
+  import { ViewAdapter } from '@pkm/editor/diff-apply';
+  import { SaveController, autoSaveSettingsFromStorage, type FileChangeEvent } from '@pkm/editor/save-state';
+  import { initConflictUI } from '@pkm/editor/conflict-ui';
 
 
   // Pending scroll line for cross-component navigation
@@ -226,20 +214,7 @@
   let editorView: EditorView | null = null;
   let currentFile: string | null = null;
   let fileLoadRequested = false;  // Any explicit load suppresses the default today-journal open
-  let isDirty = false;
   let allFiles: any[] = [];
-  let currentFileMtime: number | null = null;  // Track file modification time
-
-  // Auto-save state
-  let autoSaveTimeout: number | null = null;
-  let lastSaveTime: number | null = null;
-  let conflictDetected = false;
-  let statusUpdateInterval: number | null = null;
-  let saveInProgress = false;  // Track when we're saving to ignore our own SSE events
-
-  // Cached auto-save settings (for performance - avoid reading localStorage on every keystroke)
-  let cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
-  let cachedAutoSaveDelay = parseInt(localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000');
 
   // Navigation history for back button
   const navHistory: { path: string; line?: number }[] = [];
@@ -280,57 +255,49 @@
       .finally(() => clearTimeout(timeout));
   }
 
-  // Verify if a save actually completed despite timeout
-  async function verifySaveCompleted(filepath: string, expectedContent: string): Promise<boolean> {
-    // Skip verification if offline - no point waiting for another timeout
-    if (!navigator.onLine) {
-      console.log('Skipping save verification - offline');
-      return false;
-    }
-
-    try {
-      // Fetch the file from server to check if it was saved
-      // Use short timeout - if network is slow, we'll know quickly
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}`, {
-        headers: getAuthHeaders()
-      }, 3000);
-
-      if (!res.ok) return false;
-
-      const data = await res.json();
-
-      // Compare content to see if our save went through
-      return data.content === expectedContent;
-    } catch (e) {
-      console.error('Failed to verify save:', e);
-      return false;
-    }
-  }
-
-  // Check if a backup file was created
-  async function checkBackupExists(backupPath: string): Promise<boolean> {
-    // Skip verification if offline
-    if (!navigator.onLine) {
-      console.log('Skipping backup verification - offline');
-      return false;
-    }
-
-    try {
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(backupPath)}`, {
-        headers: getAuthHeaders()
-      }, 3000); // Short timeout
-
-      return res.ok;
-    } catch (e) {
-      return false;
-    }
-  }
-
   // DOM elements
   const editorContainer = document.getElementById('editor-container')!;
   const fileSelector = document.getElementById('file-selector') as HTMLSelectElement;
   const saveButton = document.getElementById('save-button') as HTMLButtonElement;
   const refreshButton = document.getElementById('refresh-button') as HTMLButtonElement;
+
+  // Save plumbing: accounting, drafts, autosave, conflicts all live in the
+  // shared controller; this component only renders its callbacks.
+  const fileApi = new FileApi();
+  const docAdapter = new ViewAdapter(() => editorView);
+  const saver = new SaveController({
+    api: fileApi,
+    drafts: new DraftStore(localStorage),
+    doc: docAdapter,
+    settings: autoSaveSettingsFromStorage,
+    onStatus: (msg, isError) => updateStatus(msg, isError),
+    onDirtyChange: (dirty) => {
+      saveButton.disabled = !dirty;
+    },
+    onConflict: () => conflictUI.refresh(),
+  });
+  const conflictUI = initConflictUI(saver, fileApi, (msg, isError) => updateStatus(msg, isError));
+  saver.attachLifecycle();
+
+  function onDocChanged(update: ViewUpdate) {
+    docAdapter.onUpdate(update);
+    saver.noteDocChanged();
+  }
+
+  /** Manual refresh: re-list files and reconcile the open file with disk. */
+  async function refreshFile() {
+    await loadFileList();
+    await saver.checkDisk();
+  }
+
+  async function refreshAfterResume() {
+    try {
+      await loadFileList();
+    } catch (e) {
+      console.error('Failed to refresh file list after resume:', e);
+    }
+    await saver.checkDisk();
+  }
   const editorStatus = document.getElementById('editor-status')!;
   const sourceFilter = document.getElementById('source-filter') as HTMLSelectElement;
   const typeFilter = document.getElementById('type-filter') as HTMLSelectElement;
@@ -580,32 +547,13 @@
   // Load file content
   async function loadFile(filepath: string) {
     fileLoadRequested = true;
-    // Check for unsaved changes
-    if (isDirty && currentFile) {
-      if (!confirm('You have unsaved changes. Discard them?')) {
-        // Revert selector to current file
-        fileSelector.value = currentFile;
-        return;
-      }
-    }
-
-    // Clean up auto-save timers from previous file
-    cleanupAutoSaveTimers();
-    lastSaveTime = null;
-    conflictDetected = false;
+    // Unsaved text is never lost on a switch: it is written if autosave is on,
+    // and kept as a draft (restored on reopen) either way.
+    saver.flush();
 
     try {
       updateStatus('Loading...');
-
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(filepath)}`, {
-        headers: getAuthHeaders()
-      }, 15000);
-
-      if (!res.ok) {
-        throw new Error(`Failed to load file: ${res.status}`);
-      }
-
-      const data = await res.json();
+      const data = await fileApi.load(filepath);
 
       // The server may resolve the request to a different location (pages/
       // fallback); adopt its canonical path so saves, links, and the selector
@@ -613,15 +561,11 @@
       const canonical = data.path || filepath;
 
       // Reinitialize editor with correct language mode for this file type
+      saver.dispose();
       if (editorView) {
         editorView.destroy();
       }
-      editorView = createEditor(editorContainer, canonical, () => {
-        isDirty = true;
-        updateStatus('Modified (unsaved)');
-        saveButton.disabled = false;
-        scheduleAutoSave();
-      });
+      editorView = createEditor(editorContainer, canonical, onDocChanged);
 
       // Set content
       if (editorView) {
@@ -655,9 +599,7 @@
       }
 
       currentFile = canonical;
-      currentFileMtime = data.modified || null;  // Track modification time
-      isDirty = false;
-      saveButton.disabled = true;
+      saver.onLoaded({ ...data, path: canonical });
 
       // Update file display
       updateFileDisplay(canonical);
@@ -693,191 +635,6 @@
     }
   }
 
-  // Save file
-  async function saveFile(force = false) {
-    if (!editorView || !currentFile) return;
-
-    // Prevent race condition with SSE events
-    saveInProgress = true;
-
-    try {
-      saveButton.disabled = true;
-      updateStatus('Saving...');
-
-      const content = editorView.state.doc.toString();
-      const body: Record<string, any> = { content };
-      if (!force) {
-        body.expected_mtime = currentFileMtime;
-      }
-
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(body)
-      }, 30000); // 30s timeout for saves
-
-      if (res.status === 409) {
-        // Server rejected save -- file changed on disk since we loaded it
-        conflictDetected = true;
-        updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
-        showConflictModal(null);
-        return;
-      }
-
-      if (!res.ok) {
-        throw new Error(`Failed to save file: ${res.status}`);
-      }
-
-      const data = await res.json();
-
-      // Update mtime from response
-      currentFileMtime = data.modified;
-      isDirty = false;
-      const size = (data.size / 1024).toFixed(1);
-      updateStatus(`Saved ${data.path} (${size} KB)`);
-
-      // Re-enable after a moment if there are changes
-      setTimeout(() => {
-        if (!isDirty) {
-          saveButton.disabled = true;
-        }
-      }, 500);
-    } catch (e: any) {
-      // If timeout, verify if save actually completed
-      if (e.name === 'AbortError') {
-        updateStatus('Save timed out, verifying...', true);
-
-        const content = editorView!.state.doc.toString();
-        const verified = await verifySaveCompleted(currentFile, content);
-
-        if (verified) {
-          // Save actually succeeded despite timeout
-          updateStatus('Saved (response was slow)');
-          isDirty = false;
-          saveButton.disabled = true;
-          currentFileMtime = Date.now() / 1000; // Approximate, but better than nothing
-        } else {
-          // Save genuinely failed or couldn't verify
-          updateStatus('⚠️ Save timed out. Verify file before closing!', true);
-          saveButton.disabled = false;
-        }
-      } else {
-        // Other error (not timeout)
-        updateStatus(`Error saving file: ${e.message}`, true);
-        console.error('Failed to save file:', e);
-        saveButton.disabled = false;
-      }
-    } finally {
-      saveInProgress = false;
-    }
-  }
-
-  // Refresh file from server
-  async function refreshFile() {
-    // Always refresh the file list first (immediate, not debounced - user action)
-    await loadFileList();
-
-    // Then reload current file if one is open
-    if (!currentFile) return;
-
-    // Warn if there are unsaved changes
-    if (isDirty) {
-      if (!confirm('You have unsaved changes. Reloading will discard them. Continue?')) {
-        return;
-      }
-    }
-
-    // Reload the file
-    await loadFile(currentFile);
-  }
-
-  // Update current file content in-place without destroying/recreating the editor.
-  // Returns true if content was updated, false if content was unchanged or no editor.
-  async function refreshFileInPlace(): Promise<boolean> {
-    if (!currentFile) return false;
-
-    const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
-      headers: getAuthHeaders()
-    }, 5000);
-    if (!res.ok) return false;
-
-    const data = await res.json();
-
-    // Skip if mtime hasn't advanced
-    if (currentFileMtime && data.modified && data.modified <= currentFileMtime) {
-      return false;
-    }
-
-    // The user may have typed while the fetch was in flight; don't clobber
-    // their edits. Conflict handling will pick this up on the next event.
-    if (isDirty) return false;
-
-    if (editorView) {
-      // Replacing the document mid-IME-composition corrupts the editor DOM on
-      // mobile keyboards. Skip; a later event or resume will retry.
-      if (editorView.composing) return false;
-
-      const currentContent = editorView.state.doc.toString();
-      if (data.content !== currentContent) {
-        const head = editorView.state.selection.main.head;
-        editorView.dispatch({
-          changes: { from: 0, to: editorView.state.doc.length, insert: data.content },
-          selection: { anchor: Math.min(head, data.content.length) },
-        });
-      }
-      currentFileMtime = data.modified || null;
-      isDirty = false;
-      saveButton.disabled = true;
-      return true;
-    }
-
-    return false;
-  }
-
-  // Silently refresh file list and current file after returning from background.
-  // Skips reload if the editor has unsaved changes (shows conflict instead).
-  async function refreshAfterResume() {
-    try {
-      await loadFileList();
-    } catch (e) {
-      console.error('Failed to refresh file list after resume:', e);
-    }
-
-    if (!currentFile) return;
-
-    if (isDirty) {
-      // Don't silently overwrite -- check mtime to see if there's a real conflict
-      try {
-        const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
-          headers: getAuthHeaders()
-        }, 5000);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.modified && currentFileMtime && data.modified > currentFileMtime) {
-            conflictDetected = true;
-            updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
-            if (cachedAutoSaveEnabled) {
-              showConflictModal(data.modified);
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Failed to check file mtime after resume:', e);
-      }
-      return;
-    }
-
-    // Editor is clean -- only reload if file actually changed on disk
-    try {
-      const updated = await refreshFileInPlace();
-      if (updated) {
-        updateStatus(`Refreshed ${currentFile!.split('/').pop()}`);
-      }
-    } catch (e) {
-      console.error('Failed to refresh file after resume:', e);
-    }
-  }
-
   // Update status message
   function updateStatus(message: string, isError: boolean = false) {
     editorStatus.textContent = message;
@@ -902,244 +659,6 @@
 
     currentFilePath.textContent = displayPath;
     currentFileDisplay.classList.remove('hidden');
-  }
-
-  // Auto-save functions
-  function cleanupAutoSaveTimers() {
-    if (autoSaveTimeout) {
-      clearTimeout(autoSaveTimeout);
-      autoSaveTimeout = null;
-    }
-    if (statusUpdateInterval) {
-      clearInterval(statusUpdateInterval);
-      statusUpdateInterval = null;
-    }
-  }
-
-  function refreshAutoSaveSettings() {
-    cachedAutoSaveEnabled = localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_ENABLED) !== 'false';
-    cachedAutoSaveDelay = parseInt(localStorage.getItem(STORAGE_KEYS.AUTO_SAVE_DELAY) || '2000');
-  }
-
-  function scheduleAutoSave() {
-    if (!cachedAutoSaveEnabled || !isDirty || !currentFile || conflictDetected) {
-      return;
-    }
-
-    // Clear existing timeout
-    if (autoSaveTimeout) {
-      clearTimeout(autoSaveTimeout);
-    }
-
-    // Update status to show countdown
-    const seconds = (cachedAutoSaveDelay / 1000).toFixed(0);
-    updateStatus(`Modified • Auto-saving in ${seconds}s...`);
-
-    // Schedule save
-    autoSaveTimeout = setTimeout(async () => {
-      await performAutoSave();
-    }, cachedAutoSaveDelay) as unknown as number;
-  }
-
-  async function performAutoSave() {
-    if (!editorView || !currentFile || !isDirty) return;
-
-    // Check for conflict (detected by SSE in real-time)
-    if (conflictDetected) {
-      updateStatus('⚠️ Auto-save paused (conflict detected)', true);
-      return;
-    }
-
-    // Prevent race condition: mark that we're saving so handleFileChanged ignores our SSE event
-    saveInProgress = true;
-
-    try {
-      updateStatus('Auto-saving...');
-      const content = editorView.state.doc.toString();
-
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(currentFile)}`, {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ content, expected_mtime: currentFileMtime })
-      }, 30000); // 30s timeout for auto-saves
-
-      if (res.status === 409) {
-        // Server rejected save -- file changed on disk since we loaded it
-        conflictDetected = true;
-        updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
-        showConflictModal(null);
-        return;
-      }
-
-      if (!res.ok) {
-        throw new Error(`Failed to save: ${res.status}`);
-      }
-
-      const data = await res.json();
-
-      // Update state
-      currentFileMtime = data.modified;
-      isDirty = false;
-      lastSaveTime = Date.now();
-      saveButton.disabled = true;
-
-      const size = (data.size / 1024).toFixed(1);
-      updateStatus(`Auto-saved (${size} KB)`);
-
-      // Start updating "X seconds ago"
-      startStatusUpdateTimer();
-    } catch (e: any) {
-      // If timeout, verify if save actually completed
-      if (e.name === 'AbortError') {
-        updateStatus('Auto-save timed out, verifying...', true);
-
-        const content = editorView!.state.doc.toString();
-        const verified = await verifySaveCompleted(currentFile, content);
-
-        if (verified) {
-          // Save actually succeeded despite timeout
-          updateStatus('Auto-saved (response was slow)');
-          isDirty = false;
-          lastSaveTime = Date.now();
-          saveButton.disabled = true;
-          startStatusUpdateTimer();
-        } else {
-          // Save genuinely failed or couldn't verify
-          updateStatus('⚠️ Auto-save timed out. Manual save recommended.', true);
-        }
-      } else {
-        // Other error (not timeout)
-        updateStatus(`Auto-save failed: ${e.message}`, true);
-        console.error('Auto-save error:', e);
-      }
-    } finally {
-      // Always clear the flag, even on error
-      saveInProgress = false;
-    }
-  }
-
-  function startStatusUpdateTimer() {
-    // Clear existing interval
-    if (statusUpdateInterval) {
-      clearInterval(statusUpdateInterval);
-    }
-
-    // Update every 5 seconds to show "Saved X seconds ago"
-    statusUpdateInterval = setInterval(() => {
-      if (!isDirty && lastSaveTime && !conflictDetected) {
-        const secondsAgo = Math.floor((Date.now() - lastSaveTime) / 1000);
-        if (secondsAgo < 60) {
-          updateStatus(`Saved ${secondsAgo}s ago`);
-        } else {
-          const minutesAgo = Math.floor(secondsAgo / 60);
-          updateStatus(`Saved ${minutesAgo}m ago`);
-        }
-      }
-    }, 5000) as unknown as number;
-  }
-
-  function showConflictModal(remoteMtime: number | null) {
-    const modal = document.getElementById('conflict-modal')!;
-    const localTime = document.getElementById('conflict-local-time')!;
-    const remoteTime = document.getElementById('conflict-remote-time')!;
-
-    if (currentFileMtime) {
-      const localDate = new Date(currentFileMtime * 1000);
-      localTime.textContent = localDate.toLocaleTimeString();
-    } else {
-      localTime.textContent = 'Unknown';
-    }
-
-    if (remoteMtime) {
-      const remoteDate = new Date(remoteMtime * 1000);
-      remoteTime.textContent = remoteDate.toLocaleTimeString();
-    } else {
-      remoteTime.textContent = 'Newer than local';
-    }
-
-    modal.classList.remove('hidden');
-  }
-
-  function hideConflictModal() {
-    const modal = document.getElementById('conflict-modal')!;
-    modal.classList.add('hidden');
-  }
-
-  async function resolveConflict(action: ConflictAction) {
-    hideConflictModal();
-    conflictDetected = false;
-
-    if (action === 'save-mine') {
-      // Force save, overwriting remote (skip mtime check)
-      updateStatus('Saving your version...');
-      await saveFile(true);
-
-    } else if (action === 'reload-remote') {
-      // Discard local, reload remote
-      if (currentFile) {
-        await loadFile(currentFile);
-      }
-
-    } else if (action === 'backup-and-reload') {
-      // Create backup, then reload
-      await createBackup();
-      if (currentFile) {
-        await loadFile(currentFile);
-      }
-    }
-  }
-
-  async function createBackup() {
-    if (!editorView || !currentFile) return;
-
-    const content = editorView.state.doc.toString();
-    const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
-
-    // Handle files with and without extensions correctly
-    const lastSlash = currentFile.lastIndexOf('/');
-    const fileName = lastSlash >= 0 ? currentFile.substring(lastSlash + 1) : currentFile;
-    const hasExtension = fileName.includes('.') && !fileName.startsWith('.');
-
-    let backupPath: string;
-    if (hasExtension) {
-      backupPath = currentFile.replace(/(\.\w+)$/, `.backup-${timestamp}$1`);
-    } else {
-      // Files without extensions (README, Makefile, etc.)
-      backupPath = `${currentFile}.backup-${timestamp}`;
-    }
-
-    try {
-      updateStatus('Creating backup...');
-
-      const res = await fetchWithTimeout(`/api/file/${encodeURIComponent(backupPath)}`, {
-        method: 'PUT',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ content })
-      }, 30000);
-
-      if (!res.ok) {
-        throw new Error(`Failed to create backup: ${res.status}`);
-      }
-
-      const filename = backupPath.split('/').pop() || 'backup';
-      updateStatus(`Backup created: ${filename}`);
-    } catch (e: any) {
-      if (e.name === 'AbortError') {
-        updateStatus('Backup timed out, verifying...', true);
-
-        const exists = await checkBackupExists(backupPath);
-
-        if (exists) {
-          const filename = backupPath.split('/').pop() || 'backup';
-          updateStatus(`Backup created: ${filename} (response was slow)`);
-        } else {
-          updateStatus('⚠️ Backup creation timed out. Backup may not exist.', true);
-        }
-      } else {
-        console.error('Failed to create backup:', e);
-        updateStatus('Failed to create backup', true);
-      }
-    }
   }
 
   // Update SSE connection status indicator
@@ -1274,6 +793,11 @@
       return;
     }
 
+    if (type === 'file_deleted') {
+      handleFileChanged({ ...data, deleted: true });
+      return;
+    }
+
     if (type === 'open_file') {
       // Future: handle "open file" command from chat
       handleOpenFile(data);
@@ -1288,49 +812,10 @@
   }
 
   // Handle file change event
-  function handleFileChanged(data: any) {
-    const { path, mtime } = data;
-
+  function handleFileChanged(data: FileChangeEvent) {
     // Refresh file list (debounced - waits for file changes to settle)
     debouncedLoadFileList();
-
-    if (!currentFile) {
-      return;
-    }
-
-    // Check if the absolute path ends with the relative path from currentFile
-    const currentRelPath = currentFile.includes(':') ? currentFile.split(':', 2)[1] : currentFile;
-    if (!path.endsWith(currentRelPath)) {
-      return;
-    }
-
-    // Ignore file changes from our own saves (prevent false conflict detection)
-    if (saveInProgress) {
-      console.log('Ignoring file change event - save in progress');
-      return;
-    }
-
-    if (isDirty) {
-      // File is modified, show notification but don't auto-reload
-      conflictDetected = true;
-      updateStatus('⚠️ File changed on disk - conflicts need resolution', true);
-
-      // If auto-save is enabled, show conflict modal
-      if (cachedAutoSaveEnabled) {
-        showConflictModal(mtime);
-      }
-      return;
-    }
-
-    if (currentFileMtime && mtime <= currentFileMtime) {
-      // Mtime hasn't changed (or is older), skip
-      return;
-    }
-
-    // Auto-reload the file content in place (no editor flash)
-    refreshFileInPlace().catch(e => {
-      console.error('Failed to refresh file after change:', e);
-    });
+    saver.onExternalChange(data);
   }
 
   // Handle open file event from SSE
@@ -1532,7 +1017,7 @@
     }
   });
 
-  saveButton.addEventListener('click', () => saveFile());
+  saveButton.addEventListener('click', () => void saver.save());
   refreshButton.addEventListener('click', refreshFile);
 
   // Filter event listeners
@@ -1548,9 +1033,7 @@
     // Cmd/Ctrl + S to save
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault();
-      if (currentFile && isDirty) {
-        saveFile();
-      }
+      if (currentFile) void saver.save();
     }
 
     // Alt + Left arrow to go back
@@ -1558,14 +1041,6 @@
       e.preventDefault();
       navBack();
     }
-  });
-
-  // Warn before closing/navigating away with unsaved changes (pending autosave
-  // or a dirty doc would otherwise be silently discarded).
-  window.addEventListener('beforeunload', (e) => {
-    if (!isDirty) return;
-    e.preventDefault();
-    e.returnValue = '';
   });
 
   // Initialize when editor becomes visible
@@ -1728,16 +1203,6 @@
     }
   }, 30000); // Check every 30 seconds
 
-  // Listen for localStorage changes from other tabs (settings page)
-  window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEYS.AUTO_SAVE_ENABLED) {
-      cachedAutoSaveEnabled = e.newValue !== 'false';
-    }
-    if (e.key === STORAGE_KEYS.AUTO_SAVE_DELAY) {
-      cachedAutoSaveDelay = parseInt(e.newValue || '2000');
-    }
-  });
-
   // Rebuild the editor's DOM from its own state. Recovers from DOM/state
   // desync (e.g. a mobile IME composition gone wrong) without touching the
   // document, selection, or fold state. Cheap: only the viewport is rendered.
@@ -1772,10 +1237,7 @@
 
   // Make functions globally available for tab switching and conflict resolution
   (window as any).refreshFileList = loadFileList;
-  (window as any).resolveConflict = resolveConflict;
-  (window as any).hideConflictModal = hideConflictModal;
-  (window as any).cleanupAutoSaveTimers = cleanupAutoSaveTimers;
-  (window as any).refreshAutoSaveSettings = refreshAutoSaveSettings;
+  (window as any).flushEditor = () => saver.flush();
   (window as any).resyncEditorView = resyncEditorView;
   (window as any).reconnectSSEForNewSession = reconnectSSEForNewSession;
 </script>

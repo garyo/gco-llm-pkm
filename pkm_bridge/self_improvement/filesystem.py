@@ -7,30 +7,9 @@ the old .pkm-skills/ location.
 import os
 import shutil
 import stat
-import tempfile
 from pathlib import Path
 
-
-def _atomic_write(filepath: Path, content: str) -> None:
-    """Write content atomically: temp file in the same dir, then os.replace().
-
-    Mirrors FileEditor._atomic_write so a crash or concurrent read mid-write
-    can never observe a partially written memory file.
-    """
-    directory = filepath.parent
-    fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{filepath.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_name, filepath)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+from ..fileio import atomic_write
 
 
 def get_pkm_dir(org_dir: str | Path | None = None) -> Path:
@@ -245,7 +224,7 @@ def write_memory_file(
     if append and filepath.exists():
         existing = filepath.read_text(encoding="utf-8")
         content = existing.rstrip("\n") + "\n\n" + content
-    _atomic_write(filepath, content)
+    atomic_write(filepath, content)
     return filepath
 
 

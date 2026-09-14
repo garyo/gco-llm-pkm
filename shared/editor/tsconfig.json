@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "@codemirror/*": ["../../frontend-editor/node_modules/@codemirror/*"],
+      "@lezer/*": ["../../frontend-editor/node_modules/@lezer/*"],
+      "@replit/*": ["../../frontend-editor/node_modules/@replit/*"],
+      "codemirror": ["../../frontend-editor/node_modules/codemirror"]
+    }
+  }
+}

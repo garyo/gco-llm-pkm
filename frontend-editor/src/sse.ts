@@ -1,4 +1,5 @@
 import type { SSEState } from './types';
+import type { FileChangeEvent } from '@pkm/editor/save-state';
 import { MAX_RECONNECT_DELAY, SSE_GLOBAL_KEY, STORAGE_KEYS } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,7 +37,7 @@ function updateConnectionStatus(status: 'connecting' | 'connected' | 'disconnect
 
 export function connectSSE(
   sse: SSEState,
-  onFileChanged: (data: { path: string; mtime: number }) => void,
+  onFileChanged: (data: FileChangeEvent) => void,
   onOpenFile: (data: { path: string }) => void,
 ): void {
   const globalES = win[SSE_GLOBAL_KEY] as EventSource | null;
@@ -70,6 +71,7 @@ export function connectSSE(
         const message = JSON.parse(event.data);
         const { type, data } = message;
         if (type === 'file_changed') onFileChanged(data);
+        else if (type === 'file_deleted') onFileChanged({ ...data, deleted: true });
         else if (type === 'open_file') onOpenFile(data);
       } catch (e) {
         console.error('Failed to parse SSE event:', e);
@@ -95,7 +97,7 @@ export function connectSSE(
 
 export function setupSSEReconnection(
   sse: SSEState,
-  onFileChanged: (data: { path: string; mtime: number }) => void,
+  onFileChanged: (data: FileChangeEvent) => void,
   onOpenFile: (data: { path: string }) => void,
   onResume: () => void,
 ): void {

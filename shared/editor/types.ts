@@ -4,4 +4,6 @@
 
 export const STORAGE_KEYS = {
   AUTH_TOKEN: 'pkm-authToken',
+  AUTO_SAVE_ENABLED: 'pkm-autoSave',
+  AUTO_SAVE_DELAY: 'pkm-autoSaveDelay',
 } as const;

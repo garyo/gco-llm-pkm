@@ -30,6 +30,7 @@ dependencies = [
     # 2.0 renamed mcp.server.fastmcp; mcp_server/ targets the 1.x API, which
     # upstream now maintains for security fixes only.
     "mcp[cli]>=1.28,<2.0.0",
+    "merge3>=0.0.16",
 ]
 
 [project.optional-dependencies]

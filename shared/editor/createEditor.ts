@@ -1,4 +1,5 @@
 import { EditorView, basicSetup } from 'codemirror';
+import type { ViewUpdate } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { emacs } from '@replit/codemirror-emacs';
@@ -16,7 +17,7 @@ import { ticktickCheckboxField, ticktickCheckboxClickHandler } from './org-check
 export function createEditor(
   container: HTMLElement,
   filepath: string,
-  onDocChanged: () => void,
+  onDocChanged: (update: ViewUpdate) => void,
 ): EditorView {
   const isOrg = filepath.endsWith('.org');
   const langMode = isOrg ? orgMode : markdown();
@@ -34,7 +35,7 @@ export function createEditor(
     EditorView.lineWrapping,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
-        onDocChanged();
+        onDocChanged(update);
       }
     }),
     EditorView.theme({

@@ -271,6 +271,17 @@ def close_db() -> None:
         _engine = None
 
 
+class FileVersion(Base):
+    """Recently seen note contents by hash: the merge bases for concurrent saves."""
+
+    __tablename__ = "file_versions"
+
+    hash = Column(String(64), primary_key=True)
+    path = Column(String(1024), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
 class Document(Base):
     """Track which files have been embedded for RAG."""
 

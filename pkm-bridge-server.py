@@ -470,7 +470,8 @@ except Exception as e:
     logger.warning(f"Failed to ensure curation task: {e}")
 
 # Initialize file editor
-from pkm_bridge.file_editor import ConflictError, FileEditor
+from pkm_bridge.file_editor import FileEditor
+from pkm_bridge.save_api import handle_merge, handle_save
 
 file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
 
@@ -1999,7 +2000,7 @@ def get_file(filepath):
 @require_auth
 @limiter.limit("60 per minute")
 def save_file(filepath):
-    """Save file content.
+    """Save file content, merging with concurrent changes when base_hash is given.
 
     Args:
         filepath: Path in format "org:path/to/file.org" or "logseq:path/to/file.md"
@@ -2008,33 +2009,33 @@ def save_file(filepath):
         create_only: If "true", only create the file if it doesn't exist (atomic)
 
     Request body:
-        {"content": "file content here"}
+        {"content": "...", "base_hash": "<sha256 the edits were made against>"}
+        (legacy clients send "expected_mtime" instead of "base_hash")
 
     Returns:
-        JSON with status, path, modified timestamp.
-        Status is 'saved' for new/updated files, 'exists' if create_only and file exists.
+        JSON with status ('saved' | 'merged' | 'unchanged' | 'exists'), path, hash,
+        modified, size, and the merged content when status is 'merged'.
+        409 with reason 'overlap' | 'base_unknown' | 'stale' when the edits could
+        not be reconciled with the file on disk.
     """
     try:
-        data = request.json
-        if not data or "content" not in data:
-            return jsonify({"error": "Missing 'content' in request body"}), 400
-
-        create_only = request.args.get("create_only", "").lower() == "true"
-        expected_mtime = data.get("expected_mtime")
-        if expected_mtime is not None:
-            expected_mtime = float(expected_mtime)
-        result = file_editor.write_file(
-            filepath, data["content"], create_only=create_only, expected_mtime=expected_mtime
-        )
-        return jsonify(result)
-    except ValueError as e:
-        logger.warning(f"Invalid file path for save: {filepath} - {str(e)}")
-        return jsonify({"error": str(e)}), 400
-    except ConflictError as e:
-        logger.info(f"Conflict saving {filepath}: {e}")
-        return jsonify({"error": "conflict", "message": str(e)}), 409
+        body, status = handle_save(file_editor, logger, filepath, request.json, request.args)
+        return jsonify(body), status
     except Exception as e:
         logger.error(f"Error saving file {filepath}: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/file/<path:filepath>/merge", methods=["POST"])
+@require_auth
+@limiter.limit("60 per minute")
+def merge_file(filepath):
+    """Merge edits with the file on disk without writing (client-side rebase)."""
+    try:
+        body, status = handle_merge(file_editor, logger, filepath, request.json)
+        return jsonify(body), status
+    except Exception as e:
+        logger.error(f"Error merging file {filepath}: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -2235,7 +2236,7 @@ def toggle_checkbox():
             lines[target_line] = line
             new_content = "\n".join(lines)
 
-            file_editor.write_file(file_path, new_content)
+            file_editor.write_file(file_path, new_content, base_hash=file_data["hash"])
             logger.info(
                 f"Checkbox toggle: {'checked' if checked else 'unchecked'} "
                 f"line {target_line + 1} in {file_path}"
@@ -3952,9 +3953,9 @@ if __name__ == "__main__":
     logger.info("=" * 60)
 
     # Start file watcher for SSE notifications
-    watch_dirs = [config.org_dir]
+    watch_dirs = {"org": config.org_dir}
     if config.logseq_dir:
-        watch_dirs.append(config.logseq_dir)
+        watch_dirs["logseq"] = config.logseq_dir
     event_manager.start_file_watcher(watch_dirs)
     logger.info(f"File watcher started for {len(watch_dirs)} directories")
 

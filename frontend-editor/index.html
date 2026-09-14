@@ -132,6 +132,12 @@
       </div>
     </div>
 
+    <!-- Conflict banner: shown while a conflict awaits a decision -->
+    <div id="conflict-banner" class="hidden flex items-center justify-between gap-3 px-3 py-2 text-sm bg-amber-100 text-amber-900 border-b border-amber-300">
+      <span>Unsaved changes; this file changed on disk. Autosave is paused.</span>
+      <button id="conflict-resolve" class="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium">Resolve</button>
+    </div>
+
     <!-- Editor Container -->
     <div id="editor-container" class="flex-1 overflow-hidden">
       <!-- CodeMirror will be mounted here -->
@@ -168,32 +174,33 @@
   <!-- Conflict Resolution Modal -->
   <div id="conflict-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
     <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-      <h3 class="text-xl font-bold text-gray-800 mb-3">File Modified Remotely</h3>
-      <p class="text-sm text-gray-700 mb-4">
-        This file was changed on disk while you were editing.
-      </p>
+      <h3 class="text-xl font-bold text-gray-800 mb-3">File Changed on Disk</h3>
+      <p id="conflict-reason" class="text-sm text-gray-700 mb-4"></p>
       <div class="bg-gray-50 rounded p-3 mb-4 text-sm space-y-1">
         <div class="flex justify-between">
-          <span class="text-gray-600">Your changes:</span>
+          <span class="text-gray-600">Your version is based on:</span>
           <span class="font-mono text-gray-800" id="conflict-local-time"></span>
         </div>
         <div class="flex justify-between">
-          <span class="text-gray-600">Remote changes:</span>
+          <span class="text-gray-600">Version on disk:</span>
           <span class="font-mono text-gray-800" id="conflict-remote-time"></span>
         </div>
       </div>
       <div class="flex flex-col gap-2">
-        <button id="conflict-save-mine" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-          Save My Version (Overwrite Remote)
+        <button id="conflict-keep-mine" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+          Keep Mine (Overwrite Disk)
         </button>
-        <button id="conflict-reload-remote" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium">
-          Reload Remote Version (Discard Mine)
+        <button id="conflict-keep-theirs" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium">
+          Keep Disk Version (Discard Mine)
         </button>
         <button id="conflict-backup-and-reload" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium">
-          Backup Mine & Reload Remote
+          Back Up Mine &amp; Keep Disk Version
+        </button>
+        <button id="conflict-edit-merged" class="hidden px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium">
+          Edit Merged (Resolve Markers by Hand)
         </button>
         <button id="conflict-cancel" class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">
-          Cancel (Keep Editing)
+          Decide Later (Keep Editing, Autosave Paused)
         </button>
       </div>
     </div>

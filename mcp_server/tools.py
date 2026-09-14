@@ -342,7 +342,7 @@ def register_all_tools(mcp: FastMCP):
             mtime = result.get("modified", 0)
             duration_ms = int((time.time() - start) * 1000)
             _log_tool_execution("read_file", {"path": path}, f"({len(content)} bytes)", duration_ms)
-            return f"[mtime={mtime}]\n{content}"
+            return f"[mtime={mtime} hash={result.get('hash', '')}]\n{content}"
         except Exception as e:
             return (
                 f"Error reading file '{path}': {type(e).__name__}: {e}. "
@@ -355,6 +355,7 @@ def register_all_tools(mcp: FastMCP):
         path: str,
         content: str,
         create_only: bool = False,
+        base_hash: str | None = None,
         expected_mtime: float | None = None,
     ) -> str:
         """Write content to a PKM file. Creates parent directories if needed.
@@ -364,12 +365,18 @@ def register_all_tools(mcp: FastMCP):
         creating a duplicate (the result reports the actual path). Create NEW
         pages under pages/ (e.g. 'org:pages/topic.org'), not at the toplevel.
 
+        Always pass base_hash when rewriting an existing file: if the file
+        changed since you read it, your edits are three-way merged with the
+        changes on disk instead of overwriting them. Overlapping edits are
+        reported as a conflict, and nothing is written.
+
         Args:
             path: File path in format 'org:relative/path.org' or 'logseq:relative/path.md'
             content: File content to write
             create_only: If true, only create the file if it doesn't already exist
-            expected_mtime: If set, reject the write if the file was modified since this timestamp.
-                            Get this value from the [mtime=...] header in read_file responses.
+            base_hash: The hash=... value from the read_file header your edits are based on.
+            expected_mtime: Legacy alternative to base_hash (the mtime=... header value);
+                            rejects the write outright if the file changed.
         """
         from pkm_bridge.file_editor import ConflictError
 
@@ -377,7 +384,11 @@ def register_all_tools(mcp: FastMCP):
         start = time.time()
         try:
             result = editor.write_file(
-                path, content, create_only=create_only, expected_mtime=expected_mtime
+                path,
+                content,
+                create_only=create_only,
+                expected_mtime=expected_mtime,
+                base_hash=base_hash,
             )
             duration_ms = int((time.time() - start) * 1000)
             _log_tool_execution(
@@ -388,19 +399,24 @@ def register_all_tools(mcp: FastMCP):
             )
             msg = (
                 f"File {result['status']}: {result.get('path', path)}"
-                f" ({result.get('size', 0)} bytes)"
+                f" ({result.get('size', 0)} bytes, hash={result.get('hash', '')})"
             )
-            if expected_mtime is None and result["status"] == "saved" and not create_only:
+            if result["status"] == "merged":
                 msg += (
-                    "\n\nTip: pass expected_mtime from read_file's [mtime=...] header"
-                    " to prevent overwriting external changes."
+                    "\n\nThe file had changed on disk since you read it; your edits were "
+                    "merged with those changes. Re-read the file before editing it again."
+                )
+            elif base_hash is None and expected_mtime is None and not create_only:
+                msg += (
+                    "\n\nTip: pass base_hash from read_file's [hash=...] header so"
+                    " concurrent changes are merged instead of overwritten."
                 )
             return msg
         except ConflictError as e:
             return (
-                f"CONFLICT: {e}. The file was modified externally since you last read it. "
-                f"Please re-read the file with read_file('{path}') to get the latest "
-                "content and mtime, then retry your write."
+                f"CONFLICT ({e.reason}): {e}. Nothing was written. "
+                f"Re-read the file with read_file('{path}') to get the current content "
+                "and hash, redo your edit on top of it, then write again with base_hash."
             )
         except Exception as e:
             return (

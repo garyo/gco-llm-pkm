@@ -155,7 +155,6 @@ async function loadFile(filepath: string): Promise<void> {
     state.pendingScrollLine = null;
 
     state.currentFile = canonical;
-    saver.onLoaded({ ...data, path: canonical });
 
     updateFileDisplay(canonical);
     updateUrl(canonical);
@@ -173,6 +172,7 @@ async function loadFile(filepath: string): Promise<void> {
     const size = (data.size / 1024).toFixed(1);
     const fileType = canonical.endsWith('.org') ? 'Org' : 'Markdown';
     updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
+    saver.onLoaded({ ...data, path: canonical });
 
     closeFilterControls();
   } catch (e: unknown) {

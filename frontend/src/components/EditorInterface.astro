@@ -599,7 +599,6 @@
       }
 
       currentFile = canonical;
-      saver.onLoaded({ ...data, path: canonical });
 
       // Update file display
       updateFileDisplay(canonical);
@@ -624,6 +623,7 @@
       const size = (data.size / 1024).toFixed(1);
       const fileType = canonical.endsWith('.org') ? 'Org' : 'Markdown';
       updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
+      saver.onLoaded({ ...data, path: canonical });
 
       // Auto-collapse filters on mobile after loading a file
       closeFilterControls();

@@ -2,6 +2,7 @@
 
 import logging
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -12,6 +13,44 @@ from googleapiclient.errors import HttpError
 
 # Get logger
 logger = logging.getLogger(__name__)
+
+# The API caps a page at 2500 events and only ever sorts ascending, so the
+# newest events sit on the last page: reading a range to its end is the only
+# way to drop the oldest events rather than the newest when a query overflows
+# max_results. MAX_PAGES bounds a runaway query (an unbounded search over many
+# years) at a cost of one request per 2500 events.
+PAGE_SIZE = 2500
+MAX_PAGES = 20
+
+
+@dataclass
+class EventList:
+    """Events from a calendar query, with the total that matched it.
+
+    `total` counts everything in range, so a caller can tell a complete answer
+    from one trimmed to `max_results` instead of reading a short list as the
+    whole story.
+    """
+
+    events: List[Dict[str, Any]] = field(default_factory=list)
+    total: int = 0
+
+    @property
+    def truncated(self) -> bool:
+        """True if older events were dropped to fit max_results."""
+        return self.total > len(self.events)
+
+
+def _rfc3339_utc(dt: datetime) -> str:
+    """Format a datetime as an RFC3339 UTC timestamp for the API.
+
+    Naive datetimes are assumed to already be UTC (the form produced internally
+    by get_today_events/get_week_events); aware ones are converted to true UTC
+    instead of having their wall-clock time reinterpreted as UTC.
+    """
+    if dt.tzinfo is not None:
+        return dt.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z")
+    return dt.isoformat() + "Z"
 
 
 class GoogleCalendarClient:
@@ -51,6 +90,73 @@ class GoogleCalendarClient:
         except HttpError as e:
             raise Exception(f"Failed to list calendars: {e}")
 
+    def _query_events(
+        self, params: Dict[str, Any], max_results: int, newest_first: bool
+    ) -> EventList:
+        """Page through events.list, keeping the newest `max_results` matches.
+
+        Args:
+            params: Parameters for events().list(), minus paging.
+            max_results: Most events to keep. The API returns them oldest-first,
+                so the excess is trimmed off the front and the newest survive.
+            newest_first: Reverse the result into descending order.
+
+        Returns:
+            EventList of the kept events and the total the query matched.
+        """
+        kept: List[Dict[str, Any]] = []
+        total = 0
+        page_token = None
+
+        for _ in range(MAX_PAGES):
+            page = (
+                self.service.events()
+                .list(**params, maxResults=PAGE_SIZE, pageToken=page_token)
+                .execute()
+            )
+            items = page.get("items", [])
+            total += len(items)
+            kept.extend(items)
+            if len(kept) > max_results:
+                del kept[: len(kept) - max_results]
+
+            page_token = page.get("nextPageToken")
+            if not page_token:
+                break
+        else:
+            logger.warning(
+                f"Calendar query stopped at the {MAX_PAGES}-page limit after {total} events; "
+                "narrow the time range for a complete count"
+            )
+
+        if newest_first:
+            kept.reverse()
+
+        return EventList(kept, total)
+
+    def _event_params(
+        self,
+        calendar_id: str,
+        time_min: Optional[datetime],
+        time_max: Optional[datetime],
+        single_events: bool = True,
+        order_by: str = "startTime",
+        query: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build the events().list() parameters shared by listing and search."""
+        params: Dict[str, Any] = {
+            "calendarId": calendar_id,
+            "singleEvents": single_events,
+            "orderBy": order_by,
+        }
+        if time_min:
+            params["timeMin"] = _rfc3339_utc(time_min)
+        if time_max:
+            params["timeMax"] = _rfc3339_utc(time_max)
+        if query:
+            params["q"] = query
+        return params
+
     def get_events(
         self,
         calendar_id: str = "primary",
@@ -59,19 +165,24 @@ class GoogleCalendarClient:
         max_results: int = 50,
         single_events: bool = True,
         order_by: str = "startTime",
-    ) -> List[Dict[str, Any]]:
+        newest_first: bool = True,
+    ) -> EventList:
         """Get events from a calendar.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
             time_min: Start of time range (default: now)
             time_max: End of time range
-            max_results: Maximum number of events to return
+            max_results: Most events to return. When the range holds more, the
+                OLDEST are dropped, so a lookback always reaches what happened
+                most recently.
             single_events: Expand recurring events into instances
             order_by: Sort order ('startTime' or 'updated')
+            newest_first: Return newest first (default). Pass False for agenda
+                order.
 
         Returns:
-            List of event dictionaries
+            EventList of events and the total matching the range.
 
         Raises:
             Exception: If fetching events fails
@@ -79,39 +190,18 @@ class GoogleCalendarClient:
         try:
             # Default to now if no time_min provided
             if time_min is None:
-                time_min = datetime.utcnow()
+                time_min = datetime.now(ZoneInfo("UTC"))
 
-            # Format times as RFC3339 timestamps. Naive datetimes are assumed to
-            # already be UTC (the shape produced internally by get_today_events/
-            # get_week_events); timezone-aware datetimes (e.g. a date-only
-            # list_range value localized by the caller) are converted to true UTC
-            # instead of having their wall-clock time reinterpreted as UTC.
-            def _rfc3339_utc(dt: datetime) -> str:
-                if dt.tzinfo is not None:
-                    return dt.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z")
-                return dt.isoformat() + "Z"
-
-            params = {
-                "calendarId": calendar_id,
-                "timeMin": _rfc3339_utc(time_min),
-                "maxResults": max_results,
-                "singleEvents": single_events,
-                "orderBy": order_by,
-            }
-
-            if time_max:
-                params["timeMax"] = _rfc3339_utc(time_max)
-
-            events_result = self.service.events().list(**params).execute()
-            return events_result.get("items", [])
+            params = self._event_params(calendar_id, time_min, time_max, single_events, order_by)
+            return self._query_events(params, max_results, newest_first)
 
         except HttpError as e:
             raise Exception(f"Failed to list events: {e}")
 
     def get_today_events(
         self, calendar_id: str = "primary", user_timezone: str = None
-    ) -> List[Dict[str, Any]]:
-        """Get events for today.
+    ) -> EventList:
+        """Get events for today, in chronological order.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
@@ -119,7 +209,7 @@ class GoogleCalendarClient:
                 If None, uses server local time.
 
         Returns:
-            List of today's events
+            EventList of today's events
         """
         # Use user's timezone if provided, otherwise server local time
         if user_timezone:
@@ -149,23 +239,24 @@ class GoogleCalendarClient:
 
         logger.info(f"UTC time range for API: {time_min_utc} to {time_max_utc}")
 
-        events = self.get_events(
-            calendar_id=calendar_id, time_min=time_min_utc, time_max=time_max_utc
+        result = self.get_events(
+            calendar_id=calendar_id,
+            time_min=time_min_utc,
+            time_max=time_max_utc,
+            newest_first=False,
         )
 
-        logger.info(f"Found {len(events)} events for today")
-        for event in events:
+        logger.info(f"Found {result.total} events for today")
+        for event in result.events:
             start = event.get("start", {})
             logger.debug(
                 f"  Event: {event.get('summary')} at {start.get('dateTime') or start.get('date')}"
             )
 
-        return events
+        return result
 
-    def get_week_events(
-        self, calendar_id: str = "primary", user_timezone: str = None
-    ) -> List[Dict[str, Any]]:
-        """Get events for the next 7 days.
+    def get_week_events(self, calendar_id: str = "primary", user_timezone: str = None) -> EventList:
+        """Get events for the next 7 days, in chronological order.
 
         Args:
             calendar_id: Calendar ID (default: 'primary')
@@ -173,7 +264,7 @@ class GoogleCalendarClient:
                 If None, uses server local time.
 
         Returns:
-            List of this week's events
+            EventList of this week's events
         """
         # Use user's timezone if provided, otherwise server local time
         if user_timezone:
@@ -203,13 +294,16 @@ class GoogleCalendarClient:
 
         logger.info(f"UTC time range for API: {time_min_utc} to {time_max_utc}")
 
-        events = self.get_events(
-            calendar_id=calendar_id, time_min=time_min_utc, time_max=time_max_utc
+        result = self.get_events(
+            calendar_id=calendar_id,
+            time_min=time_min_utc,
+            time_max=time_max_utc,
+            newest_first=False,
         )
 
-        logger.info(f"Found {len(events)} events for the week")
+        logger.info(f"Found {result.total} events for the week")
 
-        return events
+        return result
 
     def create_event(
         self,
@@ -324,32 +418,35 @@ class GoogleCalendarClient:
             raise Exception(f"Failed to delete event {event_id}: {e}")
 
     def search_events(
-        self, query: str, calendar_id: str = "primary", max_results: int = 50
-    ) -> List[Dict[str, Any]]:
+        self,
+        query: str,
+        calendar_id: str = "primary",
+        max_results: int = 50,
+        time_min: Optional[datetime] = None,
+        time_max: Optional[datetime] = None,
+        newest_first: bool = True,
+    ) -> EventList:
         """Search for events by text query.
+
+        Searches the whole calendar unless bounded by time_min/time_max.
 
         Args:
             query: Search query string
             calendar_id: Calendar ID (default: 'primary')
-            max_results: Maximum number of results
+            max_results: Most matches to return; the oldest are dropped first.
+            time_min: Only match events starting at or after this time
+            time_max: Only match events starting before this time
+            newest_first: Return newest first (default)
 
         Returns:
-            List of matching events
+            EventList of matching events and the total that matched.
+
+        Raises:
+            Exception: If the search fails
         """
         try:
-            events_result = (
-                self.service.events()
-                .list(
-                    calendarId=calendar_id,
-                    q=query,
-                    maxResults=max_results,
-                    singleEvents=True,
-                    orderBy="startTime",
-                )
-                .execute()
-            )
-
-            return events_result.get("items", [])
+            params = self._event_params(calendar_id, time_min, time_max, query=query)
+            return self._query_events(params, max_results, newest_first)
 
         except HttpError as e:
             raise Exception(f"Failed to search events for '{query}': {e}")

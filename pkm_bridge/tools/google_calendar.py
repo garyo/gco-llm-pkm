@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from pkm_bridge.database import get_db
 from pkm_bridge.db_repository import OAuthRepository
-from pkm_bridge.google_calendar_client import GoogleCalendarClient
+from pkm_bridge.google_calendar_client import EventList, GoogleCalendarClient
 from pkm_bridge.google_oauth import GoogleOAuth
 from pkm_bridge.tools.base import BaseTool
 
@@ -42,6 +42,12 @@ class GoogleCalendarTool(BaseTool):
 - Delete events (requires event_id - use search first to get the ID)
 - Search for events by keyword (returns event IDs in [ID: xxx] format)
 - Quick add events using natural language
+
+list_range and search return the NEWEST events first and, when a range holds more
+events than fit, drop the oldest — so the most recent match is always shown. Pass
+order="oldest_first" for chronological order. If results were trimmed the output
+says so ("showing the N most recent of M"); only then is a narrower range needed.
+Bound a search with time_min/time_max to search within a period.
 
 You have access to ALL calendars the user has granted permission to, not just the primary
 calendar. Use list_calendars to see all available calendars, then use the calendar_id parameter
@@ -113,11 +119,18 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 },
                 "time_min": {
                     "type": "string",
-                    "description": "Start of date range in ISO format YYYY-MM-DD (for list_range)",
+                    "description": "Start of date range in ISO format YYYY-MM-DD "
+                    "(required for list_range, optional for search)",
                 },
                 "time_max": {
                     "type": "string",
-                    "description": "End of date range in ISO format YYYY-MM-DD (for list_range)",
+                    "description": "End of date range in ISO format YYYY-MM-DD "
+                    "(required for list_range, optional for search)",
+                },
+                "order": {
+                    "type": "string",
+                    "enum": ["newest_first", "oldest_first"],
+                    "description": "Result order for list_range and search (default: newest_first)",
                 },
                 "calendar_id": {
                     "type": "string",
@@ -181,6 +194,61 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
             self.logger.error(f"Error getting Google Calendar client: {e}")
             return None
 
+    def parse_time_bounds(
+        self, params: Dict[str, Any], user_timezone: Optional[str]
+    ) -> tuple[Optional[datetime], Optional[datetime]]:
+        """Parse optional time_min/time_max params into aware datetimes.
+
+        Date-only inputs parse as naive datetimes; localize them in the user's
+        timezone (falling back to UTC) instead of letting the client silently
+        treat them as UTC.
+
+        Raises:
+            ValueError: If either value is not ISO format.
+        """
+        try:
+            range_tz = ZoneInfo(user_timezone) if user_timezone else ZoneInfo("UTC")
+        except Exception:
+            range_tz = ZoneInfo("UTC")
+
+        bounds = []
+        for key in ("time_min", "time_max"):
+            value = params.get(key)
+            if not value:
+                bounds.append(None)
+                continue
+            parsed = datetime.fromisoformat(value)
+            bounds.append(parsed if parsed.tzinfo else parsed.replace(tzinfo=range_tz))
+
+        return bounds[0], bounds[1]
+
+    def format_events(
+        self,
+        client: GoogleCalendarClient,
+        result: EventList,
+        label: str,
+        empty: str,
+        include_id: bool = False,
+    ) -> str:
+        """Render an EventList, saying so when older events were dropped.
+
+        Without the note a trimmed list reads as the whole story, which is how a
+        lookback past a busy stretch silently reports the wrong "most recent".
+        """
+        if not result.events:
+            return empty
+
+        summaries = [client.format_event_summary(e, include_id=include_id) for e in result.events]
+        if result.truncated:
+            header = (
+                f"{label} — showing the {len(result.events)} most recent of {result.total}; "
+                "narrow the range to see the rest"
+            )
+        else:
+            header = f"{label} ({result.total})"
+
+        return f"{header}:\n" + "\n".join(f"• {s}" for s in summaries)
+
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute Google Calendar action.
 
@@ -205,6 +273,12 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
         try:
             calendar_id = params.get("calendar_id", "primary")
             user_timezone = context.get("user_timezone") if context else None
+            newest_first = params.get("order", "newest_first") == "newest_first"
+
+            try:
+                time_min, time_max = self.parse_time_bounds(params, user_timezone)
+            except ValueError as e:
+                return f"Error: Invalid date format: {e}"
 
             if action == "list_calendars":
                 self.logger.info("Executing list_calendars action")
@@ -233,70 +307,50 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                     f"Executing list_today action for calendar: {calendar_id}, "
                     f"user_timezone: {user_timezone}"
                 )
-                events = client.get_today_events(
+                result = client.get_today_events(
                     calendar_id=calendar_id, user_timezone=user_timezone
                 )
-                self.logger.info(f"list_today returned {len(events)} events")
+                self.logger.info(f"list_today returned {result.total} events")
 
-                if not events:
-                    return "No events scheduled for today."
-
-                summaries = [client.format_event_summary(e) for e in events]
-                return f"Today's events ({len(events)}):\n" + "\n".join(f"• {s}" for s in summaries)
+                return self.format_events(
+                    client, result, "Today's events", "No events scheduled for today."
+                )
 
             elif action == "list_week":
                 self.logger.info(
                     f"Executing list_week action for calendar: {calendar_id}, "
                     f"user_timezone: {user_timezone}"
                 )
-                events = client.get_week_events(
+                result = client.get_week_events(
                     calendar_id=calendar_id, user_timezone=user_timezone
                 )
-                self.logger.info(f"list_week returned {len(events)} events")
+                self.logger.info(f"list_week returned {result.total} events")
 
-                if not events:
-                    return "No events scheduled for the next 7 days."
-
-                summaries = [client.format_event_summary(e) for e in events]
-                return f"This week's events ({len(events)}):\n" + "\n".join(
-                    f"• {s}" for s in summaries
+                return self.format_events(
+                    client, result, "This week's events", "No events scheduled for the next 7 days."
                 )
 
             elif action == "list_range":
                 time_min_str = params.get("time_min")
                 time_max_str = params.get("time_max")
 
-                if not time_min_str or not time_max_str:
+                if not time_min or not time_max:
                     return "Error: Both time_min and time_max are required for list_range"
 
-                try:
-                    time_min = datetime.fromisoformat(time_min_str)
-                    time_max = datetime.fromisoformat(time_max_str)
-                except ValueError as e:
-                    return f"Error: Invalid date format: {e}"
-
-                # Date-only inputs parse as naive datetimes; localize them in the
-                # user's timezone (falling back to UTC) instead of letting the
-                # client silently treat them as UTC.
-                if time_min.tzinfo is None or time_max.tzinfo is None:
-                    try:
-                        range_tz = ZoneInfo(user_timezone) if user_timezone else ZoneInfo("UTC")
-                    except Exception:
-                        range_tz = ZoneInfo("UTC")
-                    if time_min.tzinfo is None:
-                        time_min = time_min.replace(tzinfo=range_tz)
-                    if time_max.tzinfo is None:
-                        time_max = time_max.replace(tzinfo=range_tz)
-
-                events = client.get_events(
-                    calendar_id=calendar_id, time_min=time_min, time_max=time_max
+                result = client.get_events(
+                    calendar_id=calendar_id,
+                    time_min=time_min,
+                    time_max=time_max,
+                    newest_first=newest_first,
                 )
 
-                if not events:
-                    return f"No events found between {time_min_str} and {time_max_str}."
-
-                summaries = [client.format_event_summary(e) for e in events]
-                return f"Events ({len(events)}):\n" + "\n".join(f"• {s}" for s in summaries)
+                order_note = "newest first" if newest_first else "oldest first"
+                return self.format_events(
+                    client,
+                    result,
+                    f"Events {time_min_str} to {time_max_str}, {order_note}",
+                    f"No events found between {time_min_str} and {time_max_str}.",
+                )
 
             elif action == "create":
                 summary = params.get("summary")
@@ -382,14 +436,22 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 if not query:
                     return "Error: query is required for searching"
 
-                events = client.search_events(query, calendar_id=calendar_id)
-                if not events:
-                    return f"No events found matching '{query}'."
+                result = client.search_events(
+                    query,
+                    calendar_id=calendar_id,
+                    time_min=time_min,
+                    time_max=time_max,
+                    newest_first=newest_first,
+                )
 
+                order_note = "newest first" if newest_first else "oldest first"
                 # Include event IDs in search results so they can be used for update/delete
-                summaries = [client.format_event_summary(e, include_id=True) for e in events]
-                return f"Events matching '{query}' ({len(events)}):\n" + "\n".join(
-                    f"• {s}" for s in summaries
+                return self.format_events(
+                    client,
+                    result,
+                    f"Events matching '{query}', {order_note}",
+                    f"No events found matching '{query}'.",
+                    include_id=True,
                 )
 
             elif action == "quick_add":

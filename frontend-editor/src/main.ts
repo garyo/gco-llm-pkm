@@ -18,6 +18,7 @@ import {
 import { initCalendar } from './calendar';
 import { createSSEState, connectSSE, setupSSEReconnection } from './sse';
 import { initConflictUI } from '@pkm/editor/conflict-ui';
+import { journalDateStr, journalPath, journalTemplate, findJournalForDate } from '@pkm/editor/journal';
 import { parseUrlParams, updateUrl, resolveUrlParams } from './url-params';
 
 // ---------------------------------------------------------------------------
@@ -208,35 +209,21 @@ function onDocChanged(update: import('@codemirror/view').ViewUpdate): void {
 // Today's journal
 // ---------------------------------------------------------------------------
 async function openTodayJournal(): Promise<void> {
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, '0');
-  const dd = String(today.getDate()).padStart(2, '0');
-  const dateStr = `${yyyy}-${mm}-${dd}`;
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const dayName = dayNames[today.getDay()];
-
-  const orgJ = state.allFiles.find(
-    (f) => f.type === 'journal' && f.dir === 'org' && f.name.includes(dateStr),
-  );
-  const logseqJ = state.allFiles.find(
-    (f) => f.type === 'journal' && f.dir === 'logseq' && f.name.includes(dateStr.replace(/-/g, '_')),
-  );
-  const todayFile = orgJ || logseqJ;
+  const dateStr = journalDateStr();
+  const todayFile = findJournalForDate(state.allFiles, dateStr);
 
   if (todayFile) {
     fileSelector.value = todayFile.full_path;
     await loadFile(todayFile.full_path);
   } else {
-    await createTodayJournal(dateStr, dayName);
+    await createTodayJournal(dateStr);
   }
 }
 
-async function createTodayJournal(dateStr: string, dayName: string): Promise<void> {
+async function createTodayJournal(dateStr: string): Promise<void> {
   updateStatus("Creating today's journal...");
-  const uuid = crypto.randomUUID().toUpperCase();
-  const template = `#+title: ${dateStr}\n\n* <${dateStr} ${dayName}>\n:PROPERTIES:\n:ID:       ${uuid}\n:END:\n`;
-  const filepath = `org:journals/${dateStr}.org`;
+  const template = journalTemplate(dateStr, crypto.randomUUID().toUpperCase());
+  const filepath = journalPath(dateStr);
 
   try {
     const result = await fileApi.save(filepath, template, { createOnly: true });
@@ -334,10 +321,7 @@ initCalendar(state, (dateKey, entry) => {
     fileSelector.value = entry.path;
     loadFile(entry.path);
   } else {
-    const [yyyy, mm, dd] = dateKey.split('-');
-    const date = new Date(parseInt(yyyy), parseInt(mm) - 1, parseInt(dd));
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    createTodayJournal(dateKey, dayNames[date.getDay()]);
+    createTodayJournal(dateKey);
   }
 });
 

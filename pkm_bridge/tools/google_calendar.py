@@ -165,38 +165,14 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
         try:
             db = get_db()
-            token = OAuthRepository.get_token(db, "google_calendar")
-
+            try:
+                token = OAuthRepository.refresh_if_expired(
+                    db, "google_calendar", self.oauth_handler, self.logger
+                )
+            finally:
+                db.close()
             if not token:
                 return None
-
-            # Check if token needs refresh
-            if OAuthRepository.is_token_expired(token):
-                self.logger.info("Google Calendar token expired, refreshing...")
-                try:
-                    new_token_data = self.oauth_handler.refresh_token(token.refresh_token)
-
-                    # Update token in database
-                    OAuthRepository.save_token(
-                        db=db,
-                        service="google_calendar",
-                        access_token=new_token_data["access_token"],
-                        refresh_token=new_token_data.get("refresh_token"),
-                        expires_at=new_token_data["expires_at"],
-                        scope=new_token_data.get("scope"),
-                    )
-
-                    token = OAuthRepository.get_token(db, "google_calendar")
-                    self.logger.info("Google Calendar token refreshed successfully")
-
-                except Exception as e:
-                    self.logger.error(f"Failed to refresh Google Calendar token: {e}")
-                    return None
-                finally:
-                    db.close()
-            else:
-                db.close()
-
             return GoogleCalendarClient(token.access_token, token.refresh_token)
 
         except Exception as e:

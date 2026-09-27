@@ -189,6 +189,30 @@ class ScheduledTaskRunRepository:
             q = q.filter_by(task_id=task_id)
         return q.order_by(ScheduledTaskRun.started_at.desc()).limit(limit).all()
 
+    @staticmethod
+    def fail_interrupted(db: Session, started_before: datetime) -> int:
+        """Mark runs still 'running' that began before `started_before` as failed.
+
+        A run row is finished by the process that started it, so rows left
+        'running' from before the server started were cut off by a crash or
+        restart.
+        """
+        count = (
+            db.query(ScheduledTaskRun)
+            .filter(ScheduledTaskRun.status == "running")
+            .filter(ScheduledTaskRun.started_at < started_before)
+            .update(
+                {
+                    ScheduledTaskRun.status: "failed",
+                    ScheduledTaskRun.completed_at: datetime.utcnow(),
+                    ScheduledTaskRun.error: "Interrupted by a server restart",
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        return count
+
 
 class DailyTokenUsageRepository:
     """Track aggregate daily token usage for budget enforcement."""

@@ -39,6 +39,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -108,13 +109,13 @@ from pkm_bridge.feedback_capture import capture_feedback, check_previous_correct
 
 # Import Google Calendar components
 from pkm_bridge.google_oauth import GoogleOAuth
-from pkm_bridge.logging_config import setup_logging
+from pkm_bridge.job_lock import run_exclusive, start_exclusive
+from pkm_bridge.logging_config import quiet_health_checks, setup_logging
 
 # Import org-mode link utilities
 from pkm_bridge.org_links import resolve_org_id_to_file
 from pkm_bridge.query_enhancer import QueryEnhancer
 from pkm_bridge.redact import redact_obj
-from pkm_bridge.retrospective import SessionRetrospective
 from pkm_bridge.scheduler.dispatcher import (
     TaskDispatcher,
     daily_cost_limit_usd,
@@ -159,16 +160,21 @@ from pkm_bridge.tools.ticktick import TickTickTool
 
 # Import voice preprocessor
 from pkm_bridge.voice_preprocessor import VoicePreprocessor
+from pkm_bridge.watchdog import EMBEDDING_JOB, record_job_finished, run_watchdog
 
 # -------------------------
 # Setup & Configuration
 # -------------------------
+
+# Anything this process finds 'running' from before now was started by an earlier one.
+server_started_at = datetime.utcnow()
 
 # Load configuration
 config = Config()
 
 # Setup logging
 logger = setup_logging(config.log_level)
+quiet_health_checks("werkzeug")
 
 # Initialize Anthropic client and multi-LLM adapter
 client = Anthropic(api_key=config.anthropic_api_key)
@@ -212,12 +218,8 @@ if voyage_api_key:
         if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
             embedding_scheduler = BackgroundScheduler()
 
-            def _scheduled_embedding():
-                gmail_oauth = globals().get("google_gmail_oauth")
-                run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
-
             embedding_scheduler.add_job(
-                func=_scheduled_embedding,
+                func=lambda: run_exclusive("embedding", _run_embedding, logger=logger),
                 trigger="interval",
                 hours=1,  # Run every hour
                 id="incremental_embedding",
@@ -232,8 +234,25 @@ if voyage_api_key:
 else:
     logger.warning("VOYAGE_API_KEY not set - RAG auto-injection disabled")
 
-# Initialize self-improvement agent (daily at 3 AM, replaces old retrospective)
-retrospective = SessionRetrospective(llm_client, logger)
+
+def _run_embedding() -> None:
+    """One incremental embedding pass; callers hold the "embedding" job lock."""
+    gmail_oauth = globals().get("google_gmail_oauth")
+    stats = run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
+    record_job_finished(EMBEDDING_JOB, stats)
+
+
+def _run_watchdog() -> None:
+    run_watchdog(
+        tz=config.timezone,
+        started_at=server_started_at,
+        scheduled_tasks=cron_enabled,
+        self_improvement=not config.debug,
+        embedding=voyage_client is not None,
+        disk_paths=[p for p in (config.org_dir, config.logseq_dir) if p],
+    )
+
+
 si_agent = SelfImprovementAgent(llm_client, logger, config)
 
 # Master switch for scheduled task execution
@@ -257,7 +276,7 @@ if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     # Embeddings are idempotent and safe to run anywhere.
     if not config.debug:
         embedding_scheduler.add_job(
-            func=si_agent.run,
+            func=lambda: run_exclusive("self_improvement", si_agent.run, logger=logger),
             trigger="cron",
             hour=3,
             day="*/2",
@@ -268,8 +287,22 @@ if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
             misfire_grace_time=7200,  # Allow 2 hour grace
         )
         logger.info(f"Self-improvement agent scheduled (every other day at 3 AM {config.timezone})")
+
+        # Waking hours only: the pushes are for a person, and nothing it
+        # reports gets worse in a few hours.
+        embedding_scheduler.add_job(
+            func=_run_watchdog,
+            trigger="cron",
+            hour="8-20/3",
+            timezone=config.timezone,
+            id="health_watchdog",
+            name="Health watchdog (no LLM)",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(f"Health watchdog scheduled (8:00-20:00 every 3 hours {config.timezone})")
     else:
-        logger.info("Self-improvement cron skipped in debug mode (runs only in production)")
+        logger.info("Self-improvement and watchdog skipped in debug mode (production only)")
 
     # Scheduled task dispatcher (60s tick) — runs in both debug and production
     # Uses a wrapper because task_dispatcher is initialized later (after tool registry)
@@ -462,6 +495,18 @@ task_executor = TaskExecutor(llm_client, tool_registry, logger)
 task_dispatcher = TaskDispatcher(
     task_executor, logger, org_dir=str(config.org_dir), timezone=config.timezone
 )
+
+# Runs left 'running' by a crash or restart would otherwise stay that way forever.
+try:
+    _db = get_db()
+    try:
+        _interrupted = ScheduledTaskRunRepository.fail_interrupted(_db, server_started_at)
+    finally:
+        _db.close()
+    if _interrupted:
+        logger.warning(f"Marked {_interrupted} interrupted scheduled-task run(s) as failed")
+except Exception as e:
+    logger.warning(f"Failed to clean up interrupted task runs: {e}")
 
 # Ensure heartbeat task exists in DB
 try:
@@ -2407,24 +2452,8 @@ def ticktick_status():
         token = OAuthRepository.get_token(db, "ticktick")
 
         if token:
-            is_expired = OAuthRepository.is_token_expired(token)
-            has_refresh = bool(token.refresh_token)
-            # `connected` means "we have a credential we can plausibly use".
-            # Expired-with-refresh is fine (auto-refresh will run on demand);
-            # expired-without-refresh means the user must re-authorize.
-            return jsonify(
-                {
-                    "connected": not is_expired or has_refresh,
-                    "expired": is_expired,
-                    "has_refresh_token": has_refresh,
-                    "auto_refreshable": has_refresh and is_expired,
-                    "expires_at": (
-                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-                    ),
-                }
-            )
-        else:
-            return jsonify({"connected": False})
+            return jsonify(OAuthRepository.connection_status(token))
+        return jsonify({"connected": False})
 
     except Exception as e:
         logger.error(f"Error checking TickTick status: {e}")
@@ -2581,24 +2610,8 @@ def google_calendar_status():
         token = OAuthRepository.get_token(db, "google_calendar")
 
         if token:
-            is_expired = OAuthRepository.is_token_expired(token)
-            has_refresh = bool(token.refresh_token)
-            # `connected` means "we have a credential we can plausibly use".
-            # Expired-with-refresh is fine (auto-refresh will run on demand);
-            # expired-without-refresh means the user must re-authorize.
-            return jsonify(
-                {
-                    "connected": not is_expired or has_refresh,
-                    "expired": is_expired,
-                    "has_refresh_token": has_refresh,
-                    "auto_refreshable": has_refresh and is_expired,
-                    "expires_at": (
-                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-                    ),
-                }
-            )
-        else:
-            return jsonify({"connected": False})
+            return jsonify(OAuthRepository.connection_status(token))
+        return jsonify({"connected": False})
 
     except Exception as e:
         logger.error(f"Error checking Google Calendar status: {e}")
@@ -2750,24 +2763,8 @@ def google_gmail_status():
         token = OAuthRepository.get_token(db, "google_gmail")
 
         if token:
-            is_expired = OAuthRepository.is_token_expired(token)
-            has_refresh = bool(token.refresh_token)
-            # `connected` means "we have a credential we can plausibly use".
-            # Expired-with-refresh is fine (auto-refresh will run on demand);
-            # expired-without-refresh means the user must re-authorize.
-            return jsonify(
-                {
-                    "connected": not is_expired or has_refresh,
-                    "expired": is_expired,
-                    "has_refresh_token": has_refresh,
-                    "auto_refreshable": has_refresh and is_expired,
-                    "expires_at": (
-                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-                    ),
-                }
-            )
-        else:
-            return jsonify({"connected": False})
+            return jsonify(OAuthRepository.connection_status(token))
+        return jsonify({"connected": False})
 
     except Exception as e:
         logger.error(f"Error checking Gmail status: {e}")
@@ -2805,7 +2802,7 @@ def google_gmail_disconnect():
 
 
 # Map of (db_provider_key, label, authorize_url) for the aggregate status
-# endpoint. Keep in sync with the individual /auth/<provider>/status routes.
+# endpoint, which reports the same connection_status as /auth/<provider>/status.
 _INTEGRATIONS = [
     ("ticktick", "TickTick", "/auth/ticktick/authorize"),
     ("google_calendar", "Google Calendar", "/auth/google-calendar/authorize"),
@@ -2834,11 +2831,7 @@ def integrations_status():
             try:
                 token = OAuthRepository.get_token(db, key)
                 if token:
-                    is_expired = OAuthRepository.is_token_expired(token)
-                    has_refresh = bool(token.refresh_token)
-                    entry["connected"] = not is_expired or has_refresh
-                    entry["expired"] = is_expired
-                    entry["has_refresh_token"] = has_refresh
+                    entry.update(OAuthRepository.connection_status(token))
                 else:
                     entry["connected"] = False
             except Exception as e:
@@ -2880,9 +2873,6 @@ def health():
     return jsonify(health_data), 200 if health_data["status"] == "ok" else 503
 
 
-_embedding_in_progress = threading.Lock()
-
-
 @app.route("/admin/trigger-embedding", methods=["POST"])
 @limiter.limit("6 per hour")
 def trigger_embedding():
@@ -2894,35 +2884,13 @@ def trigger_embedding():
     if not voyage_client:
         return jsonify({"error": "RAG not configured", "message": "VOYAGE_API_KEY not set"}), 503
 
-    # Single-flight: refuse to spawn a second run while one is active, so repeated
-    # calls can't pile up daemon threads and Voyage API spend.
-    if not _embedding_in_progress.acquire(blocking=False):
+    # Shares the hourly job's lock, so repeated calls can't pile up runs and Voyage spend.
+    if not start_exclusive("embedding", _run_embedding, logger=logger):
         return (
             jsonify({"status": "busy", "message": "An embedding run is already in progress"}),
             409,
         )
-
-    try:
-
-        def run_embedding():
-            try:
-                stats = run_incremental_embedding(logger, voyage_client, config, google_gmail_oauth)
-                logger.info(f"Manual embedding complete: {stats}")
-            except Exception as e:
-                logger.error(f"Manual embedding failed: {e}")
-            finally:
-                _embedding_in_progress.release()
-
-        thread = threading.Thread(target=run_embedding, daemon=True)
-        thread.start()
-
-        return jsonify(
-            {"status": "started", "message": "Incremental embedding started in background"}
-        )
-    except Exception as e:
-        _embedding_in_progress.release()
-        logger.error(f"Failed to trigger embedding: {e}")
-        return jsonify({"error": "Failed to start embedding", "message": str(e)}), 500
+    return jsonify({"status": "started", "message": "Incremental embedding started in background"})
 
 
 # -------------------------
@@ -3306,25 +3274,16 @@ def trigger_self_improve():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
-    try:
-        import threading
+    def run_agent():
+        result = si_agent.run(trigger="manual")
+        logger.info(f"Manual SI agent complete: {result.get('summary', '')[:200]}")
 
-        def run_agent():
-            try:
-                result = si_agent.run(trigger="manual")
-                logger.info(f"Manual SI agent complete: {result.get('summary', '')[:200]}")
-            except Exception as e:
-                logger.error(f"Manual SI agent failed: {e}")
-
-        thread = threading.Thread(target=run_agent, daemon=True)
-        thread.start()
-
-        return jsonify(
-            {"status": "started", "message": "Self-improvement agent started in background"}
+    if not start_exclusive("self_improvement", run_agent, logger=logger):
+        return (
+            jsonify({"error": "The self-improvement agent is already running"}),
+            409,
         )
-    except Exception as e:
-        logger.error(f"Failed to trigger SI agent: {e}")
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "started", "message": "Self-improvement agent started in background"})
 
 
 @app.route("/admin/retrospective-log", methods=["GET"])
@@ -3779,14 +3738,12 @@ def run_scheduled_task_now(task_id):
         task = ScheduledTaskRepository.get_by_id(db, task_id)
         if not task:
             return jsonify({"error": "Task not found"}), 404
+        refusal = task_dispatcher.start_task_now(task)
     finally:
         db.close()
 
-    import threading
-
-    thread = threading.Thread(target=task_dispatcher.run_task_now, args=(task_id,), daemon=True)
-    thread.start()
-
+    if refusal:
+        return jsonify({"error": refusal}), 409
     return jsonify({"status": "started", "task_id": task_id, "task_name": task.name})
 
 

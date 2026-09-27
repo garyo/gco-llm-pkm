@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from mcp_server.auth import get_auth_settings, get_oauth_provider
 from mcp_server.resources import register_resources
 from mcp_server.tools import register_all_tools
+from pkm_bridge.logging_config import quiet_health_checks
 
 logger = logging.getLogger("mcp_server")
 
@@ -127,7 +128,10 @@ def main():
 
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    # Config() sets up uvicorn's loggers, so the filter goes on after it.
+    server_config = uvicorn.Config(app, host=host, port=port)
+    quiet_health_checks("uvicorn.access")
+    uvicorn.Server(server_config).run()
 
 
 if __name__ == "__main__":

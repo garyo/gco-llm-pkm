@@ -4,13 +4,17 @@ Each MCP tool wraps an existing BaseTool.execute() implementation.
 The existing tools return strings, which maps directly to MCP text results.
 """
 
+import functools
+import inspect
 import logging
 import os
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
 from pkm_bridge.context_retriever import DEFAULT_MIN_SIMILARITY
@@ -22,6 +26,7 @@ _config = None
 _tool_registry = None
 _context_retriever = None
 _file_editor = None
+_init_lock = threading.RLock()  # tools run on worker threads; build shared state once
 
 
 def _get_config():
@@ -37,9 +42,14 @@ def _get_config():
 
 def _get_tool_registry():
     """Lazy-initialize the tool registry with all existing tools."""
+    with _init_lock:
+        if _tool_registry is None:
+            _build_tool_registry()
+    return _tool_registry
+
+
+def _build_tool_registry() -> None:
     global _tool_registry
-    if _tool_registry is not None:
-        return _tool_registry
 
     from pkm_bridge.tools.files import ListFilesTool
     from pkm_bridge.tools.find_context import FindContextTool
@@ -143,15 +153,16 @@ def _get_tool_registry():
 
     _tool_registry = registry
     logger.info(f"Tool registry: {len(registry)} tools: {', '.join(registry.list_tools())}")
-    return registry
 
 
 def _get_context_retriever():
     """Lazy-initialize the context retriever for semantic search."""
-    global _context_retriever
-    if _context_retriever is not None:
-        return _context_retriever
+    with _init_lock:
+        return _context_retriever or _build_context_retriever()
 
+
+def _build_context_retriever():
+    global _context_retriever
     voyage_key = os.getenv("VOYAGE_API_KEY")
     if not voyage_key:
         return None
@@ -173,15 +184,16 @@ def _get_context_retriever():
 def _get_file_editor():
     """Lazy-initialize the FileEditor."""
     global _file_editor
-    if _file_editor is None:
-        from pkm_bridge.file_editor import FileEditor
+    with _init_lock:
+        if _file_editor is None:
+            from pkm_bridge.file_editor import FileEditor
 
-        config = _get_config()
-        _file_editor = FileEditor(
-            logging.getLogger("pkm_bridge.file_editor"),
-            str(config.org_dir),
-            str(config.logseq_dir) if config.logseq_dir else None,
-        )
+            config = _get_config()
+            _file_editor = FileEditor(
+                logging.getLogger("pkm_bridge.file_editor"),
+                str(config.org_dir),
+                str(config.logseq_dir) if config.logseq_dir else None,
+            )
     return _file_editor
 
 
@@ -287,8 +299,39 @@ def build_prompt_context() -> str:
     return "\n\n".join(parts)
 
 
-def register_all_tools(mcp: FastMCP):
+class _ThreadedTools:
+    """Stands in for FastMCP when registering tools, running each in a worker thread.
+
+    FastMCP calls a plain `def` tool directly on the event loop, so one slow
+    tool (a 60 s shell command) stalls every other request — parallel tool
+    calls, /health, OAuth. Tools registered through this are wrapped as
+    async functions that run the blocking body on anyio's thread pool.
+    """
+
+    def __init__(self, server: FastMCP):
+        self._server = server
+
+    def tool(self, *args: Any, **kwargs: Any) -> Callable[[Callable], Callable]:
+        register = self._server.tool(*args, **kwargs)
+
+        def decorator(fn: Callable) -> Callable:
+            if inspect.iscoroutinefunction(fn):
+                return register(fn)
+
+            # wraps() keeps the name, docstring and signature FastMCP builds the schema from
+            @functools.wraps(fn)
+            async def run_in_thread(*a: Any, **kw: Any) -> Any:
+                return await anyio.to_thread.run_sync(functools.partial(fn, *a, **kw))
+
+            register(run_in_thread)
+            return fn
+
+        return decorator
+
+
+def register_all_tools(server: FastMCP):
     """Register all MCP tools on the FastMCP server."""
+    mcp = _ThreadedTools(server)
 
     # --- Core search tools ---
 
@@ -394,24 +437,40 @@ def register_all_tools(mcp: FastMCP):
         )
 
     @mcp.tool()
-    def read_file(path: str) -> str:
+    def read_file(path: str, offset: int = 0) -> str:
         """Read a PKM file's content.
 
-        Response includes an [mtime=<float>] header line with the file's modification time.
-        Pass this value as expected_mtime to write_file to prevent overwriting external changes.
+        The response starts with a [mtime=<float> hash=<hex>] header. Pass the hash as
+        base_hash to write_file so concurrent changes are merged instead of overwritten.
+
+        Long files come back in pages that end with a note giving the offset to read
+        next. A partial read (a truncated page, or any offset) has no hash or mtime:
+        writing its text back would drop the rest of the file. Make targeted edits to
+        long files instead of rewriting them.
 
         Args:
             path: File path in format 'org:relative/path.org' or 'logseq:relative/path.md'
+            offset: Character offset to start reading from, for paging through long files
         """
         editor = _get_file_editor()
         start = time.time()
         try:
-            result = editor.read_file(path)
+            result = editor.read_file(path, offset=offset)
             content = result["content"]
-            mtime = result.get("modified", 0)
             duration_ms = int((time.time() - start) * 1000)
-            _log_tool_execution("read_file", {"path": path}, f"({len(content)} bytes)", duration_ms)
-            return f"[mtime={mtime} hash={result.get('hash', '')}]\n{content}"
+            _log_tool_execution(
+                "read_file",
+                {"path": path, "offset": offset},
+                f"({len(content)} bytes)",
+                duration_ms,
+            )
+            if offset or result["truncated"]:
+                return (
+                    f"[partial read from offset {offset} of {result['total_chars']} chars; "
+                    "no hash, so this text can't be written back as the whole file]\n"
+                    f"{content}"
+                )
+            return f"[mtime={result['modified']} hash={result['hash']}]\n{content}"
         except Exception as e:
             return (
                 f"Error reading file '{path}': {type(e).__name__}: {e}. "

@@ -99,10 +99,13 @@ services:
       # background child of the entrypoint script, so without this a
       # crashed/never-started MCP process is a silent Claude.ai outage.
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health && curl -sf http://localhost:8001/health"]
-      interval: 5s
+      # Probe quickly while starting, so deploys see "healthy" fast, then
+      # every 30 s.
+      interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 60s
+      start_interval: 2s
 
     # Resource limits
     deploy:

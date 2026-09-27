@@ -39,6 +39,9 @@ class OAuthToken(Base):
     token_type = Column(String(50), default="Bearer")
     expires_at = Column(DateTime, nullable=True)
     scope = Column(String(255), nullable=True)
+    # Set when the provider rejected a refresh (e.g. revoked grant); cleared by a new token.
+    refresh_error = Column(Text, nullable=True)
+    refresh_failed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -236,6 +239,19 @@ def _upgrade_schema(engine) -> None:
             for name, ddl in missing.items():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
                 print(f"[DB] Added '{name}' column to {table}", flush=True)
+
+    # OAuthToken: record rejected refreshes
+    if "oauth_tokens" in insp.get_table_names():
+        columns = {c["name"] for c in insp.get_columns("oauth_tokens")}
+        with engine.begin() as conn:
+            if "refresh_error" not in columns:
+                conn.execute(text("ALTER TABLE oauth_tokens ADD COLUMN refresh_error TEXT"))
+                print("[DB] Added 'refresh_error' column to oauth_tokens", flush=True)
+            if "refresh_failed_at" not in columns:
+                conn.execute(
+                    text("ALTER TABLE oauth_tokens ADD COLUMN refresh_failed_at TIMESTAMP")
+                )
+                print("[DB] Added 'refresh_failed_at' column to oauth_tokens", flush=True)
 
 
 def init_db() -> None:
@@ -587,3 +603,20 @@ class AgentRunLog(Base):
 
     def __repr__(self):
         return f"<AgentRunLog(id={self.id}, trigger='{self.trigger}', turns={self.turns_used})>"
+
+
+class OpsState(Base):
+    """Small timestamped records for ops bookkeeping.
+
+    Keys are namespaced: "alert:<condition>" holds when the watchdog last
+    pushed that alert; "job:<name>" holds when a background job last finished.
+    """
+
+    __tablename__ = "ops_state"
+
+    key = Column(String(200), primary_key=True)
+    at = Column(DateTime, nullable=False)
+    detail = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return f"<OpsState(key='{self.key}', at='{self.at}')>"

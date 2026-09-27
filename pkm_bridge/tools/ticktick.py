@@ -294,38 +294,14 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
 
         try:
             db = get_db()
-            token = OAuthRepository.get_token(db, "ticktick")
-
+            try:
+                token = OAuthRepository.refresh_if_expired(
+                    db, "ticktick", self.oauth_handler, self.logger
+                )
+            finally:
+                db.close()
             if not token:
                 return None
-
-            # Check if token needs refresh
-            if OAuthRepository.is_token_expired(token):
-                self.logger.info("TickTick token expired, refreshing...")
-                try:
-                    new_token_data = self.oauth_handler.refresh_token(token.refresh_token)
-
-                    # Update token in database
-                    OAuthRepository.save_token(
-                        db=db,
-                        service="ticktick",
-                        access_token=new_token_data["access_token"],
-                        refresh_token=new_token_data.get("refresh_token"),
-                        expires_at=new_token_data["expires_at"],
-                        scope=new_token_data.get("scope"),
-                    )
-
-                    token = OAuthRepository.get_token(db, "ticktick")
-                    self.logger.info("TickTick token refreshed successfully")
-
-                except Exception as e:
-                    self.logger.error(f"Failed to refresh TickTick token: {e}")
-                    return None
-                finally:
-                    db.close()
-            else:
-                db.close()
-
             return TickTickClient(token.access_token)
 
         except Exception as e:

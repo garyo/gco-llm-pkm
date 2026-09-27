@@ -13,7 +13,6 @@ echo "Running database migrations..."
 su -c "python3 migrate_add_cost_tracking.py" pkm
 
 echo "Starting PKM Bridge Server..."
-echo "Note: Incremental embeddings will run automatically at 3am daily via APScheduler"
 
 # Both servers run as supervised children: whichever exits first takes the
 # container down with it. A half-dead container would otherwise keep running

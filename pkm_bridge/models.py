@@ -4,9 +4,11 @@ Provides role-based model defaults (configurable via env vars),
 an available models catalog for the frontend, and capability detection.
 """
 
+import logging
 import os
-from datetime import date, datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Role-based model defaults
@@ -199,84 +201,56 @@ def supports_caching(model: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Cost rates for Anthropic models (per million tokens)
+# Cost rates for Anthropic models (per million tokens, 5-minute cache writes)
 # Non-Anthropic models use litellm.completion_cost() instead.
+# Source: https://platform.claude.com/docs/en/about-claude/pricing
 # ---------------------------------------------------------------------------
 
+
+def _rates(input_: float, cache_write: float, cache_read: float, output: float) -> dict[str, float]:
+    return {"input": input_, "cache_write": cache_write, "cache_read": cache_read, "output": output}
+
+
 ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
-    "claude-haiku-4-5": {
-        "input": 0.80,
-        "cache_write": 1.00,
-        "cache_read": 0.08,
-        "output": 4.00,
-    },
-    "claude-sonnet-4-5": {
-        "input": 3.00,
-        "cache_write": 3.75,
-        "cache_read": 0.30,
-        "output": 15.00,
-    },
-    "claude-sonnet-4-6": {
-        "input": 3.00,
-        "cache_write": 3.75,
-        "cache_read": 0.30,
-        "output": 15.00,
-    },
-    "claude-opus-4-5": {
-        "input": 5.00,
-        "cache_write": 6.25,
-        "cache_read": 0.50,
-        "output": 25.00,
-    },
-    "claude-opus-4-6": {
-        "input": 5.00,
-        "cache_write": 6.25,
-        "cache_read": 0.50,
-        "output": 25.00,
-    },
-    "claude-opus-4-7": {
-        "input": 5.00,
-        "cache_write": 6.25,
-        "cache_read": 0.50,
-        "output": 25.00,
-    },
-    # Standard rates; Sonnet 5 also has introductory pricing (see below).
-    "claude-sonnet-5": {
-        "input": 3.00,
-        "cache_write": 3.75,
-        "cache_read": 0.30,
-        "output": 15.00,
-    },
+    # _rates(input, cache write, cache read, output)
+    "claude-haiku-4-5": _rates(1.00, 1.25, 0.10, 5.00),
+    "claude-sonnet-4-5": _rates(3.00, 3.75, 0.30, 15.00),
+    "claude-sonnet-4-6": _rates(3.00, 3.75, 0.30, 15.00),
+    "claude-sonnet-5": _rates(2.00, 2.50, 0.20, 10.00),
+    "claude-opus-4-5": _rates(5.00, 6.25, 0.50, 25.00),
+    "claude-opus-4-6": _rates(5.00, 6.25, 0.50, 25.00),
+    "claude-opus-4-7": _rates(5.00, 6.25, 0.50, 25.00),
+    "claude-opus-4-8": _rates(5.00, 6.25, 0.50, 25.00),
+    "claude-opus-5": _rates(5.00, 6.25, 0.50, 25.00),
+    "claude-opus-5-5": _rates(4.00, 5.00, 0.20, 20.00),
+    "claude-fable-5": _rates(10.00, 12.50, 1.00, 50.00),
+    "claude-fable-5-1": _rates(10.00, 12.50, 0.25, 50.00),
 }
 
-# Time-limited introductory rates that revert to the standard table above the
-# day after ``through`` (inclusive). Applied automatically by the current date.
-INTRO_COST_RATES: dict[str, dict[str, Any]] = {
-    "claude-sonnet-5": {
-        "through": date(2026, 8, 31),
-        "rates": {
-            "input": 2.00,
-            "cache_write": 2.50,
-            "cache_read": 0.20,
-            "output": 10.00,
-        },
-    },
-}
+# Unknown models are priced at the most expensive known tier, so a missing
+# table entry over-reports cost rather than hiding it.
+_FALLBACK_COST_RATES = max(ANTHROPIC_COST_RATES.values(), key=lambda r: r["output"])
+_warned_unpriced_models: set[str] = set()
 
 
-def get_cost_rates(model: str, on_date: date | None = None) -> dict[str, float]:
-    """Resolve the effective per-million-token rates for a model on a given date.
+def get_cost_rates(model: str) -> dict[str, float]:
+    """Resolve the per-million-token rates for a model.
 
-    Uses introductory pricing while in effect, otherwise the standard rates
-    (falling back to Haiku rates for unknown models). ``on_date`` defaults to
-    the current UTC date.
+    Matches the model ID exactly or, for dated snapshots such as
+    ``claude-haiku-4-5-20251001``, by its longest known prefix.
     """
-    intro = INTRO_COST_RATES.get(model)
-    if intro is not None:
-        today = on_date or datetime.now(timezone.utc).date()
-        if today <= intro["through"]:
-            return intro["rates"]
-    return ANTHROPIC_COST_RATES.get(model, ANTHROPIC_COST_RATES["claude-haiku-4-5"])
+    if model in ANTHROPIC_COST_RATES:
+        return ANTHROPIC_COST_RATES[model]
+    prefixes = [known for known in ANTHROPIC_COST_RATES if model.startswith(known + "-")]
+    if prefixes:
+        return ANTHROPIC_COST_RATES[max(prefixes, key=len)]
+    if model not in _warned_unpriced_models:
+        _warned_unpriced_models.add(model)
+        logger.warning(
+            f"No pricing for model {model!r}; costing it at the most expensive known "
+            f"rates. Add it to ANTHROPIC_COST_RATES."
+        )
+    return _FALLBACK_COST_RATES
 
 
 def get_anthropic_cost(
@@ -285,11 +259,10 @@ def get_anthropic_cost(
     output_tokens: int,
     cache_write_tokens: int = 0,
     cache_read_tokens: int = 0,
-    on_date: date | None = None,
     web_search_requests: int = 0,
 ) -> float:
     """Calculate cost for an Anthropic model call. Returns cost in dollars."""
-    rates = get_cost_rates(model, on_date)
+    rates = get_cost_rates(model)
     return (
         (input_tokens * rates["input"])
         + (cache_write_tokens * rates["cache_write"])

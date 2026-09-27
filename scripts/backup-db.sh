@@ -8,12 +8,19 @@
 # archives older than RETENTION_DAYS. On any failure it pushes an ntfy alert,
 # using NTFY_* from the environment or, failing that, from the project's .env.
 #
+# With AGE_RECIPIENT set, the archive is encrypted to that age public key and
+# written as .dump.age; the plaintext only ever exists in a private temporary
+# directory on the local disk. Restore with:
+#   age -d -i KEY_FILE pkm_db-....dump.age | pg_restore -d pkm_db --no-owner
+#
 # Environment (all optional):
 #   BACKUP_DIR      where archives go (or pass it as the first argument)
 #   RETENTION_DAYS  days of archives to keep (default 30)
 #   DB_CONTAINER    postgres container (default pkm-db)
 #   DB_USER, DB_NAME  (default pkm, pkm_db)
 #   ENV_FILE        where to look for NTFY_* settings (default: ../.env)
+#   AGE_RECIPIENT   age public key (age1...) to encrypt archives to
+#   AGE             age binary (default: age on PATH, else ~/.local/bin/age)
 #
 # BACKUP_DIR must already exist: if it is an NFS mount that has dropped, we
 # want a loud failure, not a dump quietly written to the local disk under the
@@ -27,6 +34,8 @@ DB_CONTAINER=${DB_CONTAINER:-pkm-db}
 DB_USER=${DB_USER:-pkm}
 DB_NAME=${DB_NAME:-pkm_db}
 ENV_FILE=${ENV_FILE:-"$(dirname "$(readlink -f "$0")")/../.env"}
+AGE_RECIPIENT=${AGE_RECIPIENT:-}
+AGE=${AGE:-$(command -v age || echo "$HOME/.local/bin/age")}
 
 # Read one NTFY_* setting from the environment, else from ENV_FILE. Only these
 # keys are read; the rest of .env is never sourced.
@@ -81,21 +90,36 @@ fail() {
 [ -d "$BACKUP_DIR" ] || fail "backup directory $BACKUP_DIR does not exist (NAS not mounted?)"
 [ -w "$BACKUP_DIR" ] || fail "backup directory $BACKUP_DIR is not writable"
 
+if [ -n "$AGE_RECIPIENT" ]; then
+    [ -x "$AGE" ] || fail "AGE_RECIPIENT is set but age is not installed ($AGE)"
+fi
+
 stamp=$(date +%Y%m%d-%H%M%S)
 final="$BACKUP_DIR/${DB_NAME}-${stamp}.dump"
+if [ -n "$AGE_RECIPIENT" ]; then
+    final="$final.age"
+fi
 partial="$final.partial"
-errors=$(mktemp)
-trap 'rm -f "$partial" "$errors"' EXIT
+work=$(mktemp -d) # private (0700), on the local disk
+dump="$work/${DB_NAME}.dump"
+trap 'rm -rf "$work" "$partial"' EXIT
 
-docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc >"$partial" 2>"$errors" ||
-    fail "pg_dump of $DB_NAME failed: $(tail -c 300 "$errors")"
+docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc >"$dump" 2>"$work/errors" ||
+    fail "pg_dump of $DB_NAME failed: $(tail -c 300 "$work/errors")"
 
-[ -s "$partial" ] || fail "pg_dump produced an empty file"
-docker exec -i "$DB_CONTAINER" pg_restore --list <"$partial" >/dev/null ||
-    fail "pg_restore cannot read the new archive $final"
+[ -s "$dump" ] || fail "pg_dump produced an empty file"
+docker exec -i "$DB_CONTAINER" pg_restore --list <"$dump" >/dev/null ||
+    fail "pg_restore cannot read the new archive"
 
+if [ -n "$AGE_RECIPIENT" ]; then
+    "$AGE" -r "$AGE_RECIPIENT" -o "$partial" "$dump" 2>"$work/errors" ||
+        fail "age encryption failed: $(tail -c 300 "$work/errors")"
+else
+    cp "$dump" "$partial"
+fi
 mv "$partial" "$final"
 echo "$(date '+%F %T') wrote $final ($(du -h "$final" | cut -f1))"
 
 # Prune only after a good dump, so a run of failures never empties the directory.
-find "$BACKUP_DIR" -maxdepth 1 -name "${DB_NAME}-*.dump" -mtime "+$RETENTION_DAYS" -print -delete
+find "$BACKUP_DIR" -maxdepth 1 \( -name "${DB_NAME}-*.dump" -o -name "${DB_NAME}-*.dump.age" \) \
+    -mtime "+$RETENTION_DAYS" -print -delete

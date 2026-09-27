@@ -228,15 +228,19 @@ def register_all_tools(mcp: FastMCP):
         pattern: str,
         context: int = 3,
         limit: int = 15000,
+        files_only: bool = False,
     ) -> str:
-        """Search PKM notes for a regex pattern. Returns matches from journals and pages
-        (newest first).
+        """Search all notes for a regex pattern: org journals newest first, then other
+        org notes, then Logseq. Results are grouped per file under an org:/logseq: path
+        that read_file accepts.
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
             context: Lines of context around each match
             limit: Approximate character limit for results (default 15000; raise it
                 if you need more matches and the result was truncated)
+            files_only: List matching files with match counts instead of lines
+                (use for broad terms, then read the relevant files)
         """
         return _execute_tool(
             "search_notes",
@@ -244,6 +248,7 @@ def register_all_tools(mcp: FastMCP):
                 "pattern": pattern,
                 "context": context,
                 "limit": limit,
+                "files_only": files_only,
             },
         )
 

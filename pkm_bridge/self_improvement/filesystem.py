@@ -6,7 +6,6 @@ the old .pkm-skills/ location.
 
 import os
 import shutil
-import stat
 from pathlib import Path
 
 from ..fileio import atomic_write
@@ -67,97 +66,7 @@ def ensure_pkm_structure(org_dir: str | Path | None = None) -> Path:
             # Create symlink: .pkm-skills -> .pkm/skills
             old_skills_dir.symlink_to(new_skills_dir)
 
-    # Seed built-in skills (e.g. create-org-journal.py)
-    seed_builtin_skills(pkm_dir.parent, pkm_dir / "skills")
-
     return pkm_dir
-
-
-def seed_builtin_skills(org_dir: Path, skills_dir: Path) -> None:
-    """Copy built-in scripts into .pkm/skills/ as seeded skills.
-
-    A seeded skill records the SHA of the script it came from.  On later runs
-    the installed copy is refreshed when the built-in script has changed --
-    but only while the copy is still pristine, so a skill the user (or the
-    self-improvement agent) has edited is never clobbered.  Without this an
-    improved built-in would never reach the copy that actually runs.
-
-    Currently seeds:
-    - create-org-journal.py from scripts/create-org-journal.py
-    """
-    import hashlib
-
-    from ..tools.skills import _build_shell_frontmatter, _parse_skill_file
-
-    skill_name = "create-org-journal"
-    target = skills_dir / f"{skill_name}.py"
-
-    # Look for the source script in common locations
-    source = None
-    for candidate in [
-        Path("/app/scripts/create-org-journal.py"),  # Docker
-        Path(__file__).parent.parent.parent / "scripts" / "create-org-journal.py",  # Dev
-    ]:
-        if candidate.exists():
-            source = candidate
-            break
-
-    if source is None:
-        return
-
-    # Read the original script content (skip shebang if present)
-    script_content = source.read_text(encoding="utf-8")
-    lines = script_content.split("\n")
-    if lines and lines[0].startswith("#!"):
-        body = "\n".join(lines[1:])
-    else:
-        body = script_content
-
-    # Hash exactly what lands in the file after the frontmatter, so the
-    # installed copy can be compared against it directly.
-    installed_body = ("#!/usr/bin/env python3\n" + body).strip()
-    source_sha = hashlib.sha256(installed_body.encode("utf-8")).hexdigest()
-
-    carried: dict = {}
-    if target.exists():
-        existing = _parse_skill_file(target)
-        if existing is None:
-            return
-        if existing.get("source_sha") == source_sha:
-            return  # already current
-        current_sha = hashlib.sha256(existing.get("_body", "").encode("utf-8")).hexdigest()
-        if "source_sha" not in existing:
-            # Seeded before shas were recorded.  Refresh it, but keep a copy
-            # first: we cannot tell an untouched old seed from an edited one.
-            backup = target.with_suffix(".py.bak")
-            backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
-        elif existing["source_sha"] != current_sha:
-            # Edited since it was seeded; the installed copy wins.
-            return
-        # Preserve usage history across the refresh.
-        carried = {k: existing[k] for k in ("created", "last_used", "use_count") if k in existing}
-
-    metadata = {
-        "name": skill_name,
-        "description": (
-            "Create a journal file with a proper UUID, in whichever format "
-            "(org or Markdown) the journals directory already uses."
-        ),
-        "trigger": "user asks to add a note and no journal file exists for that date",
-        "tags": ["journal", "builtin"],
-        "created": "2026-03-01T00:00:00Z",
-        "last_used": "2026-03-01T00:00:00Z",
-        "use_count": 0,
-        **carried,
-        "source_sha": source_sha,
-    }
-
-    fm = _build_shell_frontmatter(metadata)
-    file_content = fm + "\n#!/usr/bin/env python3\n" + body
-
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    target.write_text(file_content, encoding="utf-8")
-    target.chmod(target.stat().st_mode | stat.S_IRUSR | stat.S_IXUSR)
 
 
 def get_skills_dir(org_dir: str | Path | None = None) -> Path:

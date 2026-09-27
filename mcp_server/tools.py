@@ -49,6 +49,7 @@ def _get_tool_registry():
         ProposeNoteOrganizationTool,
         ResolveNoteProposalTool,
     )
+    from pkm_bridge.tools.note_writing import EditNoteTool, JournalAppendTool
     from pkm_bridge.tools.registry import ToolRegistry
     from pkm_bridge.tools.schedule_task import ScheduleTaskTool
     from pkm_bridge.tools.search_notes import SearchNotesTool
@@ -70,6 +71,8 @@ def _get_tool_registry():
         )
     )
     registry.register(ListFilesTool(tool_logger, config.org_dir, config.logseq_dir))
+    registry.register(JournalAppendTool(tool_logger, config.org_dir, config.logseq_dir))
+    registry.register(EditNoteTool(tool_logger, config.org_dir, config.logseq_dir))
     registry.register(SearchNotesTool(tool_logger, config.org_dir, config.logseq_dir))
     registry.register(FindContextTool(tool_logger, config.org_dir, config.logseq_dir))
 
@@ -358,12 +361,15 @@ def register_all_tools(mcp: FastMCP):
         base_hash: str | None = None,
         expected_mtime: float | None = None,
     ) -> str:
-        """Write content to a PKM file. Creates parent directories if needed.
+        """Replace a PKM file's whole content. Creates parent directories if needed.
+
+        For adding to or changing notes, prefer journal_append and edit_note,
+        which never need the whole file resent.
 
         If the exact path doesn't exist but the same filename exists at the
         toplevel or under pages/, the existing file is updated instead of
         creating a duplicate (the result reports the actual path). Create NEW
-        pages under pages/ (e.g. 'org:pages/topic.org'), not at the toplevel.
+        pages under pages/ (e.g. 'org:pages/topic.md'), not at the toplevel.
 
         Always pass base_hash when rewriting an existing file: if the file
         changed since you read it, your edits are three-way merged with the
@@ -423,6 +429,54 @@ def register_all_tools(mcp: FastMCP):
                 f"Error writing file '{path}': {type(e).__name__}: {e}. "
                 "Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
             )
+
+    @mcp.tool()
+    def journal_append(date: str, text: str, heading: str | None = None) -> str:
+        """Add Markdown text to the journal for a date (org:journals/YYYY-MM-DD.md),
+        creating the journal if needed.
+
+        With `heading`, the text goes at the end of that section, and a missing
+        heading is added at the end of the file; without it, at the end of the
+        file. Existing text is never changed. Use this for every journal addition
+        rather than shell commands or write_file.
+
+        Args:
+            date: Journal date, YYYY-MM-DD
+            text: Markdown lines to add, e.g. '- Rehearsed for the gig'
+            heading: Section to add under, e.g. 'Music' (matches any level) or
+                '## Heartbeat (14:05)' (that exact level). Case-insensitive.
+        """
+        params: dict[str, Any] = {"date": date, "text": text}
+        if heading:
+            params["heading"] = heading
+        return _execute_tool("journal_append", params)
+
+    @mcp.tool()
+    def edit_note(
+        path: str,
+        edits: list[dict[str, str]] | None = None,
+        content: str | None = None,
+    ) -> str:
+        """Change a note with exact find/replace edits, or create a new note.
+
+        Read the note first: each edit's `find` must quote text that occurs exactly
+        once in it. All edits are checked before anything is written, and none are
+        applied if any fails. Changes made to the file meanwhile are merged, not
+        overwritten. To create a note, pass `content` and no edits (refused if the
+        file exists). For journal additions, use journal_append. Prefer this to
+        write_file or shell commands for any note change.
+
+        Args:
+            path: Note path, e.g. 'org:pages/travel.md' (default prefix org:)
+            edits: List of {find, replace}; replace '' deletes. All applied or none.
+            content: Full Markdown content for a NEW note only
+        """
+        params: dict[str, Any] = {"path": path}
+        if edits is not None:
+            params["edits"] = edits
+        if content is not None:
+            params["content"] = content
+        return _execute_tool("edit_note", params)
 
     # --- Shell tools ---
 

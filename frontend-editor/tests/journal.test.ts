@@ -17,7 +17,7 @@ describe('journalPath', () => {
 });
 
 describe('journalTemplate', () => {
-  test('matches the frontmatter create-org-journal.py writes', () => {
+  test('matches the frontmatter pkm_bridge/journal.py writes', () => {
     expect(journalTemplate('2026-09-21', 'ABC-123')).toBe(
       '---\ntitle: "2026-09-21"\nid: ABC-123\ndate: 2026-09-21\n---\n\n',
     );

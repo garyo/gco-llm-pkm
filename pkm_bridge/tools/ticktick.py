@@ -2,15 +2,15 @@
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from pkm_bridge.database import get_db
 from pkm_bridge.db_repository import OAuthRepository
-from pkm_bridge.ticktick_client import TickTickClient
+from pkm_bridge.ticktick_client import TickTickClient, task_due_date
 from pkm_bridge.ticktick_oauth import TickTickOAuth
-from pkm_bridge.timezones import context_timezone
+from pkm_bridge.timezones import context_timezone, resolve_timezone
 from pkm_bridge.tools.base import BaseTool
 
 
@@ -49,7 +49,7 @@ Actions:
 - complete: Mark a task as complete
 
 Filters (apply to list_today, list_all, list_upcoming, list_overdue, search):
-- project: Filter by project name or ID
+- project: Filter by project name or ID (for create: the project to add the task to)
 - due_before / due_after: Date range filter (YYYY-MM-DD)
 - priority_min: Minimum priority (0=None, 1=Low, 3=Medium, 5=High)
 - include_completed: Include completed tasks (default false)
@@ -61,11 +61,13 @@ Other params:
 - query: For search
 
 IMPORTANT: To update a task, first search for it to get its task_id.
-Search results include {ticktick:xxx} which is the task_id needed for updates.
+Search results include {ticktick:xxx} which is the task_id needed for updates;
+create returns the new task's {ticktick:xxx} too.
 
 Date/Time Support:
 - All-day tasks: Use date only (YYYY-MM-DD)
-- Timed tasks: Use datetime with specific time (YYYY-MM-DDTHH:MM:SS)
+- Timed tasks: Use datetime with specific time (YYYY-MM-DDTHH:MM:SS), in the user's local time
+- Due dates and times in results are the user's local time
 - Reminders: ISO 8601 duration format - "TRIGGER:-PT30M" (30 min before)
 
 Connection status: Check /auth/ticktick/status. If not connected, user needs to visit
@@ -117,7 +119,11 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 },
                 "task_id": {"type": "string", "description": "Task ID (for update or complete)"},
                 "query": {"type": "string", "description": "Search query (for search action)"},
-                "project": {"type": "string", "description": "Filter by project name or ID"},
+                "project": {
+                    "type": "string",
+                    "description": "Project name or ID: filters list/search results; for "
+                    "create, the project to add the task to (default Inbox)",
+                },
                 "due_before": {
                     "type": "string",
                     "description": "Only tasks due before this date (YYYY-MM-DD)",
@@ -188,13 +194,14 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
     @staticmethod
     def _apply_filters(
         tasks: List[Dict[str, Any]],
+        tz: tzinfo,
         project_id_filter: Optional[str] = None,
         due_before: Optional[str] = None,
         due_after: Optional[str] = None,
         priority_min: Optional[int] = None,
         include_completed: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Apply filters to a task list."""
+        """Apply filters to a task list; due dates compare in the user's zone."""
         result = []
 
         # Parse date filters once
@@ -221,14 +228,10 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 continue
 
             # Filter by due date
-            due_date_str = task.get("dueDate")
             if due_before_date or due_after_date:
-                if not due_date_str:
+                task_date = task_due_date(task, tz)
+                if task_date is None:
                     continue  # Exclude tasks without due date when date filter is set
-                try:
-                    task_date = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).date()
-                except (ValueError, AttributeError):
-                    continue
                 if due_before_date and task_date >= due_before_date:
                     continue
                 if due_after_date and task_date < due_after_date:
@@ -238,15 +241,26 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
         return result
 
     @staticmethod
+    def _partial_note(client: TickTickClient) -> str:
+        """A warning line when some projects failed to load, else ''."""
+        if not client.failed_projects:
+            return ""
+        return "\n\nResults may be incomplete. These projects failed to load: " + "; ".join(
+            client.failed_projects
+        )
+
+    @classmethod
     def _format_tasks_grouped(
+        cls,
         client: TickTickClient,
         tasks: List[Dict[str, Any]],
         id_to_name: Dict[str, str],
         header: str,
+        user_timezone: str,
     ) -> str:
         """Format tasks grouped by project as markdown."""
         if not tasks:
-            return f"{header}: No tasks found."
+            return f"{header}: No tasks found.{cls._partial_note(client)}"
 
         # Group by project
         by_project: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -260,10 +274,12 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
             proj_tasks = by_project[proj_name]
             lines.append(f"\n### {proj_name}")
             for t in proj_tasks:
-                summary = client.format_task_summary(t, include_id=True)
+                summary = client.format_task_summary(
+                    t, include_id=True, user_timezone=user_timezone
+                )
                 lines.append(f"- [ ] {summary}")
 
-        return "\n".join(lines)
+        return "\n".join(lines) + cls._partial_note(client)
 
     # --- Client access ---
 
@@ -338,6 +354,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
 
         try:
             user_timezone = context_timezone(context)
+            tz = resolve_timezone(user_timezone)
 
             # Extract common filter params
             project_param = params.get("project")
@@ -385,6 +402,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 tasks = client.get_today_tasks(user_timezone=user_timezone)
                 tasks = self._apply_filters(
                     tasks,
+                    tz,
                     project_id_filter,
                     due_before,
                     due_after,
@@ -392,50 +410,39 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                     include_completed,
                 )
                 return self._format_tasks_grouped(
-                    client, tasks, id_to_name, "Tasks due today or overdue"
+                    client, tasks, id_to_name, "Tasks due today or overdue", user_timezone
                 )
 
             elif action == "list_all":
                 tasks = client.list_tasks()
                 tasks = self._apply_filters(
                     tasks,
+                    tz,
                     project_id_filter,
                     due_before,
                     due_after,
                     priority_min,
                     include_completed,
                 )
-                return self._format_tasks_grouped(client, tasks, id_to_name, "All tasks")
+                return self._format_tasks_grouped(
+                    client, tasks, id_to_name, "All tasks", user_timezone
+                )
 
             elif action == "list_upcoming":
                 days = params.get("days", 7)
-                if user_timezone:
-                    try:
-                        tz = ZoneInfo(user_timezone)
-                        today = datetime.now(tz).date()
-                    except Exception:
-                        today = datetime.now().date()
-                else:
-                    today = datetime.now().date()
-
+                today = datetime.now(tz).date()
                 end_date = today + timedelta(days=days)
-                tasks = client.list_tasks()
-                # Filter to tasks due between today and end_date (inclusive)
-                upcoming = []
-                for task in tasks:
-                    due = task.get("dueDate")
-                    if not due:
-                        continue
-                    try:
-                        task_date = datetime.fromisoformat(due.replace("Z", "+00:00")).date()
-                    except (ValueError, AttributeError):
-                        continue
-                    if today <= task_date <= end_date:
-                        upcoming.append(task)
+                # Tasks due between today and end_date (inclusive)
+                upcoming = [
+                    task
+                    for task in client.list_tasks()
+                    if (due := task_due_date(task, tz)) is not None and today <= due <= end_date
+                ]
 
                 # Apply additional filters
                 upcoming = self._apply_filters(
                     upcoming,
+                    tz,
                     project_id_filter,
                     due_before,
                     due_after,
@@ -449,34 +456,21 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                     upcoming,
                     id_to_name,
                     f"Tasks due in the next {days} days",
+                    user_timezone,
                 )
 
             elif action == "list_overdue":
-                if user_timezone:
-                    try:
-                        tz = ZoneInfo(user_timezone)
-                        today = datetime.now(tz).date()
-                    except Exception:
-                        today = datetime.now().date()
-                else:
-                    today = datetime.now().date()
-
-                tasks = client.list_tasks()
-                overdue = []
-                for task in tasks:
-                    due = task.get("dueDate")
-                    if not due:
-                        continue
-                    try:
-                        task_date = datetime.fromisoformat(due.replace("Z", "+00:00")).date()
-                    except (ValueError, AttributeError):
-                        continue
-                    if task_date < today:
-                        overdue.append(task)
+                today = datetime.now(tz).date()
+                overdue = [
+                    task
+                    for task in client.list_tasks()
+                    if (due := task_due_date(task, tz)) is not None and due < today
+                ]
 
                 # Hardcode include_completed=False for overdue
                 overdue = self._apply_filters(
                     overdue,
+                    tz,
                     project_id_filter,
                     due_before,
                     due_after,
@@ -485,7 +479,9 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 )
                 # Sort oldest first
                 overdue.sort(key=lambda t: t.get("dueDate", "9999"))
-                return self._format_tasks_grouped(client, overdue, id_to_name, "Overdue tasks")
+                return self._format_tasks_grouped(
+                    client, overdue, id_to_name, "Overdue tasks", user_timezone
+                )
 
             elif action == "create":
                 title = params.get("title")
@@ -521,14 +517,21 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                     content=content,
                     due_date=due_dt,
                     priority=priority,
+                    project_id=project_id_filter,
                     user_timezone=user_timezone,
                     reminders=reminders,
                     is_all_day=is_all_day,
                 )
 
-                task_type = "all-day" if is_all_day else "timed"
+                task_type = "all-day" if is_all_day else "timed" if due_dt else "undated"
                 reminder_info = f" with {len(reminders)} reminder(s)" if reminders else ""
-                return f"Created {task_type} task: {title}{reminder_info}"
+                summary = client.format_task_summary(
+                    task,
+                    include_id=True,
+                    project_name=id_to_name.get(task.get("projectId", ""), "Inbox"),
+                    user_timezone=user_timezone,
+                )
+                return f"Created {task_type} task{reminder_info}: {summary}"
 
             elif action == "update":
                 task_id = params.get("task_id")
@@ -659,6 +662,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 # Apply filters
                 matched = self._apply_filters(
                     matched,
+                    tz,
                     project_id_filter,
                     due_before,
                     due_after,
@@ -667,15 +671,17 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
                 )
 
                 if not matched:
-                    return f"No tasks found matching '{query}'."
+                    return f"No tasks found matching '{query}'.{self._partial_note(client)}"
 
                 # Flat output with project name per task
                 lines = [f"Tasks matching '{query}' ({len(matched)}):"]
                 for t in matched:
                     proj_name = id_to_name.get(t.get("projectId", ""), "Inbox")
-                    summary = client.format_task_summary(t, include_id=True, project_name=proj_name)
+                    summary = client.format_task_summary(
+                        t, include_id=True, project_name=proj_name, user_timezone=user_timezone
+                    )
                     lines.append(f"- {summary}")
-                return "\n".join(lines)
+                return "\n".join(lines) + self._partial_note(client)
 
             else:
                 return f"Error: Unknown action: {action}"

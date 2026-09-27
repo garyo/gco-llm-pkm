@@ -1245,7 +1245,6 @@ import EditorInterface from '../components/EditorInterface.astro';
    * show the conversation as it saved it. Returns false when it didn't.
    */
   async function recoverReplyFromServer(message: string): Promise<boolean> {
-    if (!authToken) return false;
     try {
       const res = await fetchWithTimeout(`/sessions/${sessionId}/history`, {
         headers: getAuthHeaders()

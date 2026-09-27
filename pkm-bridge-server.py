@@ -431,7 +431,9 @@ if google_gmail_oauth:
 
 # Register semantic search tool if RAG is enabled
 if context_retriever:
-    tool_registry.register(SemanticSearchTool(logger, context_retriever))
+    tool_registry.register(
+        SemanticSearchTool(logger, context_retriever, config.org_dir, config.logseq_dir)
+    )
     logger.info("Semantic search tool registered (RAG)")
 
 # Register skill tools

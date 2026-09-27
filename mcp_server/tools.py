@@ -134,7 +134,9 @@ def _get_tool_registry():
         if retriever:
             from pkm_bridge.tools.semantic_search import SemanticSearchTool
 
-            registry.register(SemanticSearchTool(tool_logger, retriever))
+            registry.register(
+                SemanticSearchTool(tool_logger, retriever, config.org_dir, config.logseq_dir)
+            )
             logger.info("Semantic search tool registered")
     except Exception as e:
         logger.info(f"Semantic search not available: {e}")
@@ -288,8 +290,9 @@ def register_all_tools(mcp: FastMCP):
         """Search notes with hybrid retrieval: semantic similarity plus exact keyword matching.
 
         Use this for knowledge-base questions. Exact tokens (names, codes, filenames) are
-        matched even when semantically dissimilar. Returns YAML with filename, similarity
-        score, heading path, content, and line number, sorted by hybrid relevance.
+        matched even when semantically dissimilar. Returns YAML sorted by hybrid relevance:
+        org:/logseq: filename, similarity, heading path, line number, and an excerpt of up
+        to ~600 chars (at most 2 per note); read_file gets the full note.
 
         Args:
             query: Natural language search query

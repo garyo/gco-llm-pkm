@@ -116,7 +116,10 @@ export async function deleteScheduledTask(id: number): Promise<void> {
 
 export async function runScheduledTaskNow(id: number): Promise<unknown> {
   const res = await authFetch(`/api/scheduled-tasks/${id}/run`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Run failed: ${res.status}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Run failed: ${res.status}`);
+  }
   return res.json();
 }
 

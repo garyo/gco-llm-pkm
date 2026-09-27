@@ -1,17 +1,17 @@
 """Task dispatcher — 60-second tick that finds and runs due tasks.
 
-Uses a threading Lock so only one task executes at a time.
-Enforces daily global token budgets.
+Scheduled and manual runs share one job lock, so only one task executes at a
+time. Enforces daily global token budgets.
 """
 
 import logging
 import os
-import threading
 from datetime import datetime, tzinfo
 from typing import Optional
 
 from ..database import get_db
 from ..events import event_manager
+from ..job_lock import job_lock, start_exclusive
 from .executor import TaskExecutor
 from .heartbeat import load_heartbeat_prompt
 from .repository import (
@@ -22,6 +22,8 @@ from .repository import (
 
 DEFAULT_DAILY_INPUT_LIMIT = 2_000_000
 DEFAULT_DAILY_OUTPUT_LIMIT = 200_000
+
+JOB_NAME = "scheduled_tasks"
 
 
 def prompt_with_date(prompt: str, tz: Optional[tzinfo]) -> str:
@@ -49,7 +51,6 @@ class TaskDispatcher:
         self.logger = logger
         self.org_dir = org_dir
         self.timezone = timezone
-        self._lock = threading.Lock()
 
     @property
     def _daily_input_limit(self) -> int:
@@ -100,7 +101,8 @@ class TaskDispatcher:
 
     def tick(self) -> None:
         """Called every 60 seconds by APScheduler. Finds and runs due tasks."""
-        if not self._lock.acquire(blocking=False):
+        lock = job_lock(JOB_NAME)
+        if not lock.acquire(blocking=False):
             self.logger.debug("Scheduler tick: already running, skipping")
             return
 
@@ -109,7 +111,7 @@ class TaskDispatcher:
         except Exception as e:
             self.logger.error(f"Scheduler tick error: {e}", exc_info=True)
         finally:
-            self._lock.release()
+            lock.release()
 
     def _run_due_tasks(self) -> None:
         db = get_db()
@@ -232,16 +234,32 @@ class TaskDispatcher:
                 f"{result['input_tokens']}+{result['output_tokens']} tokens)"
             )
 
-    def run_task_now(self, task_id: int) -> None:
-        """Run a specific task immediately (called from API endpoint in a daemon thread)."""
+    def start_task_now(self, task) -> Optional[str]:
+        """Start a task immediately in a background thread (manual trigger).
+
+        Returns None when started, or the reason it was refused: manual runs
+        honor the enabled flag, the daily budget, and the one-task-at-a-time
+        lock just as scheduled runs do.
+        """
+        if not task.enabled:
+            return f"Task '{task.name}' is disabled; enable it first"
+        db = get_db()
+        try:
+            if not self._check_global_budget(db):
+                return "The daily scheduled-task token budget is used up"
+        finally:
+            db.close()
+        if not start_exclusive(JOB_NAME, self._run_task_by_id, task.id, logger=self.logger):
+            return "Another scheduled task is running; try again when it finishes"
+        return None
+
+    def _run_task_by_id(self, task_id: int) -> None:
         db = get_db()
         try:
             task = ScheduledTaskRepository.get_by_id(db, task_id)
             if not task:
-                self.logger.error(f"Scheduler: run_task_now: task {task_id} not found")
+                self.logger.error(f"Scheduler: run now: task {task_id} not found")
                 return
             self._run_one_task(db, task)
-        except Exception as e:
-            self.logger.error(f"Scheduler: run_task_now error: {e}", exc_info=True)
         finally:
             db.close()

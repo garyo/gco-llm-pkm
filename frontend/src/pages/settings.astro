@@ -1526,8 +1526,9 @@ import Layout from '../layouts/Layout.astro';
     async function runTaskNow(id: number) {
         if (!confirm('Run this task now?')) return;
         try {
-            await fetch(`/api/scheduled-tasks/${id}/run`, { method: 'POST', headers: authHeaders() });
-            alert('Task started in background');
+            const res = await fetch(`/api/scheduled-tasks/${id}/run`, { method: 'POST', headers: authHeaders() });
+            const data = await res.json().catch(() => ({}));
+            alert(res.ok ? 'Task started in background' : data.error || `Run failed: ${res.status}`);
         } catch (e) {
             alert('Failed to start task');
         }

@@ -39,6 +39,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -108,13 +109,13 @@ from pkm_bridge.feedback_capture import capture_feedback, check_previous_correct
 
 # Import Google Calendar components
 from pkm_bridge.google_oauth import GoogleOAuth
+from pkm_bridge.job_lock import run_exclusive, start_exclusive
 from pkm_bridge.logging_config import setup_logging
 
 # Import org-mode link utilities
 from pkm_bridge.org_links import resolve_org_id_to_file
 from pkm_bridge.query_enhancer import QueryEnhancer
 from pkm_bridge.redact import redact_obj
-from pkm_bridge.retrospective import SessionRetrospective
 from pkm_bridge.scheduler.dispatcher import TaskDispatcher
 from pkm_bridge.scheduler.executor import TaskExecutor
 from pkm_bridge.scheduler.heartbeat import ensure_heartbeat_task
@@ -158,6 +159,9 @@ from pkm_bridge.voice_preprocessor import VoicePreprocessor
 # -------------------------
 # Setup & Configuration
 # -------------------------
+
+# Anything this process finds 'running' from before now was started by an earlier one.
+server_started_at = datetime.utcnow()
 
 # Load configuration
 config = Config()
@@ -207,12 +211,8 @@ if voyage_api_key:
         if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
             embedding_scheduler = BackgroundScheduler()
 
-            def _scheduled_embedding():
-                gmail_oauth = globals().get("google_gmail_oauth")
-                run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
-
             embedding_scheduler.add_job(
-                func=_scheduled_embedding,
+                func=lambda: run_exclusive("embedding", _run_embedding, logger=logger),
                 trigger="interval",
                 hours=1,  # Run every hour
                 id="incremental_embedding",
@@ -227,8 +227,13 @@ if voyage_api_key:
 else:
     logger.warning("VOYAGE_API_KEY not set - RAG auto-injection disabled")
 
-# Initialize self-improvement agent (daily at 3 AM, replaces old retrospective)
-retrospective = SessionRetrospective(llm_client, logger)
+
+def _run_embedding() -> None:
+    """One incremental embedding pass; callers hold the "embedding" job lock."""
+    gmail_oauth = globals().get("google_gmail_oauth")
+    run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
+
+
 si_agent = SelfImprovementAgent(llm_client, logger, config)
 
 # Master switch for scheduled task execution
@@ -252,7 +257,7 @@ if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     # Embeddings are idempotent and safe to run anywhere.
     if not config.debug:
         embedding_scheduler.add_job(
-            func=si_agent.run,
+            func=lambda: run_exclusive("self_improvement", si_agent.run, logger=logger),
             trigger="cron",
             hour=3,
             day="*/2",
@@ -455,6 +460,18 @@ task_executor = TaskExecutor(llm_client, tool_registry, logger)
 task_dispatcher = TaskDispatcher(
     task_executor, logger, org_dir=str(config.org_dir), timezone=config.timezone
 )
+
+# Runs left 'running' by a crash or restart would otherwise stay that way forever.
+try:
+    _db = get_db()
+    try:
+        _interrupted = ScheduledTaskRunRepository.fail_interrupted(_db, server_started_at)
+    finally:
+        _db.close()
+    if _interrupted:
+        logger.warning(f"Marked {_interrupted} interrupted scheduled-task run(s) as failed")
+except Exception as e:
+    logger.warning(f"Failed to clean up interrupted task runs: {e}")
 
 # Ensure heartbeat task exists in DB
 try:
@@ -2892,9 +2909,6 @@ def health():
     return jsonify(health_data), 200 if health_data["status"] == "ok" else 503
 
 
-_embedding_in_progress = threading.Lock()
-
-
 @app.route("/admin/trigger-embedding", methods=["POST"])
 @limiter.limit("6 per hour")
 def trigger_embedding():
@@ -2906,35 +2920,13 @@ def trigger_embedding():
     if not voyage_client:
         return jsonify({"error": "RAG not configured", "message": "VOYAGE_API_KEY not set"}), 503
 
-    # Single-flight: refuse to spawn a second run while one is active, so repeated
-    # calls can't pile up daemon threads and Voyage API spend.
-    if not _embedding_in_progress.acquire(blocking=False):
+    # Shares the hourly job's lock, so repeated calls can't pile up runs and Voyage spend.
+    if not start_exclusive("embedding", _run_embedding, logger=logger):
         return (
             jsonify({"status": "busy", "message": "An embedding run is already in progress"}),
             409,
         )
-
-    try:
-
-        def run_embedding():
-            try:
-                stats = run_incremental_embedding(logger, voyage_client, config, google_gmail_oauth)
-                logger.info(f"Manual embedding complete: {stats}")
-            except Exception as e:
-                logger.error(f"Manual embedding failed: {e}")
-            finally:
-                _embedding_in_progress.release()
-
-        thread = threading.Thread(target=run_embedding, daemon=True)
-        thread.start()
-
-        return jsonify(
-            {"status": "started", "message": "Incremental embedding started in background"}
-        )
-    except Exception as e:
-        _embedding_in_progress.release()
-        logger.error(f"Failed to trigger embedding: {e}")
-        return jsonify({"error": "Failed to start embedding", "message": str(e)}), 500
+    return jsonify({"status": "started", "message": "Incremental embedding started in background"})
 
 
 # -------------------------
@@ -3318,25 +3310,16 @@ def trigger_self_improve():
         if not auth_manager.verify_token(token):
             return jsonify({"error": "Invalid token"}), 401
 
-    try:
-        import threading
+    def run_agent():
+        result = si_agent.run(trigger="manual")
+        logger.info(f"Manual SI agent complete: {result.get('summary', '')[:200]}")
 
-        def run_agent():
-            try:
-                result = si_agent.run(trigger="manual")
-                logger.info(f"Manual SI agent complete: {result.get('summary', '')[:200]}")
-            except Exception as e:
-                logger.error(f"Manual SI agent failed: {e}")
-
-        thread = threading.Thread(target=run_agent, daemon=True)
-        thread.start()
-
-        return jsonify(
-            {"status": "started", "message": "Self-improvement agent started in background"}
+    if not start_exclusive("self_improvement", run_agent, logger=logger):
+        return (
+            jsonify({"error": "The self-improvement agent is already running"}),
+            409,
         )
-    except Exception as e:
-        logger.error(f"Failed to trigger SI agent: {e}")
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "started", "message": "Self-improvement agent started in background"})
 
 
 @app.route("/admin/retrospective-log", methods=["GET"])
@@ -3788,14 +3771,12 @@ def run_scheduled_task_now(task_id):
         task = ScheduledTaskRepository.get_by_id(db, task_id)
         if not task:
             return jsonify({"error": "Task not found"}), 404
+        refusal = task_dispatcher.start_task_now(task)
     finally:
         db.close()
 
-    import threading
-
-    thread = threading.Thread(target=task_dispatcher.run_task_now, args=(task_id,), daemon=True)
-    thread.start()
-
+    if refusal:
+        return jsonify({"error": refusal}), 409
     return jsonify({"status": "started", "task_id": task_id, "task_name": task.name})
 
 

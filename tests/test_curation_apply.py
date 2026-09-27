@@ -136,6 +136,76 @@ class TestApplyProposal:
         assert result["status"] == "applied"
         assert len(result["written"]) == 2
 
+    def test_two_edits_to_one_file_apply_together(self, editor, tmp_path):
+        payload = {
+            "edits": [
+                link_edit(),
+                link_edit(find="other stuff", replace="other [[stuff]]"),
+            ]
+        }
+        result = apply_proposal("add_links", payload, editor, LOGGER)
+        assert result["status"] == "applied"
+        assert result["written"] == ["logseq:journals/2026_07_01.md"]
+        journal = (tmp_path / "logseq" / "journals" / "2026_07_01.md").read_text()
+        assert journal == "- worked on the [[dovetail jig]] today\n- other [[stuff]]\n"
+
+    def test_edits_apply_regardless_of_order_in_file(self, editor, tmp_path):
+        payload = {
+            "edits": [
+                link_edit(find="other stuff", replace="other [[stuff]]"),
+                link_edit(),
+            ]
+        }
+        assert apply_proposal("add_links", payload, editor, LOGGER)["status"] == "applied"
+        journal = (tmp_path / "logseq" / "journals" / "2026_07_01.md").read_text()
+        assert journal == "- worked on the [[dovetail jig]] today\n- other [[stuff]]\n"
+
+    def test_overlapping_edits_are_refused(self, editor):
+        payload = {
+            "edits": [
+                link_edit(),
+                link_edit(find="dovetail jig today", replace="[[dovetail]] jig today"),
+            ]
+        }
+        problems = validate_payload("add_links", payload, editor)
+        assert any("overlap" in p for p in problems)
+
+    def test_one_stale_edit_writes_nothing_anywhere(self, editor, tmp_path):
+        journal = tmp_path / "logseq" / "journals" / "2026_07_01.md"
+        page = tmp_path / "logseq" / "pages" / "Woodworking.md"
+        before = (journal.read_text(), page.read_text())
+        payload = {
+            "edits": [
+                {
+                    "file": "logseq:pages/Woodworking.md",
+                    "find": "my woodworking notes",
+                    "replace": "my [[Woodworking]] notes",
+                },
+                link_edit(),
+                link_edit(find="no longer here", replace="[[gone]]"),
+            ]
+        }
+        result = apply_proposal("add_links", payload, editor, LOGGER)
+        assert result["status"] == "stale"
+        assert (journal.read_text(), page.read_text()) == before
+
+    def test_change_elsewhere_in_file_during_apply_is_merged(self, editor, tmp_path):
+        """A line added (e.g. via Syncthing) after the snapshot survives the write."""
+        journal = tmp_path / "logseq" / "journals" / "2026_07_01.md"
+        read_file = editor.read_file
+
+        def read_then_sync(*args, **kwargs):
+            result = read_file(*args, **kwargs)
+            journal.write_text(result["content"] + "- added on phone\n")
+            return result
+
+        editor.read_file = read_then_sync
+        result = apply_proposal("add_links", {"edits": [link_edit()]}, editor, LOGGER)
+        assert result["status"] == "applied"
+        content = journal.read_text()
+        assert "[[dovetail jig]]" in content
+        assert "- added on phone" in content
+
 
 class TestProposalSource:
     """Scheduled runs file as the curator; chat and MCP calls file as chat."""

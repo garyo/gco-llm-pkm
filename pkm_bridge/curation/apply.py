@@ -21,16 +21,84 @@ Every edit is anchored to exact text that must occur exactly once in the
 target file. Anchors are checked at proposal time (so the curator can't file
 broken proposals) and re-checked at apply time (so a file edited in between —
 locally, or via Syncthing from another machine — makes the proposal stale
-instead of mis-applying). Writes go through FileEditor: atomic temp-file +
-rename, with an mtime conflict check between our read and our write.
+instead of mis-applying). Edits may share a file: each file's edits are
+located in one snapshot, must not overlap, and are applied together as one
+write. Writes go through FileEditor (atomic temp-file + rename), based on the
+snapshot's hash, so a concurrent change elsewhere in the file is merged in.
 """
 
 import logging
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple
 
 from ..file_editor import ConflictError, FileEditor
 
 VALID_KINDS = ("add_links", "new_page", "insight")
+
+
+@dataclass
+class _FileWrite:
+    """One file's edits applied in memory, ready to write."""
+
+    path: str  # canonical path after pages/ fallback
+    base_hash: str  # hash of the snapshot the edits were located in
+    content: str
+
+
+def _plan_edits(
+    edits: List[Dict[str, Any]], editor: FileEditor
+) -> Tuple[List[_FileWrite], List[str]]:
+    """Locate every edit's anchor and build each target file's new content.
+
+    Returns (writes, problems); writes are only meaningful when problems is empty.
+    """
+    problems: List[str] = []
+    reads: Dict[str, Dict[str, Any]] = {}  # requested path -> read_file result
+    snapshots: Dict[str, Dict[str, Any]] = {}  # canonical path -> read_file result
+    spans: Dict[str, List[Tuple[int, int, str, str]]] = {}  # path -> (start, end, repl, label)
+
+    for i, edit in enumerate(edits):
+        file = edit.get("file", "")
+        find = edit.get("find", "")
+        replace = edit.get("replace")
+        label = f"edit {i + 1} ({file or 'no file'})"
+
+        if not file or not find or replace is None:
+            problems.append(f"{label}: needs 'file', 'find', and 'replace'")
+            continue
+        if find == replace:
+            problems.append(f"{label}: 'find' and 'replace' are identical")
+            continue
+        try:
+            if file not in reads:
+                reads[file] = editor.read_file(file, max_chars=None)
+        except ValueError as e:
+            problems.append(f"{label}: {e}")
+            continue
+        # One snapshot per file, even when edits name it differently (pages/ fallback).
+        path = reads[file]["path"]
+        content = snapshots.setdefault(path, reads[file])["content"]
+        count = content.count(find)
+        if count == 0:
+            problems.append(f"{label}: anchor text not found in file")
+        elif count > 1:
+            problems.append(f"{label}: anchor text occurs {count} times (must be unique)")
+        else:
+            start = content.index(find)
+            spans.setdefault(path, []).append((start, start + len(find), replace, label))
+
+    writes: List[_FileWrite] = []
+    for path, file_spans in spans.items():
+        file_spans.sort()
+        for (_, prev_end, _, prev_label), (start, _, _, label) in zip(file_spans, file_spans[1:]):
+            if start < prev_end:
+                problems.append(f"{prev_label} and {label} overlap")
+        content = snapshots[path]["content"]
+        for start, end, replace, _ in reversed(file_spans):
+            content = content[:start] + replace + content[end:]
+        writes.append(_FileWrite(path, snapshots[path]["hash"], content))
+
+    return writes, problems
 
 
 def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> List[str]:
@@ -38,14 +106,21 @@ def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> 
 
     Returns a list of problems; empty means the payload is applicable right now.
     """
+    return _check_payload(kind, payload, editor)[1]
+
+
+def _check_payload(
+    kind: str, payload: Dict[str, Any], editor: FileEditor
+) -> Tuple[List[_FileWrite], List[str]]:
+    """validate_payload, also returning the file writes that would apply it."""
     problems: List[str] = []
 
     if kind not in VALID_KINDS:
-        return [f"Unknown proposal kind: '{kind}'"]
+        return [], [f"Unknown proposal kind: '{kind}'"]
 
     edits = payload.get("edits", [])
     if not isinstance(edits, list):
-        return ["'edits' must be a list"]
+        return [], ["'edits' must be a list"]
 
     if kind == "add_links" and not edits:
         problems.append("add_links proposal has no edits")
@@ -67,30 +142,8 @@ def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> 
             except ValueError as e:
                 problems.append(f"Invalid page path '{page_file}': {e}")
 
-    for i, edit in enumerate(edits):
-        file = edit.get("file", "")
-        find = edit.get("find", "")
-        replace = edit.get("replace")
-        label = f"edit {i + 1} ({file or 'no file'})"
-
-        if not file or not find or replace is None:
-            problems.append(f"{label}: needs 'file', 'find', and 'replace'")
-            continue
-        if find == replace:
-            problems.append(f"{label}: 'find' and 'replace' are identical")
-            continue
-        try:
-            result = editor.read_file(file, max_chars=None)
-        except ValueError as e:
-            problems.append(f"{label}: {e}")
-            continue
-        count = result["content"].count(find)
-        if count == 0:
-            problems.append(f"{label}: anchor text not found in file")
-        elif count > 1:
-            problems.append(f"{label}: anchor text occurs {count} times (must be unique)")
-
-    return problems
+    writes, edit_problems = _plan_edits(edits, editor)
+    return writes, problems + edit_problems
 
 
 def apply_proposal(
@@ -101,30 +154,16 @@ def apply_proposal(
 ) -> Dict[str, Any]:
     """Apply a validated proposal to the note files.
 
-    Returns {"status": "applied", "written": [paths]} on success, or
+    Every file is checked and its new content built before anything is
+    written. Returns {"status": "applied", "written": [paths]} on success, or
     {"status": "stale", "problems": [...]} when anchors no longer match
     (nothing written), or {"status": "conflict", "written": [...],
-    "problems": [...]} when a file changed between our read and write
-    (earlier writes in the batch may have landed — reported honestly).
+    "problems": [...]} when a file changed during apply in a way that can't be
+    merged (earlier writes in the batch may have landed — reported honestly).
     """
-    problems = validate_payload(kind, payload, editor)
+    writes, problems = _check_payload(kind, payload, editor)
     if problems:
         return {"status": "stale", "problems": problems}
-
-    # Read all edit targets up front so the apply works from one snapshot.
-    edits = payload.get("edits", [])
-    snapshots = []
-    for edit in edits:
-        result = editor.read_file(edit["file"], max_chars=None)
-        snapshots.append(
-            {
-                "file": result["path"],  # canonical path after pages/ fallback
-                "content": result["content"],
-                "mtime": result["modified"],
-                "find": edit["find"],
-                "replace": edit["replace"],
-            }
-        )
 
     written: List[str] = []
 
@@ -135,18 +174,17 @@ def apply_proposal(
             return {"status": "stale", "problems": [f"Page already exists: {page['file']}"]}
         written.append(result["path"])
 
-    for snap in snapshots:
-        new_content = snap["content"].replace(snap["find"], snap["replace"], 1)
+    for write in writes:
         try:
-            editor.write_file(snap["file"], new_content, expected_mtime=snap["mtime"])
+            editor.write_file(write.path, write.content, base_hash=write.base_hash)
         except ConflictError as e:
-            logger.warning(f"Proposal apply conflict on {snap['file']}: {e}")
+            logger.warning(f"Proposal apply conflict on {write.path}: {e}")
             return {
                 "status": "conflict",
                 "written": written,
-                "problems": [f"{snap['file']} changed during apply: {e}"],
+                "problems": [f"{write.path} changed during apply: {e}"],
             }
-        written.append(snap["file"])
+        written.append(write.path)
 
     logger.info(f"Applied {kind} proposal: wrote {len(written)} file(s)")
     return {"status": "applied", "written": written}

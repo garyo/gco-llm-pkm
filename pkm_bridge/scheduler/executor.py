@@ -105,8 +105,6 @@ class TaskExecutor:
                     api_params["system"] = system_param
                 if tools:
                     api_params["tools"] = tools
-                if cache_enabled:
-                    api_params["extra_headers"] = {"anthropic-beta": "prompt-caching-2024-07-31"}
 
                 response = self.client.complete(**api_params)
 

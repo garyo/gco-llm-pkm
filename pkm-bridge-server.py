@@ -60,6 +60,7 @@ from pkm_bridge.models import (
     get_anthropic_cost,
     get_available_models,
     is_anthropic,
+    thinking_params,
     web_search_tool,
 )
 
@@ -516,7 +517,7 @@ def serialize_message_content(content, *, strip_thinking: bool = True):
     turn to the DB) API-level thinking blocks and inline `<thinking>` XML tags
     are removed to keep stored history lean. When False (used for messages
     appended *during* the current tool loop) thinking blocks are preserved
-    unchanged — the interleaved-thinking beta requires them to be replayed
+    unchanged — interleaved thinking requires them to be replayed
     verbatim while continuing a tool-use turn, or the API returns a 400.
     """
     if isinstance(content, str):
@@ -913,7 +914,8 @@ def query():
 
             user_message = data["message"]
             model = data.get("model", config.model)
-            thinking = data.get("thinking")
+            # A boolean; older clients sent a thinking config dict, also truthy.
+            want_thinking = bool(data.get("thinking"))
             user_timezone = data.get("timezone")  # Optional timezone from client
             if not user_timezone and config.timezone:
                 # Fall back to the server-configured timezone so tools (e.g. the
@@ -1097,18 +1099,13 @@ def query():
                 "tools": tools,
             }
 
-            # Anthropic-specific: prompt caching and beta headers
             if is_anthropic(model):
-                beta_features = ["prompt-caching-2024-07-31"]
-                if thinking:
-                    beta_features.append("interleaved-thinking-2025-05-14")
-                api_params["extra_headers"] = {"anthropic-beta": ",".join(beta_features)}
                 # Message-level breakpoints (see mark_cache_breakpoints), not one on
                 # tools: render order is tools→system→messages and the system blocks
                 # already carry breakpoints, so a tools breakpoint would be redundant.
                 mark_cache_breakpoints(api_messages)
-                if thinking:
-                    api_params["thinking"] = thinking
+            if want_thinking:
+                api_params.update(thinking_params(model))
 
             # Initial keepalive — gets bytes flowing through the proxy immediately
             yield _ndjson({"type": "keepalive", "ts": time.time()})
@@ -1300,7 +1297,7 @@ def query():
 
                 # Persist a thinking-stripped copy to the full history; send the
                 # raw assistant content (thinking blocks intact) to the API, since
-                # the interleaved-thinking beta requires them replayed verbatim
+                # interleaved thinking requires them replayed verbatim
                 # while continuing a tool-use turn.
                 history.append(
                     {

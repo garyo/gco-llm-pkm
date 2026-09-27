@@ -250,10 +250,8 @@ class SelfImprovementAgent:
             ]
             if tools:
                 tools[-1]["cache_control"] = {"type": "ephemeral"}
-            extra_headers = {"anthropic-beta": "prompt-caching-2024-07-31"}
         else:
             system_blocks = system_prompt
-            extra_headers = None
 
         last_stop = None
         try:
@@ -271,8 +269,6 @@ class SelfImprovementAgent:
                     "messages": messages,
                     "tools": tools,
                 }
-                if extra_headers:
-                    api_params["extra_headers"] = extra_headers
 
                 response = self.client.complete(**api_params)
 

@@ -148,6 +148,41 @@ def supports_thinking(model: str) -> bool:
     return is_anthropic(model)
 
 
+# Claude models from before adaptive thinking (Claude 4.6). They take a fixed
+# thinking budget; every later model rejects `budget_tokens` or deprecates it.
+_BUDGET_THINKING_PREFIXES = (
+    "claude-3",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-0",
+    "claude-sonnet-4-2",  # dated IDs like claude-sonnet-4-20250514
+    "claude-sonnet-4-5",
+    "claude-opus-4-0",
+    "claude-opus-4-1",
+    "claude-opus-4-2",
+    "claude-opus-4-5",
+)
+THINKING_BUDGET_TOKENS = 10_000
+INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
+
+
+def thinking_params(model: str) -> dict[str, Any]:
+    """Request parameters that turn on "deep thinking" for `model`.
+
+    Current models use adaptive thinking; "summarized" display because Sonnet 5
+    and Opus 4.7+ otherwise stream empty thinking text. Older models need a
+    fixed budget, plus a beta header to think between tool calls (adaptive
+    thinking interleaves on its own). Returns {} for non-Anthropic models.
+    """
+    if not supports_thinking(model):
+        return {}
+    if not model.startswith(_BUDGET_THINKING_PREFIXES):
+        return {"thinking": {"type": "adaptive", "display": "summarized"}}
+    return {
+        "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET_TOKENS},
+        "extra_headers": {"anthropic-beta": INTERLEAVED_THINKING_BETA},
+    }
+
+
 # Anthropic models that support dynamic filtering (web_search_20260209 runs
 # searches through code execution, filtering results before they hit context).
 # Older Claude models (Haiku 4.5, Sonnet 4.5, ...) get the basic tool version.
@@ -156,6 +191,7 @@ _WEB_SEARCH_FILTERING_PREFIXES = (
     "claude-opus-4-6",
     "claude-opus-4-7",
     "claude-opus-4-8",
+    "claude-opus-5",
     "claude-sonnet-4-6",
     "claude-sonnet-5",
 )

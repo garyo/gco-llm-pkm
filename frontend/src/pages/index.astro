@@ -1030,7 +1030,7 @@ import EditorInterface from '../components/EditorInterface.astro';
       };
 
       if (thinkingEnabled) {
-        requestBody.thinking = { type: 'enabled', budget_tokens: 10000 };
+        requestBody.thinking = true;  // the server picks the thinking config per model
       }
 
       // Reset voice flag after using it

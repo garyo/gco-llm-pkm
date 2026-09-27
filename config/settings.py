@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from pkm_bridge.history_manager import TIME_NOTE_PREFIX
+from pkm_bridge.timezones import DEFAULT_TIMEZONE
 
 # Dangerous command patterns (blacklist) blocked before running shell commands
 # or saving skills. Real security comes from Docker isolation, limited filesystem
@@ -100,7 +101,7 @@ class Config:
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
         # Timezone Configuration
-        timezone_str = os.getenv("TIMEZONE", "America/New_York")
+        timezone_str = os.getenv("TIMEZONE", DEFAULT_TIMEZONE)
         try:
             self.timezone = ZoneInfo(timezone_str)
         except Exception as e:

@@ -1,12 +1,13 @@
 """Database repositories for scheduled task models."""
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
 from ..database import DailyTokenUsage, ScheduledTask, ScheduledTaskRun
+from ..timezones import UTC, configured_timezone
 
 
 def _parse_interval(expr: str) -> timedelta:
@@ -19,12 +20,23 @@ def _parse_interval(expr: str) -> timedelta:
     return timedelta(**{units[unit]: value})
 
 
-def compute_next_run(task: ScheduledTask, after: datetime | None = None) -> datetime:
+def compute_next_run(
+    task: ScheduledTask,
+    after: datetime | None = None,
+    anchor: datetime | None = None,
+    tz: tzinfo | None = None,
+) -> datetime:
     """Compute the next run time for a task based on its schedule.
+
+    All times are naive UTC, as stored in the database.
 
     Args:
         task: The scheduled task.
         after: Compute next run after this time (defaults to now).
+        anchor: For interval tasks, the time the interval ticks from (defaults
+            to the last run, then the creation time).
+        tz: Zone cron expressions are read in (defaults to the configured
+            timezone), so '0 9 * * *' means 9am local across DST changes.
 
     Returns:
         The next datetime when this task should fire.
@@ -33,7 +45,7 @@ def compute_next_run(task: ScheduledTask, after: datetime | None = None) -> date
 
     if task.schedule_type == "interval":
         delta = _parse_interval(task.schedule_expr)
-        base = task.last_run_at or task.created_at or after
+        base = anchor or task.last_run_at or task.created_at or after
         # Find the next interval tick after `after`
         if base >= after:
             return base + delta
@@ -46,8 +58,18 @@ def compute_next_run(task: ScheduledTask, after: datetime | None = None) -> date
     elif task.schedule_type == "cron":
         from croniter import croniter
 
-        cron = croniter(task.schedule_expr, after)
-        return cron.get_next(datetime)
+        # croniter steps aware datetimes with a fixed UTC offset, so across a DST
+        # change it lands an hour off. Step in naive wall time and attach the zone
+        # afterwards; the loop skips a slot that maps to the past in the repeated
+        # fall-back hour.
+        tz = tz or configured_timezone() or UTC
+        local_after = after.replace(tzinfo=UTC).astimezone(tz).replace(tzinfo=None)
+        cron = croniter(task.schedule_expr, local_after)
+        while True:
+            local_next = cron.get_next(datetime).replace(tzinfo=tz)
+            next_utc = local_next.astimezone(UTC).replace(tzinfo=None)
+            if next_utc > after:
+                return next_utc
 
     else:
         raise ValueError(f"Unknown schedule_type: '{task.schedule_type}'")
@@ -121,10 +143,17 @@ class ScheduledTaskRepository:
 
     @staticmethod
     def mark_run(db: Session, task: ScheduledTask) -> None:
-        """Update last_run_at and advance next_run_at after a run."""
+        """Update last_run_at and advance next_run_at after a run.
+
+        Interval tasks tick from the slot that just fired rather than from when
+        the run finished, so they keep their time of day instead of drifting
+        later by the run's duration each time. A manual run before the slot
+        leaves the schedule alone.
+        """
         now = datetime.utcnow()
         task.last_run_at = now
-        task.next_run_at = compute_next_run(task, after=now)
+        if task.next_run_at is None or task.next_run_at <= now:
+            task.next_run_at = compute_next_run(task, after=now, anchor=task.next_run_at)
         db.commit()
 
 

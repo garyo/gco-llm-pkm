@@ -129,14 +129,17 @@ export async function getScheduledTaskRuns(): Promise<unknown[]> {
   return res.json();
 }
 
-/** Today's background-task token usage (GET /api/scheduled-tasks/budget). */
+/** Today's background-task usage and cost (GET /api/scheduled-tasks/budget). */
 export interface TaskBudget {
   task_runs: number;
   input_tokens: number;
   output_tokens: number;
-  input_limit: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  cost_limit_usd: number;
   output_limit: number;
-  input_pct: number;
+  cost_pct: number;
   output_pct: number;
 }
 

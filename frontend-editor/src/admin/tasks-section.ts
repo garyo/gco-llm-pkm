@@ -185,11 +185,12 @@ export function initTasksSection(container: HTMLElement): void {
   async function loadBudget() {
     try {
       const b = await getScheduledTaskBudget();
-      const pct = Math.max(b.input_pct, b.output_pct);
-      budgetEl.textContent = `Budget: ${pct.toFixed(0)}% used today · ${b.task_runs} runs`;
+      const pct = Math.max(b.cost_pct, b.output_pct);
+      budgetEl.textContent =
+        `Budget: ${pct.toFixed(0)}% used today · $${b.cost_usd.toFixed(2)} · ${b.task_runs} runs`;
       budgetEl.title =
-        `Input ${(b.input_tokens / 1000).toFixed(0)}k / ${(b.input_limit / 1000).toFixed(0)}k tokens, ` +
-        `output ${(b.output_tokens / 1000).toFixed(0)}k / ${(b.output_limit / 1000).toFixed(0)}k`;
+        `Cost $${b.cost_usd.toFixed(2)} / $${b.cost_limit_usd.toFixed(2)}, ` +
+        `output ${(b.output_tokens / 1000).toFixed(0)}k / ${(b.output_limit / 1000).toFixed(0)}k tokens`;
     } catch {
       // Budget endpoint may not exist yet; ignore
     }

@@ -352,27 +352,10 @@ def embed_gmail_messages(
 
     # Get Gmail token
     try:
-        token = OAuthRepository.get_token(db, "google_gmail")
+        token = OAuthRepository.refresh_if_expired(db, "google_gmail", gmail_oauth, logger)
         if not token:
-            log("Gmail not connected, skipping email embedding")
+            log("Gmail not connected or its token could not be refreshed; skipping email")
             return stats
-
-        # Refresh if expired
-        if OAuthRepository.is_token_expired(token):
-            try:
-                new_token_data = gmail_oauth.refresh_token(token.refresh_token)
-                OAuthRepository.save_token(
-                    db=db,
-                    service="google_gmail",
-                    access_token=new_token_data["access_token"],
-                    refresh_token=new_token_data.get("refresh_token"),
-                    expires_at=new_token_data["expires_at"],
-                    scope=new_token_data.get("scope"),
-                )
-                token = OAuthRepository.get_token(db, "google_gmail")
-            except Exception as e:
-                log(f"Failed to refresh Gmail token for embedding: {e}")
-                return stats
 
         client = GoogleGmailClient(token.access_token, token.refresh_token)
     except Exception as e:

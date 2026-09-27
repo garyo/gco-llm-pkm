@@ -39,6 +39,9 @@ class OAuthToken(Base):
     token_type = Column(String(50), default="Bearer")
     expires_at = Column(DateTime, nullable=True)
     scope = Column(String(255), nullable=True)
+    # Set when the provider rejected a refresh (e.g. revoked grant); cleared by a new token.
+    refresh_error = Column(Text, nullable=True)
+    refresh_failed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -218,6 +221,19 @@ def _upgrade_schema(engine) -> None:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE tool_execution_logs ADD COLUMN was_helpful BOOLEAN"))
                 print("[DB] Added 'was_helpful' column to tool_execution_logs", flush=True)
+
+    # OAuthToken: record rejected refreshes
+    if "oauth_tokens" in insp.get_table_names():
+        columns = {c["name"] for c in insp.get_columns("oauth_tokens")}
+        with engine.begin() as conn:
+            if "refresh_error" not in columns:
+                conn.execute(text("ALTER TABLE oauth_tokens ADD COLUMN refresh_error TEXT"))
+                print("[DB] Added 'refresh_error' column to oauth_tokens", flush=True)
+            if "refresh_failed_at" not in columns:
+                conn.execute(
+                    text("ALTER TABLE oauth_tokens ADD COLUMN refresh_failed_at TIMESTAMP")
+                )
+                print("[DB] Added 'refresh_failed_at' column to oauth_tokens", flush=True)
 
 
 def init_db() -> None:

@@ -1,8 +1,10 @@
 """Repository pattern for database operations."""
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import requests
 from sqlalchemy.orm import Session
 
 from .database import (
@@ -16,6 +18,8 @@ from .database import (
     UserSettings,
 )
 from .redact import redact_obj, redact_secrets
+
+_logger = logging.getLogger("pkm_bridge.db_repository")
 
 
 class OAuthRepository:
@@ -42,6 +46,8 @@ class OAuthRepository:
                 token.refresh_token = refresh_token
             token.expires_at = expires_at
             token.scope = scope
+            token.refresh_error = None
+            token.refresh_failed_at = None
             token.updated_at = datetime.utcnow()
         else:
             # Create new token
@@ -81,6 +87,70 @@ class OAuthRepository:
         if not token.expires_at:
             return False
         return datetime.utcnow() >= token.expires_at
+
+    @staticmethod
+    def refresh_if_expired(
+        db: Session, service: str, oauth_handler: Any, logger: logging.Logger | None = None
+    ) -> Optional[OAuthToken]:
+        """The service's token, refreshed first if its access token has expired.
+
+        Returns None when the service isn't connected or can't be refreshed.
+        When the provider rejects the refresh (a 4xx, e.g. a revoked grant),
+        the error is recorded on the row so status checks and the watchdog
+        report that re-authorization is needed; network errors and 5xx are
+        treated as transient and only logged.
+        """
+        logger = logger or _logger
+        token = OAuthRepository.get_token(db, service)
+        if not token or not OAuthRepository.is_token_expired(token):
+            return token
+        if not token.refresh_token:
+            logger.error(f"{service} token expired and has no refresh token; re-authorize")
+            return None
+
+        logger.info(f"{service} token expired, refreshing...")
+        try:
+            new_token = oauth_handler.refresh_token(token.refresh_token)
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status is not None and 400 <= status < 500:
+                token.refresh_error = f"HTTP {status}: {e.response.text[:300]}"
+                token.refresh_failed_at = datetime.utcnow()
+                db.commit()
+            logger.error(f"Failed to refresh {service} token: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to refresh {service} token: {e}")
+            return None
+
+        logger.info(f"{service} token refreshed")
+        return OAuthRepository.save_token(
+            db=db,
+            service=service,
+            access_token=new_token["access_token"],
+            refresh_token=new_token.get("refresh_token"),
+            expires_at=new_token["expires_at"],
+            scope=new_token.get("scope"),
+        )
+
+    @staticmethod
+    def connection_status(token: OAuthToken) -> Dict[str, Any]:
+        """How usable a stored token is, for the integration status endpoints.
+
+        `connected` means "we have a credential we can plausibly use": an
+        unexpired access token, or an expired one whose refresh token the
+        provider hasn't rejected. Otherwise the user must re-authorize.
+        """
+        is_expired = OAuthRepository.is_token_expired(token)
+        refreshable = bool(token.refresh_token) and not token.refresh_error
+        return {
+            "connected": not is_expired or refreshable,
+            "expired": is_expired,
+            "has_refresh_token": bool(token.refresh_token),
+            "auto_refreshable": is_expired and refreshable,
+            "refresh_error": token.refresh_error,
+            "expires_at": (token.expires_at.isoformat() + "+00:00") if token.expires_at else None,
+        }
 
 
 class SessionRepository:

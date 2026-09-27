@@ -2436,24 +2436,8 @@ def ticktick_status():
         token = OAuthRepository.get_token(db, "ticktick")
 
         if token:
-            is_expired = OAuthRepository.is_token_expired(token)
-            has_refresh = bool(token.refresh_token)
-            # `connected` means "we have a credential we can plausibly use".
-            # Expired-with-refresh is fine (auto-refresh will run on demand);
-            # expired-without-refresh means the user must re-authorize.
-            return jsonify(
-                {
-                    "connected": not is_expired or has_refresh,
-                    "expired": is_expired,
-                    "has_refresh_token": has_refresh,
-                    "auto_refreshable": has_refresh and is_expired,
-                    "expires_at": (
-                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-                    ),
-                }
-            )
-        else:
-            return jsonify({"connected": False})
+            return jsonify(OAuthRepository.connection_status(token))
+        return jsonify({"connected": False})
 
     except Exception as e:
         logger.error(f"Error checking TickTick status: {e}")
@@ -2610,24 +2594,8 @@ def google_calendar_status():
         token = OAuthRepository.get_token(db, "google_calendar")
 
         if token:
-            is_expired = OAuthRepository.is_token_expired(token)
-            has_refresh = bool(token.refresh_token)
-            # `connected` means "we have a credential we can plausibly use".
-            # Expired-with-refresh is fine (auto-refresh will run on demand);
-            # expired-without-refresh means the user must re-authorize.
-            return jsonify(
-                {
-                    "connected": not is_expired or has_refresh,
-                    "expired": is_expired,
-                    "has_refresh_token": has_refresh,
-                    "auto_refreshable": has_refresh and is_expired,
-                    "expires_at": (
-                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-                    ),
-                }
-            )
-        else:
-            return jsonify({"connected": False})
+            return jsonify(OAuthRepository.connection_status(token))
+        return jsonify({"connected": False})
 
     except Exception as e:
         logger.error(f"Error checking Google Calendar status: {e}")
@@ -2779,24 +2747,8 @@ def google_gmail_status():
         token = OAuthRepository.get_token(db, "google_gmail")
 
         if token:
-            is_expired = OAuthRepository.is_token_expired(token)
-            has_refresh = bool(token.refresh_token)
-            # `connected` means "we have a credential we can plausibly use".
-            # Expired-with-refresh is fine (auto-refresh will run on demand);
-            # expired-without-refresh means the user must re-authorize.
-            return jsonify(
-                {
-                    "connected": not is_expired or has_refresh,
-                    "expired": is_expired,
-                    "has_refresh_token": has_refresh,
-                    "auto_refreshable": has_refresh and is_expired,
-                    "expires_at": (
-                        (token.expires_at.isoformat() + "+00:00") if token.expires_at else None
-                    ),
-                }
-            )
-        else:
-            return jsonify({"connected": False})
+            return jsonify(OAuthRepository.connection_status(token))
+        return jsonify({"connected": False})
 
     except Exception as e:
         logger.error(f"Error checking Gmail status: {e}")
@@ -2834,7 +2786,7 @@ def google_gmail_disconnect():
 
 
 # Map of (db_provider_key, label, authorize_url) for the aggregate status
-# endpoint. Keep in sync with the individual /auth/<provider>/status routes.
+# endpoint, which reports the same connection_status as /auth/<provider>/status.
 _INTEGRATIONS = [
     ("ticktick", "TickTick", "/auth/ticktick/authorize"),
     ("google_calendar", "Google Calendar", "/auth/google-calendar/authorize"),
@@ -2863,11 +2815,7 @@ def integrations_status():
             try:
                 token = OAuthRepository.get_token(db, key)
                 if token:
-                    is_expired = OAuthRepository.is_token_expired(token)
-                    has_refresh = bool(token.refresh_token)
-                    entry["connected"] = not is_expired or has_refresh
-                    entry["expired"] = is_expired
-                    entry["has_refresh_token"] = has_refresh
+                    entry.update(OAuthRepository.connection_status(token))
                 else:
                     entry["connected"] = False
             except Exception as e:

@@ -1032,9 +1032,7 @@ def query():
                         logger.debug(f"  System block {i}: {len(block['text'])} chars, {cached}")
 
                 # Also get flat version for session storage
-                system_prompt_flat = config.get_system_prompt(
-                    user_context=user_context, user_timezone=user_timezone
-                )
+                system_prompt_flat = config.get_system_prompt(user_context=user_context)
 
                 db_session = SessionRepository.get_or_create_session(
                     db, session_id, system_prompt=system_prompt_flat

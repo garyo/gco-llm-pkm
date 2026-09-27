@@ -1,7 +1,7 @@
 """MCP resources for PKM Bridge.
 
 Exposes read-only resources that Claude can reference:
-- pkm://prompt-context — assembled system prompt + rules + user profile
+- pkm://prompt-context — core instructions plus the read_prompt_context content
 - pkm://skills — listing of available skills
 """
 
@@ -17,34 +17,10 @@ def register_resources(mcp: FastMCP):
 
     @mcp.resource("pkm://prompt-context")
     def prompt_context_resource() -> str:
-        """Full PKM context: system prompt, rules, user profile, journals."""
-        from mcp_server.tools import _get_config
+        """Full PKM context: core instructions, user context, rules, recent journals."""
+        from mcp_server.tools import build_prompt_context
 
-        config = _get_config()
-        parts: list[str] = []
-
-        # System prompt
-        system_prompt = config.get_system_prompt()
-        parts.append(system_prompt)
-
-        # Learned rules
-        try:
-            from pkm_bridge.database import get_db, init_db
-            from pkm_bridge.db_repository import LearnedRuleRepository
-
-            init_db()
-            db = get_db()
-            try:
-                rules = LearnedRuleRepository.get_active(db)
-                rules_text = config.get_learned_patterns_block(rules)
-                if rules_text:
-                    parts.append(rules_text)
-            finally:
-                db.close()
-        except Exception as e:
-            logger.debug(f"Could not load learned rules: {e}")
-
-        return "\n".join(parts)
+        return f"{mcp.instructions}\n\n{build_prompt_context()}"
 
     @mcp.resource("pkm://skills")
     def skills_resource() -> str:

@@ -7,10 +7,9 @@ The existing tools return strings, which maps directly to MCP text results.
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
 
@@ -219,6 +218,67 @@ def _execute_tool(name: str, params: dict, context: dict | None = None) -> str:
     duration_ms = int((time.time() - start) * 1000)
     _log_tool_execution(name, params, result, duration_ms)
     return result
+
+
+RECENT_JOURNAL_DAYS = 3
+RECENT_JOURNAL_CHAR_CAP = 5000
+
+
+def _recent_journals(org_dir: Path, today: date) -> list[str]:
+    """Today's and the previous days' ORG journals, newest first, each capped."""
+    from pkm_bridge.journal import journal_rel_path
+
+    sections = []
+    for days_back in range(RECENT_JOURNAL_DAYS):
+        rel = journal_rel_path((today - timedelta(days=days_back)).isoformat())
+        path = org_dir / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        if len(text) > RECENT_JOURNAL_CHAR_CAP:
+            text = (
+                text[:RECENT_JOURNAL_CHAR_CAP]
+                + f"\n[... truncated; read_file('org:{rel}') for the rest]"
+            )
+        sections.append(f"## org:{rel}\n{text}")
+    return sections
+
+
+def build_prompt_context() -> str:
+    """User context, learned patterns, recent journals and the local date/time."""
+    config = _get_config()
+    now = datetime.now(config.timezone) if config.timezone else datetime.now()
+
+    user_context, rules = None, None
+    try:
+        from pkm_bridge.database import get_db, init_db
+        from pkm_bridge.db_repository import LearnedRuleRepository, UserSettingsRepository
+
+        init_db()
+        db = get_db()
+        try:
+            user_context = UserSettingsRepository.get_user_context(db, user_id="default")
+            rules = LearnedRuleRepository.get_active(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Failed to load user context and learned rules: {e}")
+
+    parts: list[str] = []
+    user_context = config.get_user_context(user_context)
+    if user_context:
+        parts.append(f"# USER CONTEXT\n\n{user_context.strip()}")
+    rules_text = config.get_learned_patterns_block(rules).strip()
+    if rules_text:
+        parts.append(rules_text)
+    journals = _recent_journals(config.org_dir, now.date())
+    if journals:
+        parts.append("# RECENT JOURNALS\n\n" + "\n\n".join(journals))
+    parts.append(
+        f"The current local date/time is {now.strftime('%A, %B %-d, %Y, %H:%M %Z')} "
+        f"({now.isoformat(timespec='minutes')}). Use it for today and relative dates."
+    )
+    return "\n\n".join(parts)
 
 
 def register_all_tools(mcp: FastMCP):
@@ -674,87 +734,13 @@ def register_all_tools(mcp: FastMCP):
 
     @mcp.tool()
     def read_prompt_context() -> str:
-        """Load PKM assistant context. CALL THIS AT THE START OF EVERY CONVERSATION.
+        """Load Gary's personal context. Call once at the start of a conversation.
 
-        Returns: system prompt, learned rules, user profile, and recent journal summary.
-        This provides the persona, instructions, and background knowledge needed to
-        assist effectively.
+        Returns his user context, learned patterns, the last few days' journals and
+        the current local date/time. (The core rules are in the server instructions.)
         """
         start = time.time()
-        parts: list[str] = []
-
-        config = _get_config()
-
-        # 1. MCP-specific system prompt (no direct file access assumptions)
-        mcp_prompt_file = Path(__file__).parent.parent / "config" / "system_prompt_mcp.txt"
-        if mcp_prompt_file.exists():
-            prompt_text = mcp_prompt_file.read_text(encoding="utf-8")
-            editor_base = os.getenv("EDITOR_BASE_URL", "https://pkm.oberbrunner.com/editor")
-            prompt_text = prompt_text.replace("{EDITOR_BASE_URL}", editor_base)
-            prompt_text = prompt_text.replace("{ORG_DIR}", str(config.org_dir))
-            prompt_text = prompt_text.replace("{LOGSEQ_DIR}", str(config.logseq_dir))
-            parts.append("# SYSTEM INSTRUCTIONS\n\n" + prompt_text)
-        else:
-            # Fallback to standard prompt
-            system_prompt = config.get_system_prompt()
-            parts.append("# SYSTEM INSTRUCTIONS\n\n" + system_prompt)
-
-        # 2. Learned rules from self-improvement agent
-        try:
-            from pkm_bridge.database import get_db, init_db
-            from pkm_bridge.db_repository import LearnedRuleRepository
-
-            init_db()
-            db = get_db()
-            try:
-                rules = LearnedRuleRepository.get_active(db)
-                rules_text = config.get_learned_patterns_block(rules)
-                if rules_text:
-                    parts.append(rules_text)
-            finally:
-                db.close()
-        except Exception as e:
-            logger.warning(f"Failed to load learned rules: {e}")
-
-        # 3. User profile from .pkm/memory/
-        memory_dir = config.org_dir / ".pkm" / "memory"
-        if memory_dir.exists():
-            for name in ["user-profile.md", "observed-patterns.md"]:
-                filepath = memory_dir / name
-                if filepath.exists():
-                    content = filepath.read_text(encoding="utf-8").strip()
-                    if content:
-                        title = name.replace(".md", "").replace("-", " ").upper()
-                        parts.append(f"\n\n# {title}\n\n{content}")
-
-        # 4. Recent journal summary (last 3 days)
-        try:
-            retriever = _get_context_retriever()
-            if retriever:
-                journals = retriever.retrieve_recent_journals(days=3)
-                if journals:
-                    journal_text = "\n\n".join(
-                        f"## {j.get('filename', 'unknown')}\n{j.get('content', '')}"
-                        for j in journals
-                    )
-                    parts.append("\n\n# RECENT JOURNALS (last 3 days)\n\n" + journal_text)
-        except Exception as e:
-            logger.debug(f"Failed to load recent journals: {e}")
-
-        # 5. Current date/time
-        tz_str = os.getenv("TIMEZONE", "America/New_York")
-        try:
-            tz = ZoneInfo(tz_str)
-        except Exception:
-            tz = None
-        now = datetime.now(tz) if tz else datetime.now()
-        timestring = now.strftime("%A, %B %d, %Y, %H:%M:%S %Z")
-        parts.append(
-            f"\n\nThe CURRENT date/time is {now.isoformat()} ({timestring}). "
-            "Always use this for time-related questions."
-        )
-
-        result = "\n".join(parts)
+        result = build_prompt_context()
         duration_ms = int((time.time() - start) * 1000)
         _log_tool_execution("read_prompt_context", {}, f"({len(result)} chars)", duration_ms)
         return result

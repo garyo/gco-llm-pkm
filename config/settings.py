@@ -1,6 +1,7 @@
 """Configuration management for PKM Bridge Server."""
 
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -9,6 +10,11 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from pkm_bridge.history_manager import TIME_NOTE_PREFIX
+
+DEFAULT_EDITOR_BASE_URL = "https://pkm.oberbrunner.com/editor"
+
+# A prompt template may open with an HTML comment for maintainers; it is not sent.
+_MAINTAINER_COMMENT = re.compile(r"\A\s*<!--.*?-->", re.DOTALL)
 
 # Dangerous command patterns (blacklist) blocked before running shell commands
 # or saving skills. Real security comes from Docker isolation, limited filesystem
@@ -135,42 +141,35 @@ class Config:
         if not self.system_prompt_file.exists():
             raise ValueError(f"System prompt file not found: {self.system_prompt_file}")
 
-    def get_system_prompt(
-        self, user_context: Optional[str] = None, user_timezone: Optional[str] = None
-    ) -> str:
-        """Load and render the system prompt template with configuration values.
+    def render_prompt(self, filename: str) -> str:
+        """Load a prompt template from config/ and fill in its placeholders.
 
-        Loads system_prompt.txt and optionally user_context (from database or file).
-        Personal information in user_context is kept separate for privacy.
-
-        Args:
-            user_context: Optional user context string. If None, will try to load from file.
-            user_timezone: Optional timezone string from client (e.g., 'America/New_York').
-                          If provided, uses client's timezone. Otherwise falls back to
-                          server config.
-
-        Returns:
-            Rendered system prompt string.
+        The template's leading HTML comment is for maintainers and is dropped.
+        Placeholders are filled with str.replace rather than str.format, so
+        literal braces such as {ticktick:ID} are written singly.
         """
-        template = self.system_prompt_file.read_text(encoding="utf-8")
+        text = (Path(__file__).parent / filename).read_text(encoding="utf-8")
+        text = _MAINTAINER_COMMENT.sub("", text, count=1)
+        placeholders = {
+            "{ORG_DIR}": str(self.org_dir),
+            "{LOGSEQ_DIR}": str(self.logseq_dir or "(not configured)"),
+            "{EDITOR_BASE_URL}": os.getenv("EDITOR_BASE_URL", DEFAULT_EDITOR_BASE_URL),
+        }
+        for placeholder, value in placeholders.items():
+            text = text.replace(placeholder, value)
+        return text.strip()
 
-        # Use provided user context, or fall back to file
+    def get_user_context(self, user_context: Optional[str] = None) -> Optional[str]:
+        """The given user context, else config/user_context.txt if present."""
         if user_context is None:
             user_context_file = Path(__file__).parent / "user_context.txt"
             if user_context_file.exists():
                 user_context = user_context_file.read_text(encoding="utf-8")
+        return user_context
 
-        # Insert user context if available
-        if user_context:
-            template = template.replace(
-                "# USER CONTEXT loaded from user_context.txt (if present)", user_context
-            )
-
-        # Replace placeholders (use .replace() instead of .format() to avoid
-        # breaking on literal curly braces like {ticktick:ID} in the template)
-        template = template.replace("{ORG_DIR}", str(self.org_dir))
-        template = template.replace("{LOGSEQ_DIR}", str(self.logseq_dir))
-        return template
+    def get_system_prompt(self, user_context: Optional[str] = None) -> str:
+        """The web app's full system prompt as one string, e.g. for session records."""
+        return "".join(block["text"] for block in self.get_system_prompt_blocks(user_context))
 
     def get_system_prompt_blocks(
         self,
@@ -196,29 +195,13 @@ class Config:
         Returns:
             List of dicts with 'type', 'text', and optionally 'cache_control' keys.
         """
-        template = self.system_prompt_file.read_text(encoding="utf-8")
-
-        # Use provided user context, or fall back to file
-        if user_context is None:
-            user_context_file = Path(__file__).parent / "user_context.txt"
-            if user_context_file.exists():
-                user_context = user_context_file.read_text(encoding="utf-8")
-
-        # Replace static placeholders (paths don't change)
-        template = template.replace("{ORG_DIR}", str(self.org_dir))
-        template = template.replace("{LOGSEQ_DIR}", str(self.logseq_dir))
-
-        # Remove user context placeholder from base template
-        template = template.replace(
-            "# USER CONTEXT loaded from user_context.txt (if present)\n\n", ""
-        )
+        template = self.render_prompt(self.system_prompt_file.name)
+        user_context = self.get_user_context(user_context)
 
         blocks = []
 
         # Block 1: Static base instructions (cached - most stable)
-        blocks.append(
-            {"type": "text", "text": template.strip(), "cache_control": {"type": "ephemeral"}}
-        )
+        blocks.append({"type": "text", "text": template, "cache_control": {"type": "ephemeral"}})
 
         # Block 2: User context (cached - changes occasionally)
         if user_context:

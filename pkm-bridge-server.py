@@ -110,7 +110,7 @@ from pkm_bridge.feedback_capture import capture_feedback, check_previous_correct
 # Import Google Calendar components
 from pkm_bridge.google_oauth import GoogleOAuth
 from pkm_bridge.job_lock import run_exclusive, start_exclusive
-from pkm_bridge.logging_config import setup_logging
+from pkm_bridge.logging_config import quiet_health_checks, setup_logging
 
 # Import org-mode link utilities
 from pkm_bridge.org_links import resolve_org_id_to_file
@@ -169,6 +169,7 @@ config = Config()
 
 # Setup logging
 logger = setup_logging(config.log_level)
+quiet_health_checks("werkzeug")
 
 # Initialize Anthropic client and multi-LLM adapter
 client = Anthropic(api_key=config.anthropic_api_key)

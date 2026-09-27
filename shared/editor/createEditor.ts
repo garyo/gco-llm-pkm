@@ -1,6 +1,6 @@
 import { EditorView, basicSetup } from 'codemirror';
 import type { ViewUpdate } from '@codemirror/view';
-import { markdown } from '@codemirror/lang-markdown';
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { emacs } from '@replit/codemirror-emacs';
 import { syntaxHighlighting } from '@codemirror/language';
@@ -11,7 +11,8 @@ import { orgImageField } from './org-images';
 import { orgLinkField, createOrgLinkClickHandler } from './org-links';
 import { mdImageField } from './md-images';
 import { createMdLinkClickHandler } from './md-links';
-import { ticktickCheckboxField, ticktickCheckboxClickHandler } from './org-checkboxes';
+import { checkboxField, checkboxClickHandler } from './org-checkboxes';
+import { yamlFrontmatter } from './md-frontmatter';
 
 /** Create and mount a CodeMirror editor for the given file. */
 export function createEditor(
@@ -20,7 +21,10 @@ export function createEditor(
   onDocChanged: (update: ViewUpdate) => void,
 ): EditorView {
   const isOrg = filepath.endsWith('.org');
-  const langMode = isOrg ? orgMode : markdown();
+  // GFM base: task lists, tables and strikethrough, and Enter continues "- [ ] ".
+  const langMode = isOrg
+    ? orgMode
+    : markdown({ base: markdownLanguage, extensions: yamlFrontmatter });
 
   // The emacs keymap's mark-based selection state fights native touch
   // selection/cursor placement, so only load it on devices with a precise
@@ -60,9 +64,9 @@ export function createEditor(
       autocorrect: 'on',
       spellcheck: 'true',
     }),
-    // Interactive {ticktick:ID} checkboxes (works in org and markdown)
-    ticktickCheckboxField,
-    ticktickCheckboxClickHandler,
+    // Interactive {ticktick:ID} checkboxes, plus plain task items in markdown
+    checkboxField(!isOrg),
+    checkboxClickHandler,
   ];
 
   if (isOrg) {

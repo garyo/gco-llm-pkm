@@ -7,10 +7,9 @@ The existing tools return strings, which maps directly to MCP text results.
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
 
@@ -49,6 +48,7 @@ def _get_tool_registry():
         ProposeNoteOrganizationTool,
         ResolveNoteProposalTool,
     )
+    from pkm_bridge.tools.note_writing import EditNoteTool, JournalAppendTool
     from pkm_bridge.tools.registry import ToolRegistry
     from pkm_bridge.tools.schedule_task import ScheduleTaskTool
     from pkm_bridge.tools.search_notes import SearchNotesTool
@@ -70,6 +70,8 @@ def _get_tool_registry():
         )
     )
     registry.register(ListFilesTool(tool_logger, config.org_dir, config.logseq_dir))
+    registry.register(JournalAppendTool(tool_logger, config.org_dir, config.logseq_dir))
+    registry.register(EditNoteTool(tool_logger, config.org_dir, config.logseq_dir))
     registry.register(SearchNotesTool(tool_logger, config.org_dir, config.logseq_dir))
     registry.register(FindContextTool(tool_logger, config.org_dir, config.logseq_dir))
 
@@ -224,6 +226,67 @@ def _execute_tool(name: str, params: dict, context: dict | None = None) -> str:
     return result
 
 
+RECENT_JOURNAL_DAYS = 3
+RECENT_JOURNAL_CHAR_CAP = 5000
+
+
+def _recent_journals(org_dir: Path, today: date) -> list[str]:
+    """Today's and the previous days' ORG journals, newest first, each capped."""
+    from pkm_bridge.journal import journal_rel_path
+
+    sections = []
+    for days_back in range(RECENT_JOURNAL_DAYS):
+        rel = journal_rel_path((today - timedelta(days=days_back)).isoformat())
+        path = org_dir / rel
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8").strip()
+        if len(text) > RECENT_JOURNAL_CHAR_CAP:
+            text = (
+                text[:RECENT_JOURNAL_CHAR_CAP]
+                + f"\n[... truncated; read_file('org:{rel}') for the rest]"
+            )
+        sections.append(f"## org:{rel}\n{text}")
+    return sections
+
+
+def build_prompt_context() -> str:
+    """User context, learned patterns, recent journals and the local date/time."""
+    config = _get_config()
+    now = datetime.now(config.timezone) if config.timezone else datetime.now()
+
+    user_context, rules = None, None
+    try:
+        from pkm_bridge.database import get_db, init_db
+        from pkm_bridge.db_repository import LearnedRuleRepository, UserSettingsRepository
+
+        init_db()
+        db = get_db()
+        try:
+            user_context = UserSettingsRepository.get_user_context(db, user_id="default")
+            rules = LearnedRuleRepository.get_active(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Failed to load user context and learned rules: {e}")
+
+    parts: list[str] = []
+    user_context = config.get_user_context(user_context)
+    if user_context:
+        parts.append(f"# USER CONTEXT\n\n{user_context.strip()}")
+    rules_text = config.get_learned_patterns_block(rules).strip()
+    if rules_text:
+        parts.append(rules_text)
+    journals = _recent_journals(config.org_dir, now.date())
+    if journals:
+        parts.append("# RECENT JOURNALS\n\n" + "\n\n".join(journals))
+    parts.append(
+        f"The current local date/time is {now.strftime('%A, %B %-d, %Y, %H:%M %Z')} "
+        f"({now.isoformat(timespec='minutes')}). Use it for today and relative dates."
+    )
+    return "\n\n".join(parts)
+
+
 def register_all_tools(mcp: FastMCP):
     """Register all MCP tools on the FastMCP server."""
 
@@ -364,12 +427,15 @@ def register_all_tools(mcp: FastMCP):
         base_hash: str | None = None,
         expected_mtime: float | None = None,
     ) -> str:
-        """Write content to a PKM file. Creates parent directories if needed.
+        """Replace a PKM file's whole content. Creates parent directories if needed.
+
+        For adding to or changing notes, prefer journal_append and edit_note,
+        which never need the whole file resent.
 
         If the exact path doesn't exist but the same filename exists at the
         toplevel or under pages/, the existing file is updated instead of
         creating a duplicate (the result reports the actual path). Create NEW
-        pages under pages/ (e.g. 'org:pages/topic.org'), not at the toplevel.
+        pages under pages/ (e.g. 'org:pages/topic.md'), not at the toplevel.
 
         Always pass base_hash when rewriting an existing file: if the file
         changed since you read it, your edits are three-way merged with the
@@ -429,6 +495,54 @@ def register_all_tools(mcp: FastMCP):
                 f"Error writing file '{path}': {type(e).__name__}: {e}. "
                 "Path format: 'org:relative/path.org' or 'logseq:relative/path.md'."
             )
+
+    @mcp.tool()
+    def journal_append(date: str, text: str, heading: str | None = None) -> str:
+        """Add Markdown text to the journal for a date (org:journals/YYYY-MM-DD.md),
+        creating the journal if needed.
+
+        With `heading`, the text goes at the end of that section, and a missing
+        heading is added at the end of the file; without it, at the end of the
+        file. Existing text is never changed. Use this for every journal addition
+        rather than shell commands or write_file.
+
+        Args:
+            date: Journal date, YYYY-MM-DD
+            text: Markdown lines to add, e.g. '- Rehearsed for the gig'
+            heading: Section to add under, e.g. 'Music' (matches any level) or
+                '## Heartbeat (14:05)' (that exact level). Case-insensitive.
+        """
+        params: dict[str, Any] = {"date": date, "text": text}
+        if heading:
+            params["heading"] = heading
+        return _execute_tool("journal_append", params)
+
+    @mcp.tool()
+    def edit_note(
+        path: str,
+        edits: list[dict[str, str]] | None = None,
+        content: str | None = None,
+    ) -> str:
+        """Change a note with exact find/replace edits, or create a new note.
+
+        Read the note first: each edit's `find` must quote text that occurs exactly
+        once in it. All edits are checked before anything is written, and none are
+        applied if any fails. Changes made to the file meanwhile are merged, not
+        overwritten. To create a note, pass `content` and no edits (refused if the
+        file exists). For journal additions, use journal_append. Prefer this to
+        write_file or shell commands for any note change.
+
+        Args:
+            path: Note path, e.g. 'org:pages/travel.md' (default prefix org:)
+            edits: List of {find, replace}; replace '' deletes. All applied or none.
+            content: Full Markdown content for a NEW note only
+        """
+        params: dict[str, Any] = {"path": path}
+        if edits is not None:
+            params["edits"] = edits
+        if content is not None:
+            params["content"] = content
+        return _execute_tool("edit_note", params)
 
     # --- Shell tools ---
 
@@ -626,87 +740,13 @@ def register_all_tools(mcp: FastMCP):
 
     @mcp.tool()
     def read_prompt_context() -> str:
-        """Load PKM assistant context. CALL THIS AT THE START OF EVERY CONVERSATION.
+        """Load Gary's personal context. Call once at the start of a conversation.
 
-        Returns: system prompt, learned rules, user profile, and recent journal summary.
-        This provides the persona, instructions, and background knowledge needed to
-        assist effectively.
+        Returns his user context, learned patterns, the last few days' journals and
+        the current local date/time. (The core rules are in the server instructions.)
         """
         start = time.time()
-        parts: list[str] = []
-
-        config = _get_config()
-
-        # 1. MCP-specific system prompt (no direct file access assumptions)
-        mcp_prompt_file = Path(__file__).parent.parent / "config" / "system_prompt_mcp.txt"
-        if mcp_prompt_file.exists():
-            prompt_text = mcp_prompt_file.read_text(encoding="utf-8")
-            editor_base = os.getenv("EDITOR_BASE_URL", "https://pkm.oberbrunner.com/editor")
-            prompt_text = prompt_text.replace("{EDITOR_BASE_URL}", editor_base)
-            prompt_text = prompt_text.replace("{ORG_DIR}", str(config.org_dir))
-            prompt_text = prompt_text.replace("{LOGSEQ_DIR}", str(config.logseq_dir))
-            parts.append("# SYSTEM INSTRUCTIONS\n\n" + prompt_text)
-        else:
-            # Fallback to standard prompt
-            system_prompt = config.get_system_prompt()
-            parts.append("# SYSTEM INSTRUCTIONS\n\n" + system_prompt)
-
-        # 2. Learned rules from self-improvement agent
-        try:
-            from pkm_bridge.database import get_db, init_db
-            from pkm_bridge.db_repository import LearnedRuleRepository
-
-            init_db()
-            db = get_db()
-            try:
-                rules = LearnedRuleRepository.get_active(db)
-                rules_text = config.get_learned_patterns_block(rules)
-                if rules_text:
-                    parts.append(rules_text)
-            finally:
-                db.close()
-        except Exception as e:
-            logger.warning(f"Failed to load learned rules: {e}")
-
-        # 3. User profile from .pkm/memory/
-        memory_dir = config.org_dir / ".pkm" / "memory"
-        if memory_dir.exists():
-            for name in ["user-profile.md", "observed-patterns.md"]:
-                filepath = memory_dir / name
-                if filepath.exists():
-                    content = filepath.read_text(encoding="utf-8").strip()
-                    if content:
-                        title = name.replace(".md", "").replace("-", " ").upper()
-                        parts.append(f"\n\n# {title}\n\n{content}")
-
-        # 4. Recent journal summary (last 3 days)
-        try:
-            retriever = _get_context_retriever()
-            if retriever:
-                journals = retriever.retrieve_recent_journals(days=3)
-                if journals:
-                    journal_text = "\n\n".join(
-                        f"## {j.get('filename', 'unknown')}\n{j.get('content', '')}"
-                        for j in journals
-                    )
-                    parts.append("\n\n# RECENT JOURNALS (last 3 days)\n\n" + journal_text)
-        except Exception as e:
-            logger.debug(f"Failed to load recent journals: {e}")
-
-        # 5. Current date/time
-        tz_str = os.getenv("TIMEZONE", "America/New_York")
-        try:
-            tz = ZoneInfo(tz_str)
-        except Exception:
-            tz = None
-        now = datetime.now(tz) if tz else datetime.now()
-        timestring = now.strftime("%A, %B %d, %Y, %H:%M:%S %Z")
-        parts.append(
-            f"\n\nThe CURRENT date/time is {now.isoformat()} ({timestring}). "
-            "Always use this for time-related questions."
-        )
-
-        result = "\n".join(parts)
+        result = build_prompt_context()
         duration_ms = int((time.time() - start) * 1000)
         _log_tool_execution("read_prompt_context", {}, f"({len(result)} chars)", duration_ms)
         return result

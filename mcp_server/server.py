@@ -23,6 +23,28 @@ from mcp_server.tools import register_all_tools
 
 logger = logging.getLogger("mcp_server")
 
+FALLBACK_INSTRUCTIONS = (
+    "Personal Knowledge Management server. Use read_prompt_context at the start of "
+    "every conversation to load context. Use semantic_search before answering "
+    "knowledge-base questions."
+)
+
+
+def load_instructions() -> str:
+    """The core rules from config/system_prompt_mcp.txt.
+
+    Claude.ai loads a server's instructions into every conversation, whereas it
+    rarely calls read_prompt_context, so the rules that matter most live here.
+    They are read once at startup: restart the server to pick up edits.
+    """
+    try:
+        from mcp_server.tools import _get_config
+
+        return _get_config().render_prompt("system_prompt_mcp.txt")
+    except Exception as e:
+        logger.warning(f"Using fallback MCP instructions: {e}")
+        return FALLBACK_INSTRUCTIONS
+
 
 def create_server() -> FastMCP:
     """Create and configure the MCP server with all tools and resources."""
@@ -48,11 +70,7 @@ def create_server() -> FastMCP:
     # Create FastMCP server with optional auth
     kwargs: dict = {
         "name": "PKM Bridge",
-        "instructions": (
-            "Personal Knowledge Management server. Use read_prompt_context at the "
-            "start of every conversation to load instructions and context. Use "
-            "semantic_search before answering knowledge-base questions."
-        ),
+        "instructions": load_instructions(),
         "transport_security": TransportSecuritySettings(
             allowed_hosts=[mcp_host, "localhost", "127.0.0.1"],
         ),

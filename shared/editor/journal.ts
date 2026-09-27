@@ -1,10 +1,10 @@
 // Locating and creating the journal entry for a date, shared by both editor
 // consumers (the standalone SPA and the chat-app's embedded editor).
 //
-// Journals are markdown. A day's entry is created once by the nightly
-// create-org-journal.py job; the editor creating one is the rare fallback for a
-// day that job did not cover. Because the created path matches the one the job
-// writes, the create_only save is idempotent: if the entry already exists —
+// Journals are markdown. A day's entry is usually created server-side by the
+// journal_append tool (pkm_bridge/journal.py); the editor creating one is the
+// fallback for a day nothing has written to yet. Because the created path
+// matches the one the tool writes, the create_only save is idempotent: if the entry already exists —
 // including when the editor's file list is stale and has not seen it — the
 // server reports it and the editor opens it instead of writing a second file.
 
@@ -24,12 +24,12 @@ export function journalDateStr(now: Date = new Date()): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Path the editor creates a journal at. Must match create-org-journal.py. */
+/** Path the editor creates a journal at. Must match pkm_bridge/journal.py. */
 export function journalPath(dateStr: string): string {
   return `org:journals/${dateStr}.md`;
 }
 
-/** Markdown journal template. Must match create-org-journal.py. */
+/** Markdown journal template. Must match pkm_bridge/journal.py. */
 export function journalTemplate(dateStr: string, id: string): string {
   return `---\ntitle: "${dateStr}"\nid: ${id}\ndate: ${dateStr}\n---\n\n`;
 }

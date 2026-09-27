@@ -12,6 +12,7 @@ from typing import Optional
 from ..database import get_db
 from ..events import event_manager
 from ..job_lock import job_lock, start_exclusive
+from ..watchdog import notify_run_failure
 from .executor import TaskExecutor
 from .heartbeat import load_heartbeat_prompt
 from .repository import (
@@ -217,6 +218,7 @@ class TaskDispatcher:
                 },
             )
             self.logger.error(f"Scheduler: '{task.name}' failed: {error[:200]}")
+            notify_run_failure(task.name, status, error)
         else:
             event_manager.broadcast(
                 "scheduled_task_completed",

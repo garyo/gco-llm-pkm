@@ -576,3 +576,20 @@ class AgentRunLog(Base):
 
     def __repr__(self):
         return f"<AgentRunLog(id={self.id}, trigger='{self.trigger}', turns={self.turns_used})>"
+
+
+class OpsState(Base):
+    """Small timestamped records for ops bookkeeping.
+
+    Keys are namespaced: "alert:<condition>" holds when the watchdog last
+    pushed that alert; "job:<name>" holds when a background job last finished.
+    """
+
+    __tablename__ = "ops_state"
+
+    key = Column(String(200), primary_key=True)
+    at = Column(DateTime, nullable=False)
+    detail = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return f"<OpsState(key='{self.key}', at='{self.at}')>"

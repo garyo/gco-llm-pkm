@@ -155,6 +155,7 @@ from pkm_bridge.tools.ticktick import TickTickTool
 
 # Import voice preprocessor
 from pkm_bridge.voice_preprocessor import VoicePreprocessor
+from pkm_bridge.watchdog import EMBEDDING_JOB, record_job_finished, run_watchdog
 
 # -------------------------
 # Setup & Configuration
@@ -231,7 +232,19 @@ else:
 def _run_embedding() -> None:
     """One incremental embedding pass; callers hold the "embedding" job lock."""
     gmail_oauth = globals().get("google_gmail_oauth")
-    run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
+    stats = run_incremental_embedding(logger, voyage_client, config, gmail_oauth)
+    record_job_finished(EMBEDDING_JOB, stats)
+
+
+def _run_watchdog() -> None:
+    run_watchdog(
+        tz=config.timezone,
+        started_at=server_started_at,
+        scheduled_tasks=cron_enabled,
+        self_improvement=not config.debug,
+        embedding=voyage_client is not None,
+        disk_paths=[p for p in (config.org_dir, config.logseq_dir) if p],
+    )
 
 
 si_agent = SelfImprovementAgent(llm_client, logger, config)
@@ -268,8 +281,22 @@ if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
             misfire_grace_time=7200,  # Allow 2 hour grace
         )
         logger.info(f"Self-improvement agent scheduled (every other day at 3 AM {config.timezone})")
+
+        # Waking hours only: the pushes are for a person, and nothing it
+        # reports gets worse in a few hours.
+        embedding_scheduler.add_job(
+            func=_run_watchdog,
+            trigger="cron",
+            hour="8-20/3",
+            timezone=config.timezone,
+            id="health_watchdog",
+            name="Health watchdog (no LLM)",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(f"Health watchdog scheduled (8:00-20:00 every 3 hours {config.timezone})")
     else:
-        logger.info("Self-improvement cron skipped in debug mode (runs only in production)")
+        logger.info("Self-improvement and watchdog skipped in debug mode (production only)")
 
     # Scheduled task dispatcher (60s tick) — runs in both debug and production
     # Uses a wrapper because task_dispatcher is initialized later (after tool registry)

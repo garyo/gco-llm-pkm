@@ -15,7 +15,7 @@ from typing import Any
 
 import litellm
 
-from pkm_bridge.models import is_anthropic, supports_caching, supports_tools
+from pkm_bridge.models import TokenUsage, is_anthropic, supports_caching, supports_tools
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,19 @@ def recover_from_max_tokens(response: Any, max_tokens: int) -> list[dict[str, An
         {"role": "assistant", "content": texts or [{"type": "text", "text": "[cut off]"}]},
         {"role": "user", "content": [{"type": "text", "text": notice}]},
     ]
+
+
+def response_cost(model: str, response: Any) -> float:
+    """Dollar cost of one LLMClient response, including cache tokens and web searches."""
+    if is_anthropic(model):
+        return TokenUsage.from_response(response).anthropic_cost(model)
+    if not (isinstance(response, LLMResponse) and response._raw_response):
+        return 0.0
+    try:
+        return litellm.completion_cost(completion_response=response._raw_response) or 0.0
+    except Exception as e:
+        logger.warning(f"LiteLLM has no cost for {model}; counting it as $0: {e}")
+        return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -820,16 +833,3 @@ class LLMClient:
                 # input_json_delta (tool input streaming) — assembled internally
                 # by the SDK, no need to forward
             return stream.get_final_message()
-
-    def get_completion_cost(self, response: Any, model: str) -> float | None:
-        """Get cost for a completion. Returns None if unknown.
-
-        For Anthropic models, callers should use models.get_anthropic_cost() instead
-        since it handles cache tokens. This method is for non-Anthropic responses.
-        """
-        if isinstance(response, LLMResponse) and response._raw_response:
-            try:
-                return litellm.completion_cost(completion_response=response._raw_response)
-            except Exception:
-                return None
-        return None

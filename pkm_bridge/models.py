@@ -4,8 +4,11 @@ Provides role-based model defaults (configurable via env vars),
 an available models catalog for the frontend, and capability detection.
 """
 
+from __future__ import annotations
+
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -305,3 +308,66 @@ def get_anthropic_cost(
         + (cache_read_tokens * rates["cache_read"])
         + (output_tokens * rates["output"])
     ) / 1_000_000 + (web_search_requests * WEB_SEARCH_COST_PER_SEARCH)
+
+
+def _count(value: Any) -> int:
+    """A token count from an SDK usage field, which may be None or absent."""
+    return value if isinstance(value, int) else 0
+
+
+@dataclass
+class TokenUsage:
+    """Token counts in Anthropic's terms: `input_tokens` excludes cached input."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    web_search_requests: int = 0
+
+    @classmethod
+    def from_response(cls, response: Any) -> TokenUsage:
+        """Read the usage of an LLMClient response (Anthropic or normalized LiteLLM)."""
+        usage = getattr(response, "usage", None)
+        server_use = getattr(usage, "server_tool_use", None)
+        return cls(
+            input_tokens=_count(getattr(usage, "input_tokens", 0)),
+            output_tokens=_count(getattr(usage, "output_tokens", 0)),
+            cache_write_tokens=_count(getattr(usage, "cache_creation_input_tokens", 0)),
+            cache_read_tokens=_count(getattr(usage, "cache_read_input_tokens", 0)),
+            web_search_requests=_count(getattr(server_use, "web_search_requests", 0)),
+        )
+
+    def __iadd__(self, other: TokenUsage) -> TokenUsage:
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_write_tokens += other.cache_write_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.web_search_requests += other.web_search_requests
+        return self
+
+    def anthropic_cost(self, model: str) -> float:
+        return get_anthropic_cost(
+            model,
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_write_tokens,
+            self.cache_read_tokens,
+            web_search_requests=self.web_search_requests,
+        )
+
+    def billable_input_tokens(self, model: str) -> float:
+        """All input, with cache writes and reads weighted by their price relative to
+        uncached input, so N billable tokens cost the same as N uncached ones.
+
+        Non-Anthropic models count every input token in full.
+        """
+        cached = self.cache_write_tokens + self.cache_read_tokens
+        if not is_anthropic(model):
+            return self.input_tokens + cached
+        rates = get_cost_rates(model)
+        weighted = (
+            self.cache_write_tokens * rates["cache_write"]
+            + self.cache_read_tokens * rates["cache_read"]
+        )
+        return self.input_tokens + weighted / rates["input"]

@@ -55,9 +55,8 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from pkm_bridge.llm import LLMClient
+from pkm_bridge.llm import LLMClient, response_cost
 from pkm_bridge.models import (
-    get_anthropic_cost,
     get_available_models,
     is_anthropic,
     thinking_params,
@@ -1125,10 +1124,12 @@ def query():
             total_cache_write_tokens = 0
             total_cache_read_tokens = 0
             total_web_searches = 0
+            request_cost = 0.0
 
             def accumulate_usage(resp):
                 nonlocal total_input_tokens, total_output_tokens, total_cache_write_tokens
-                nonlocal total_cache_read_tokens, total_web_searches
+                nonlocal total_cache_read_tokens, total_web_searches, request_cost
+                request_cost += response_cost(model, resp)
                 usage = resp.usage
                 total_input_tokens += getattr(usage, "input_tokens", 0)
                 total_output_tokens += getattr(usage, "output_tokens", 0)
@@ -1426,21 +1427,6 @@ def query():
                 api_call_count=api_call_count,
                 logger=logger,
             )
-
-            # Calculate cost — Anthropic models use our detailed rates (with cache tokens),
-            # non-Anthropic models use LiteLLM's built-in cost database
-            if is_anthropic(model):
-                request_cost = get_anthropic_cost(
-                    model,
-                    total_input_tokens,
-                    total_output_tokens,
-                    total_cache_write_tokens,
-                    total_cache_read_tokens,
-                    web_search_requests=total_web_searches,
-                )
-            else:
-                # For non-Anthropic, try LiteLLM cost; cache tokens are always 0
-                request_cost = llm_client.get_completion_cost(response, model) or 0.0
 
             logger.info(
                 f"  Estimated cost: ${request_cost:.4f} "

@@ -1,10 +1,13 @@
 """Tests for Anthropic cost rates and cost calculation."""
 
 import logging
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from pkm_bridge import models
+from pkm_bridge.llm import LLMResponse, response_cost
 
 
 def test_haiku_4_5_rates():
@@ -59,3 +62,41 @@ def test_unknown_model_is_costed_conservatively_and_warns(caplog):
     most_expensive = max(r["output"] for r in models.ANTHROPIC_COST_RATES.values())
     assert rates["output"] == most_expensive
     assert len([r for r in caplog.records if "claude-does-not-exist" in r.message]) == 1
+
+
+def _anthropic_response(**usage):
+    return SimpleNamespace(usage=SimpleNamespace(**usage))
+
+
+def test_token_usage_reads_optional_sdk_fields():
+    response = _anthropic_response(
+        input_tokens=3,
+        output_tokens=200,
+        cache_creation_input_tokens=None,
+        cache_read_input_tokens=40_000,
+        server_tool_use=SimpleNamespace(web_search_requests=1),
+    )
+    usage = models.TokenUsage.from_response(response)
+    assert usage == models.TokenUsage(3, 200, 0, 40_000, 1)
+
+
+def test_billable_input_weights_cache_tokens_by_price():
+    usage = models.TokenUsage(input_tokens=100, cache_write_tokens=1000, cache_read_tokens=10_000)
+    # Haiku 4.5: writes cost 1.25x uncached input, reads 0.1x.
+    assert usage.billable_input_tokens("claude-haiku-4-5") == pytest.approx(100 + 1250 + 1000)
+    assert usage.billable_input_tokens("gpt-4o") == 11_100
+
+
+def test_response_cost_for_anthropic_includes_cache_tokens():
+    response = _anthropic_response(
+        input_tokens=0, output_tokens=0, cache_read_input_tokens=1_000_000
+    )
+    assert response_cost("claude-sonnet-5", response) == pytest.approx(0.20)
+
+
+def test_response_cost_for_litellm_uses_its_price_table():
+    response = LLMResponse(_raw_response=object())
+    with patch("pkm_bridge.llm.litellm.completion_cost", return_value=0.0123):
+        assert response_cost("gpt-4o", response) == 0.0123
+    with patch("pkm_bridge.llm.litellm.completion_cost", side_effect=ValueError("unknown")):
+        assert response_cost("gpt-4o", response) == 0.0

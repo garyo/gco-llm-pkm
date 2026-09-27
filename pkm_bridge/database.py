@@ -129,6 +129,7 @@ class ToolExecutionLog(Base):
 # Database connection management
 _engine = None
 _SessionLocal = None
+_initialized = False
 
 
 def get_database_url() -> str:
@@ -323,11 +324,16 @@ def _upgrade_schema(engine) -> None:
 
 
 def init_db() -> None:
-    """Initialize the database connection and create tables, once per process."""
-    global _engine, _SessionLocal
+    """Initialize the database connection and create tables, once per process.
 
-    if _engine is not None:
+    A failed attempt (e.g. the database not up yet) is retried on the next call.
+    """
+    global _engine, _SessionLocal, _initialized
+
+    if _initialized:
         return
+    if _engine is not None:
+        _engine.dispose()
 
     database_url = get_database_url()
 
@@ -353,6 +359,7 @@ def init_db() -> None:
 
     # Add any missing columns to existing tables
     _upgrade_schema(_engine)
+    _initialized = True
 
 
 def get_db() -> Session:
@@ -370,10 +377,11 @@ def get_db() -> Session:
 
 def close_db() -> None:
     """Close database connection."""
-    global _engine
+    global _engine, _initialized
     if _engine:
         _engine.dispose()
         _engine = None
+    _initialized = False
 
 
 class FileVersion(Base):

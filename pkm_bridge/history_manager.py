@@ -33,6 +33,79 @@ TARGET_TOKENS_AFTER_FILTERING = 2000  # Target size after filtering (for line-ba
 # LLM-based filtering (disabled by default - see docstring for details)
 USE_LLM_FILTERING = False  # Set to True to enable LLM-based filtering instead
 
+# Opens the date/time note that leads each user message (Config.current_time_note).
+TIME_NOTE_PREFIX = "[Current date/time: "
+
+_EPHEMERAL = {"type": "ephemeral"}
+
+
+def is_turn_start(message: Dict[str, Any]) -> bool:
+    """True if `message` begins a fresh conversation turn.
+
+    A turn starts at a plain user message: either string content or a list
+    of content blocks that carries no `tool_result` (a `tool_result` block
+    answers a prior assistant `tool_use`, so it can't lead the history).
+    """
+    if message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if isinstance(content, list):
+        return not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    return True
+
+
+def user_visible_text(content: Any) -> str:
+    """The text a user typed, from string or block-list content.
+
+    Skips the leading date/time note and non-text blocks (tool results).
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
+        if isinstance(text, str) and not text.startswith(TIME_NOTE_PREFIX):
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _set_breakpoint(message: Dict[str, Any]) -> None:
+    content = message.get("content")
+    if isinstance(content, list) and content and isinstance(content[-1], dict):
+        content[-1] = {**content[-1], "cache_control": _EPHEMERAL}
+
+
+def mark_cache_breakpoints(messages: List[Dict[str, Any]]) -> None:
+    """Place the two message-level prompt-cache breakpoints.
+
+    1. The last message, so each tool-loop call reads what the previous call wrote.
+    2. The most recent turn-start user message before it. History is persisted
+       without thinking blocks, so on the next turn only the cache entry written
+       at the previous turn's first call (ending at its user message) still
+       matches; a tool-heavy turn puts that entry beyond the API's ~20-block
+       lookback, so it needs its own breakpoint.
+
+    Any earlier breakpoints are cleared first to stay within the 4-breakpoint
+    limit (the system prompt uses two). String content can't carry a breakpoint.
+    Blocks are *replaced*, never mutated: they may be shared with the persisted
+    history, which must not pick up cache_control markers.
+    """
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for i, block in enumerate(content):
+                if isinstance(block, dict) and "cache_control" in block:
+                    content[i] = {k: v for k, v in block.items() if k != "cache_control"}
+    if not messages:
+        return
+    _set_breakpoint(messages[-1])
+    for msg in reversed(messages[:-1]):
+        if is_turn_start(msg):
+            _set_breakpoint(msg)
+            break
+
 
 class HistoryManager:
     """Manages conversation history with token budget constraints."""
@@ -184,18 +257,7 @@ class HistoryManager:
 
     @staticmethod
     def _is_turn_start(message: Dict[str, Any]) -> bool:
-        """True if `message` begins a fresh conversation turn.
-
-        A turn starts at a plain user message: either string content or a list
-        of content blocks that carries no `tool_result` (a `tool_result` block
-        answers a prior assistant `tool_use`, so it can't lead the history).
-        """
-        if message.get("role") != "user":
-            return False
-        content = message.get("content")
-        if isinstance(content, list):
-            return not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-        return True
+        return is_turn_start(message)
 
     def truncate_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Truncate conversation history to fit within token budget.

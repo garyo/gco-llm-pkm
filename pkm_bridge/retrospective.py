@@ -16,6 +16,7 @@ from .db_repository import (
     QueryFeedbackRepository,
     ToolExecutionLogExtendedRepository,
 )
+from .history_manager import user_visible_text
 from .models import get_role_model
 
 RETROSPECTIVE_PROMPT = """\
@@ -142,9 +143,10 @@ def _strip_conversation_blocks(history: List[Dict[str, Any]]) -> List[Dict[str, 
         content = msg.get("content", "")
 
         if role == "user":
-            if isinstance(content, str):
-                stripped.append({"role": "user", "text": content})
-            elif isinstance(content, list):
+            text = user_visible_text(content)
+            if text:
+                stripped.append({"role": "user", "text": text})
+            if isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "tool_result":

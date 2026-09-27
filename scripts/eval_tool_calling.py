@@ -380,6 +380,7 @@ def run_scenario(
     model: str,
     scenario: Scenario,
     system_prompt: str | list,
+    time_note: str,
     max_turns: int,
     logger: logging.Logger,
 ) -> ScenarioRun:
@@ -391,7 +392,16 @@ def run_scenario(
         expected_tools=scenario.expected_tools,
     )
     start_all = time.time()
-    history: list[dict] = [{"role": "user", "content": scenario.prompt}]
+    # Same user-message structure the server sends: date/time note, then the text.
+    history: list[dict] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": time_note},
+                {"type": "text", "text": scenario.prompt},
+            ],
+        }
+    ]
     tools = registry.get_anthropic_tools()
 
     try:
@@ -657,11 +667,10 @@ def main() -> int:
         apply_dry_run(registry, logger)
     logger.info(f"Registered {len(registry)} tools: {', '.join(registry.list_tools())}")
 
-    # Structured system prompt blocks — same shape the server sends, so the
-    # final block with today's date/time in the user's timezone is included.
+    # Structured system prompt blocks, as the server sends them.
     # The LLMClient accepts str | list; LiteLLM adapter concatenates blocks.
-    tz_str = config.timezone.key if config.timezone is not None else None
-    system_prompt = config.get_system_prompt_blocks(user_timezone=tz_str)
+    system_prompt = config.get_system_prompt_blocks()
+    time_note = config.current_time_note()
 
     out_dir = (
         Path(args.out_dir)
@@ -683,6 +692,7 @@ def main() -> int:
                 model=model,
                 scenario=scenario,
                 system_prompt=system_prompt,
+                time_note=time_note,
                 max_turns=args.max_turns,
                 logger=logger,
             )

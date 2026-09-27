@@ -477,7 +477,11 @@ from pkm_bridge.save_api import handle_merge, handle_save
 file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
 
 # Initialize history manager for conversation truncation
-from pkm_bridge.history_manager import HistoryManager
+from pkm_bridge.history_manager import (
+    HistoryManager,
+    mark_cache_breakpoints,
+    user_visible_text,
+)
 
 history_manager = HistoryManager(
     max_tokens=75000,  # Leave ~25k for system prompt + tools (total budget: 100k)
@@ -582,34 +586,6 @@ def _independent_message_copy(messages):
         else:
             copied.append(dict(m))
     return copied
-
-
-def mark_last_message_for_cache(messages):
-    """Move a single ephemeral cache breakpoint to the end of the message list.
-
-    The conversation history (assistant tool_use + large tool_result blocks) is
-    re-sent on every tool-loop iteration and every turn. A moving breakpoint on
-    the last content block lets cache hits accrue through the loop. We clear any
-    previous per-message breakpoint first so that, together with the up-to-3
-    cached system blocks, we stay within Anthropic's 4-breakpoint limit.
-    String-content messages can't carry a per-block breakpoint, so they're skipped.
-
-    Blocks are *replaced* rather than mutated in place: a block dict may be shared
-    with the persisted history, so an in-place edit would leak the cache_control
-    marker (or a stripped-vs-unstripped mismatch) into stored conversation state.
-    """
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, list):
-            for i, block in enumerate(content):
-                if isinstance(block, dict) and "cache_control" in block:
-                    content[i] = {k: v for k, v in block.items() if k != "cache_control"}
-
-    if not messages:
-        return
-    last_content = messages[-1].get("content")
-    if isinstance(last_content, list) and last_content and isinstance(last_content[-1], dict):
-        last_content[-1] = {**last_content[-1], "cache_control": {"type": "ephemeral"}}
 
 
 # Per-session in-process locks: a session's history is read at request start and
@@ -966,14 +942,11 @@ def query():
                 # Load active learned rules for prompt injection
                 learned_rules = LearnedRuleRepository.get_active(db)
 
-                # Get system prompt blocks for optimal caching
-                # Block 1: Static instructions (cached)
-                # Block 2: User context (cached - separate so edits don't invalidate base)
-                # Block 3: Learned rules (cached - changes at most daily)
-                # Block N: Date (NOT cached - appended dynamically, changes daily)
+                # Stable system prompt blocks (see get_system_prompt_blocks); the
+                # current date/time goes in the user message so the cached
+                # history survives from turn to turn.
                 system_prompt_blocks = config.get_system_prompt_blocks(
                     user_context=user_context,
-                    user_timezone=user_timezone,
                     learned_rules=learned_rules if learned_rules else None,
                 )
 
@@ -985,10 +958,10 @@ def query():
                         "type": "text",
                         "text": "\n\n# SESSION NOTES (your working memory)\n"
                         + "\n".join(notes_lines),
-                        # Not cached — changes per-request
+                        # No breakpoint: after the cached blocks, and it changes
+                        # only when note_to_self runs.
                     }
-                    # Insert before the last block (date block)
-                    system_prompt_blocks.insert(-1, notes_block)
+                    system_prompt_blocks.append(notes_block)
                     logger.debug(f"Injected {len(session_notes)} session notes into prompt")
 
                 # Track RAG context for feedback capture
@@ -1017,7 +990,7 @@ def query():
                                 "text": recent_journals_text,
                                 # No cache_control - changes daily, not worth caching
                             }
-                            system_prompt_blocks.insert(-1, recent_block)
+                            system_prompt_blocks.append(recent_block)
                             logger.info(
                                 f"📅 Added recent journals context "
                                 f"({len(recent_journals_text)} chars)"
@@ -1032,15 +1005,13 @@ def query():
                         )
 
                         if context_block_text:
-                            # Insert context block before the last block (current date)
-                            # This allows retrieved context to be cached separately
                             context_block = {
                                 "type": "text",
                                 "text": context_block_text,
                                 # Note: no cache_control here - RAG context changes per query
                                 # and the API limits cache_control to 4 blocks total
                             }
-                            system_prompt_blocks.insert(-1, context_block)
+                            system_prompt_blocks.append(context_block)
                             had_rag_context = True
                             rag_context_chars = len(context_block_text)
                             logger.info(
@@ -1068,7 +1039,15 @@ def query():
                 db.close()
 
             # Append user message
-            history.append({"role": "user", "content": user_message})
+            history.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": config.current_time_note(user_timezone)},
+                        {"type": "text", "text": user_message},
+                    ],
+                }
+            )
 
             # Truncate only the copy sent to the API — `history` stays the full,
             # persisted record so old PKM conversation content is never destroyed.
@@ -1116,12 +1095,10 @@ def query():
                 if thinking:
                     beta_features.append("interleaved-thinking-2025-05-14")
                 api_params["extra_headers"] = {"anthropic-beta": ",".join(beta_features)}
-                # Cache breakpoint goes on the last *message* block (see
-                # mark_last_message_for_cache), not on tools: render order is
-                # tools→system→messages and the system blocks already carry cache
-                # breakpoints, so a tools breakpoint is redundant and leaves the
-                # growing history re-sent uncached every loop iteration.
-                mark_last_message_for_cache(api_messages)
+                # Message-level breakpoints (see mark_cache_breakpoints), not one on
+                # tools: render order is tools→system→messages and the system blocks
+                # already carry breakpoints, so a tools breakpoint would be redundant.
+                mark_cache_breakpoints(api_messages)
                 if thinking:
                     api_params["thinking"] = thinking
 
@@ -1339,7 +1316,7 @@ def query():
                 # Send the truncated copy; move the cache breakpoint to its tail.
                 api_params["messages"] = api_messages
                 if is_anthropic(model):
-                    mark_last_message_for_cache(api_messages)
+                    mark_cache_breakpoints(api_messages)
 
                 api_call_count += 1
                 # Keepalive before each follow-up LLM call (the slow part)
@@ -1567,17 +1544,9 @@ def get_history(session_id):
         history = []
         for msg in db_session.history:
             if msg["role"] in ["user", "assistant"]:
-                if isinstance(msg["content"], str):
-                    history.append({"role": msg["role"], "text": msg["content"]})
-                elif isinstance(msg["content"], list):
-                    text = ""
-                    for item in msg["content"]:
-                        if hasattr(item, "text"):
-                            text += item.text
-                        elif isinstance(item, dict) and "text" in item:
-                            text += item["text"]
-                    if text:
-                        history.append({"role": msg["role"], "text": text})
+                text = user_visible_text(msg["content"])
+                if text:
+                    history.append({"role": msg["role"], "text": text})
 
         return jsonify(history)
     finally:
@@ -1680,9 +1649,7 @@ def list_sessions():
             preview = ""
             for msg in session.history:
                 if msg.get("role") == "user":
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        preview = content[:100]
+                    preview = user_visible_text(msg.get("content", ""))[:100]
                     break
 
             sessions_list.append(

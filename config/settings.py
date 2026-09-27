@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+from pkm_bridge.history_manager import TIME_NOTE_PREFIX
+
 # Dangerous command patterns (blacklist) blocked before running shell commands
 # or saving skills. Real security comes from Docker isolation, limited filesystem
 # access, and git backups — this list just stops accidents and obvious disasters.
@@ -173,25 +175,22 @@ class Config:
     def get_system_prompt_blocks(
         self,
         user_context: Optional[str] = None,
-        user_timezone: Optional[str] = None,
         learned_rules: Optional[List] = None,
     ) -> list:
         """Get system prompt as structured blocks optimized for prompt caching.
 
-        Returns a list of blocks where static content comes first (cached),
-        followed by dynamic content like dates (not cached).
+        Every block is stable across requests, so the prompt cache for the
+        conversation history after it survives from turn to turn. The current
+        date/time goes in the user message instead (see current_time_note).
 
         Structure:
         - Block 1: Base instructions (cached - most stable)
-        - Block 2: User context (cached - changes occasionally)
-        - Block 3: Learned rules (cached - changes at most daily)
-        - Block N: Today's date (NOT cached - changes daily)
+        - Block 2: User context (changes occasionally)
+        - Block 3: Learned rules (changes at most daily)
+        The first and last blocks carry cache breakpoints.
 
         Args:
             user_context: Optional user context string. If None, will try to load from file.
-            user_timezone: Optional timezone string from client (e.g., 'America/New_York').
-                          If provided, uses client's timezone. Otherwise falls back to
-                          server config.
             learned_rules: Optional list of LearnedRule objects to inject into the prompt.
 
         Returns:
@@ -238,38 +237,29 @@ class Config:
                 {"type": "text", "text": rules_text, "cache_control": {"type": "ephemeral"}}
             )
 
-        # Block N: Current date/time (NOT cached - refreshed every request)
-        # Get current time in user's timezone
-        # Priority: user_timezone (from client) > self.timezone (from config) > system default
-        timezone_to_use = None
-        if user_timezone:
-            try:
-                timezone_to_use = ZoneInfo(user_timezone)
-            except Exception as e:
-                print(f"Warning: Invalid user timezone '{user_timezone}', falling back. Error: {e}")
-                timezone_to_use = self.timezone
-        else:
-            timezone_to_use = self.timezone
-
-        if timezone_to_use:
-            now = datetime.now(timezone_to_use)
-        else:
-            now = datetime.now()
-
-        timestring = now.strftime("%A, %B %d, %Y, %H:%M:%S %Z")
-        blocks.append(
-            {
-                "type": "text",
-                "text": (
-                    f"\n\nThe CURRENT date/time right now is {now.isoformat()} or {timestring}. "
-                    "This timestamp is refreshed on every message and is always accurate. "
-                    "Always use this value for time-related questions — it supersedes any "
-                    "time previously mentioned in the conversation."
-                ),
-            }
-        )
+        # Two system breakpoints (base + the last block) leave two for the
+        # messages; the API allows four in all.
+        for block in blocks[1:-1]:
+            block.pop("cache_control", None)
 
         return blocks
+
+    def current_time_note(self, user_timezone: Optional[str] = None) -> str:
+        """The date/time note that opens each user message.
+
+        It lives in the user turn rather than the system prompt so the system
+        prompt stays byte-stable: any change there invalidates the prompt cache
+        for the entire conversation history that follows it. Minute granularity,
+        in the client's timezone if valid, else the configured one.
+        """
+        tz = self.timezone
+        if user_timezone:
+            try:
+                tz = ZoneInfo(user_timezone)
+            except Exception:
+                pass
+        now = datetime.now(tz) if tz else datetime.now()
+        return f"{TIME_NOTE_PREFIX}{now.strftime('%A, %B %-d, %Y, %H:%M %Z (%Y-%m-%dT%H:%M%z)')}]"
 
     def get_learned_patterns_block(self, learned_rules=None) -> str:
         """Return the learned-patterns block injected into the system prompt.

@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from .http_session import HttpSession
+
 
 class TickTickClient:
     """Client for TickTick Open API."""
@@ -22,7 +24,7 @@ class TickTickClient:
             access_token: OAuth access token
         """
         self.access_token = access_token
-        self.session = requests.Session()
+        self.session = HttpSession()
         self.session.headers.update(
             {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         )

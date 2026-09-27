@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 from urllib.parse import urlencode
 
-import requests
+from .http_session import HttpSession
 
 
 class TickTickOAuth:
@@ -21,6 +21,7 @@ class TickTickOAuth:
         self.client_id = os.getenv("TICKTICK_CLIENT_ID")
         self.client_secret = os.getenv("TICKTICK_CLIENT_SECRET")
         self.redirect_uri = os.getenv("TICKTICK_REDIRECT_URI")
+        self.http = HttpSession()
 
         if not all([self.client_id, self.client_secret, self.redirect_uri]):
             raise ValueError(
@@ -72,7 +73,7 @@ class TickTickOAuth:
         data = {"code": code, "grant_type": "authorization_code", "redirect_uri": self.redirect_uri}
 
         # Send credentials via HTTP Basic Auth
-        response = requests.post(
+        response = self.http.post(
             self.TOKEN_URL, data=data, auth=(self.client_id, self.client_secret)
         )
         response.raise_for_status()
@@ -106,7 +107,7 @@ class TickTickOAuth:
         data = {"refresh_token": refresh_token, "grant_type": "refresh_token"}
 
         # Send credentials via HTTP Basic Auth
-        response = requests.post(
+        response = self.http.post(
             self.TOKEN_URL, data=data, auth=(self.client_id, self.client_secret)
         )
         response.raise_for_status()

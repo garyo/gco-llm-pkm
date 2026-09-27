@@ -11,6 +11,7 @@ from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens
 from ..models import get_role_model, supports_caching
 from ..self_improvement.agent import mark_last_message_for_cache
 from ..self_improvement.budget import Budget
+from ..timezones import configured_timezone_name
 
 
 class TaskExecutor:
@@ -68,6 +69,7 @@ class TaskExecutor:
             tools = self.tool_registry.get_anthropic_tools()
 
         messages: List[Dict[str, Any]] = [{"role": "user", "content": prompt}]
+        tool_context = {"user_timezone": configured_timezone_name(), "scheduled": True}
 
         agent_summary = ""
 
@@ -142,7 +144,9 @@ class TaskExecutor:
                     self.logger.info(f"Scheduler executor: calling {tool_name}")
 
                     try:
-                        result_text = self.tool_registry.execute_tool(tool_name, block.input)
+                        result_text = self.tool_registry.execute_tool(
+                            tool_name, block.input, context=tool_context
+                        )
                     except Exception as e:
                         result_text = f"Error executing {tool_name}: {e}"
                         self.logger.error(f"Scheduler executor: tool error: {e}")

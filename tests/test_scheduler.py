@@ -316,3 +316,34 @@ def test_budget_output_token_limit():
     b.record_turn(10, 60)
     assert not b.can_continue
     assert "output token" in b.stop_reason
+
+
+# ---------------------------------------------------------------------------
+# Executor tool context
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+from pkm_bridge.scheduler.executor import TaskExecutor
+
+
+def test_executor_passes_timezone_and_scheduled_flag(monkeypatch):
+    """Scheduled tool calls carry the configured zone and say they're scheduled."""
+    monkeypatch.setenv("TIMEZONE", "America/Chicago")
+    usage = SimpleNamespace(input_tokens=1, output_tokens=1)
+    tool_use = SimpleNamespace(type="tool_use", id="t1", name="ticktick_query", input={})
+    client = MagicMock()
+    client.complete.side_effect = [
+        SimpleNamespace(stop_reason="tool_use", content=[tool_use], usage=usage),
+        SimpleNamespace(stop_reason="end_turn", content=[], usage=usage),
+    ]
+    registry = MagicMock()
+    registry.get_anthropic_tools.return_value = []
+    registry.execute_tool.return_value = "ok"
+
+    TaskExecutor(client, registry, logging.getLogger("test")).execute(
+        "check tasks", model="claude-haiku-4-5"
+    )
+
+    context = registry.execute_tool.call_args.kwargs["context"]
+    assert context == {"user_timezone": "America/Chicago", "scheduled": True}

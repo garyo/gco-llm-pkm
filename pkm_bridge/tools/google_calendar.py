@@ -9,6 +9,7 @@ from pkm_bridge.database import get_db
 from pkm_bridge.db_repository import OAuthRepository
 from pkm_bridge.google_calendar_client import EventList, GoogleCalendarClient
 from pkm_bridge.google_oauth import GoogleOAuth
+from pkm_bridge.timezones import context_timezone
 from pkm_bridge.tools.base import BaseTool
 
 
@@ -272,7 +273,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
         try:
             calendar_id = params.get("calendar_id", "primary")
-            user_timezone = context.get("user_timezone") if context else None
+            user_timezone = context_timezone(context)
             newest_first = params.get("order", "newest_first") == "newest_first"
 
             try:
@@ -369,10 +370,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 description = params.get("description")
                 location = params.get("location")
                 attendees = params.get("attendees")
-                # Default to the user's timezone (threaded via context), then the
-                # server config timezone (already folded into user_timezone by
-                # the caller), and only fall back to UTC as a last resort.
-                timezone = params.get("timezone") or user_timezone or "UTC"
+                timezone = params.get("timezone") or user_timezone
 
                 event = client.create_event(
                     summary=summary,
@@ -394,10 +392,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
                 # Build updates dict from provided parameters
                 updates = {}
-                # Default to the user's timezone (threaded via context), then the
-                # server config timezone (already folded into user_timezone by
-                # the caller), and only fall back to UTC as a last resort.
-                timezone = params.get("timezone") or user_timezone or "UTC"
+                timezone = params.get("timezone") or user_timezone
                 if "summary" in params:
                     updates["summary"] = params["summary"]
                 if "start" in params:

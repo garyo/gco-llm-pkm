@@ -10,6 +10,7 @@ from pkm_bridge.database import get_db
 from pkm_bridge.db_repository import OAuthRepository
 from pkm_bridge.ticktick_client import TickTickClient
 from pkm_bridge.ticktick_oauth import TickTickOAuth
+from pkm_bridge.timezones import context_timezone
 from pkm_bridge.tools.base import BaseTool
 
 
@@ -336,7 +337,7 @@ Connection status: Check /auth/ticktick/status. If not connected, user needs to 
             return "TickTick not connected. Please connect via /auth/ticktick/authorize"
 
         try:
-            user_timezone = context.get("user_timezone") if context else None
+            user_timezone = context_timezone(context)
 
             # Extract common filter params
             project_param = params.get("project")

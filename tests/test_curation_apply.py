@@ -1,6 +1,7 @@
 """Tests for the curation apply engine: anchor validation, apply, staleness."""
 
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -134,3 +135,45 @@ class TestApplyProposal:
         result = apply_proposal("add_links", payload, editor, LOGGER)
         assert result["status"] == "applied"
         assert len(result["written"]) == 2
+
+
+class TestProposalSource:
+    """Scheduled runs file as the curator; chat and MCP calls file as chat."""
+
+    @pytest.fixture
+    def file_with(self, tmp_path, monkeypatch):
+        from pkm_bridge.curation.repository import NoteProposalRepository
+        from pkm_bridge.tools import note_proposals
+
+        (tmp_path / "logseq" / "journals").mkdir(parents=True)
+        (tmp_path / "logseq" / "journals" / "2026_07_01.md").write_text(
+            "- worked on the dovetail jig today\n"
+        )
+        sources: list[str] = []
+
+        def fake_create(db, **kwargs):
+            sources.append(kwargs["source"])
+            return MagicMock(id=1)
+
+        monkeypatch.setattr(NoteProposalRepository, "create", staticmethod(fake_create))
+        monkeypatch.setattr("pkm_bridge.database.get_db", MagicMock)
+        monkeypatch.setattr(note_proposals, "_broadcast_proposals_changed", lambda db: None)
+        tool = note_proposals.ProposeNoteOrganizationTool(
+            LOGGER, tmp_path / "org", tmp_path / "logseq"
+        )
+        params = {"kind": "add_links", "title": "t", "rationale": "r", "edits": [link_edit()]}
+
+        def file(context):
+            assert "Filed proposal" in tool.execute(params, context)
+            return sources[-1]
+
+        return file
+
+    def test_scheduled_is_curator(self, file_with):
+        assert file_with({"user_timezone": "UTC", "scheduled": True}) == "curator"
+
+    def test_mcp_is_chat(self, file_with):
+        assert file_with({"user_timezone": "UTC", "session_id": "mcp"}) == "chat"
+
+    def test_no_context_is_chat(self, file_with):
+        assert file_with(None) == "chat"

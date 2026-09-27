@@ -169,7 +169,7 @@ class ProposeNoteOrganizationTool(_ProposalToolBase):
                 f"- {p}" for p in problems
             )
 
-        source = "curator" if context is None else "chat"
+        source = "curator" if (context or {}).get("scheduled") else "chat"
         db = get_db()
         try:
             proposal = NoteProposalRepository.create(

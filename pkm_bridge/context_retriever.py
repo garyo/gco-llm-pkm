@@ -9,7 +9,7 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, null, or_
+from sqlalchemy import func, null, or_, text
 
 from pkm_bridge.database import Document, DocumentChunk, get_db
 from pkm_bridge.embeddings.voyage_client import VoyageClient
@@ -33,6 +33,10 @@ RRF_K = 60  # standard damping constant; higher = flatter rank contribution
 
 # Distinct words OR-ed together when the all-terms keyword query comes up short
 MAX_OR_TERMS = 16
+
+# HNSW candidate list size for a vector search (pgvector's default is 40);
+# raised to the candidate pool size when that is larger
+HNSW_EF_SEARCH = 100
 
 
 def keyword_or_terms(query: str, max_terms: int = MAX_OR_TERMS) -> List[str]:
@@ -143,6 +147,15 @@ class ContextRetriever:
             # Dense candidates (cosine_distance = 1 - cosine_similarity)
             vector_rows = []
             if query_embedding is not None:
+                # An HNSW scan yields at most ef_search rows, before the date
+                # filter; iterative scanning keeps going until `pool` survive.
+                db.execute(
+                    text(
+                        "SELECT set_config('hnsw.ef_search', :ef, true), "
+                        "set_config('hnsw.iterative_scan', 'strict_order', true)"
+                    ),
+                    {"ef": str(min(max(pool, HNSW_EF_SEARCH), 1000))},
+                )
                 vector_rows = (
                     db.query(
                         DocumentChunk,

@@ -2,11 +2,48 @@
 
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime, tzinfo
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import requests
+
+from .http_session import HttpSession
+from .timezones import resolve_timezone
+
+
+def task_due_time(task: Dict[str, Any], tz: tzinfo) -> Optional[datetime]:
+    """A task's due time as local wall time, or None if it has none.
+
+    TickTick stores due times in UTC; an all-day task's is midnight in the
+    task's own zone, so it's read there to keep its date from shifting.
+    """
+    due = task.get("dueDate")
+    if not due:
+        return None
+    try:
+        dt = datetime.fromisoformat(due.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if task.get("isAllDay") and task.get("timeZone"):
+        try:
+            tz = ZoneInfo(task["timeZone"])
+        except Exception:
+            pass
+    return dt.astimezone(tz)
+
+
+def task_due_date(task: Dict[str, Any], tz: tzinfo) -> Optional[date]:
+    """A task's due date in the user's zone, or None if it has none."""
+    due = task_due_time(task, tz)
+    return due.date() if due else None
+
+
+def _describe_error(e: Exception) -> str:
+    """Short reason for a failed request: the HTTP status when there is one."""
+    if isinstance(e, requests.exceptions.HTTPError) and e.response is not None:
+        return f"HTTP {e.response.status_code}"
+    return type(e).__name__
 
 
 class TickTickClient:
@@ -22,12 +59,14 @@ class TickTickClient:
             access_token: OAuth access token
         """
         self.access_token = access_token
-        self.session = requests.Session()
+        self.session = HttpSession()
         self.session.headers.update(
             {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         )
         self._projects_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
         self._tasks_cache: Optional[Tuple[float, List[Dict[str, Any]]]] = None
+        # Projects the last all-tasks fetch couldn't load, as "name: error".
+        self.failed_projects: List[str] = []
 
     def _invalidate_cache(self) -> None:
         """Invalidate all caches."""
@@ -80,38 +119,27 @@ class TickTickClient:
                     if now - ts < self._cache_ttl:
                         return data
 
-                # Get all tasks from all projects
-                projects = self.list_projects()
-                all_tasks = []
-
-                # Try to get inbox tasks if configured
+                # Get all tasks from all projects; the inbox isn't among them
+                sources = [(p.get("id"), p.get("name", "?")) for p in self.list_projects()]
                 inbox_id = os.getenv("TICKTICK_INBOX_ID")
                 if inbox_id:
+                    sources.insert(0, (inbox_id, "Inbox"))
+
+                all_tasks = []
+                failed = []
+                for proj_id, proj_name in sources:
+                    if not proj_id:
+                        continue
                     try:
-                        response = self.session.get(f"{self.BASE_URL}/project/{inbox_id}/data")
+                        response = self.session.get(f"{self.BASE_URL}/project/{proj_id}/data")
                         response.raise_for_status()
-                        data = response.json()
-                        inbox_tasks = data.get("tasks", [])
-                        all_tasks.extend(inbox_tasks)
-                    except Exception:
-                        # Inbox access failed, continue without it
-                        pass
+                        all_tasks.extend(response.json().get("tasks", []))
+                    except Exception as e:
+                        failed.append(f"{proj_name}: {_describe_error(e)}")
 
-                # Get tasks from all regular projects
-                for project in projects:
-                    proj_id = project.get("id")
-                    if proj_id:
-                        try:
-                            response = self.session.get(f"{self.BASE_URL}/project/{proj_id}/data")
-                            response.raise_for_status()
-                            data = response.json()
-                            tasks = data.get("tasks", [])
-                            all_tasks.extend(tasks)
-                        except Exception:
-                            # Skip projects that fail to load
-                            continue
-
-                self._tasks_cache = (time.monotonic(), all_tasks)
+                self.failed_projects = failed
+                if not failed:  # don't cache a partial list
+                    self._tasks_cache = (time.monotonic(), all_tasks)
                 return all_tasks
             else:
                 # Get tasks for specific project (not cached — specific project fetch is cheap)
@@ -128,39 +156,18 @@ class TickTickClient:
 
         Args:
             user_timezone: User's timezone string (e.g., 'America/New_York').
-                If None, uses server local time.
+                If None, uses the configured timezone.
 
         Returns:
             List of tasks due today or overdue
         """
-        all_tasks = self.list_tasks()
-
-        # Use user's timezone if provided, otherwise server local time
-        if user_timezone:
-            try:
-                tz = ZoneInfo(user_timezone)
-                today = datetime.now(tz).date()
-            except Exception:
-                today = datetime.now().date()
-        else:
-            today = datetime.now().date()
-
-        today_tasks = []
-        for task in all_tasks:
-            # Check if task has a due date
-            due_date = task.get("dueDate")
-            if not due_date:
-                continue
-
-            # Parse due date (format: 2025-10-29T00:00:00+0000)
-            try:
-                task_date = datetime.fromisoformat(due_date.replace("Z", "+00:00")).date()
-                if task_date <= today:
-                    today_tasks.append(task)
-            except (ValueError, AttributeError):
-                continue
-
-        return today_tasks
+        tz = resolve_timezone(user_timezone)
+        today = datetime.now(tz).date()
+        return [
+            task
+            for task in self.list_tasks()
+            if (due := task_due_date(task, tz)) is not None and due <= today
+        ]
 
     def create_task(
         self,
@@ -392,7 +399,12 @@ class TickTickClient:
                     break
 
             if not existing_task:
-                raise Exception(f"Task {task_id} not found")
+                unloaded = (
+                    f" (projects that failed to load: {'; '.join(self.failed_projects)})"
+                    if self.failed_projects
+                    else ""
+                )
+                raise Exception(f"Task {task_id} not found{unloaded}")
 
             # Merge updates into existing task
             updated_task = {**existing_task, **updates}
@@ -575,6 +587,7 @@ class TickTickClient:
         task: Dict[str, Any],
         include_id: bool = False,
         project_name: Optional[str] = None,
+        user_timezone: Optional[str] = None,
     ) -> str:
         """Format a task into a human-readable summary.
 
@@ -582,27 +595,24 @@ class TickTickClient:
             task: Task dictionary
             include_id: Whether to include task ID in output (default: False)
             project_name: Optional project name to show as [ProjectName] prefix
+            user_timezone: Zone to show the due date/time in (default: configured)
 
         Returns:
             Formatted task summary string
         """
         title = task.get("title", "Untitled")
         task_id = task.get("id", "")
-        due_date = task.get("dueDate", "")
         priority = task.get("priority", 0)
 
         # Priority mapping
         priority_map = {0: "", 1: "(Low)", 3: "(Medium)", 5: "(High)"}
         priority_str = priority_map.get(priority, "")
 
-        # Format due date
         due_str = ""
-        if due_date:
-            try:
-                dt = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
-                due_str = f" - Due: {dt.strftime('%Y-%m-%d')}"
-            except (ValueError, AttributeError):
-                pass
+        due = task_due_time(task, resolve_timezone(user_timezone))
+        if due:
+            due_format = "%Y-%m-%d" if task.get("isAllDay") else "%Y-%m-%d %H:%M"
+            due_str = f" - Due: {due.strftime(due_format)}"
 
         # Project prefix
         proj_str = f"[{project_name}] " if project_name else ""

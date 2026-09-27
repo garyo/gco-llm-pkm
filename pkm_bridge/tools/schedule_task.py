@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, Optional
 
+from ..timezones import configured_timezone_name, format_local
 from .base import BaseTool
 
 
@@ -23,8 +24,10 @@ class ScheduleTaskTool(BaseTool):
             "'update' (modify existing), 'delete' (remove), "
             "'toggle' (enable/disable).\n\n"
             "Schedule types:\n"
-            "- cron: standard cron expression, e.g. '0 9 * * 1-5' (weekdays at 9am)\n"
-            "- interval: simple interval, e.g. '4h', '30m', '1d'\n\n"
+            f"- cron: standard cron expression in local time ({configured_timezone_name()}), "
+            "e.g. '0 9 * * 1-5' (weekdays at 9am local)\n"
+            "- interval: simple interval, e.g. '4h', '30m', '1d'; runs repeat at that "
+            "spacing from the first run\n\n"
             "Example: create a task to check calendar every weekday morning."
         )
 
@@ -147,7 +150,7 @@ class ScheduleTaskTool(BaseTool):
             return (
                 f"Created scheduled task '{task.name}' (id={task.id}).\n"
                 f"Schedule: {task.schedule_type} {task.schedule_expr}\n"
-                f"Next run: {task.next_run_at.isoformat() if task.next_run_at else 'pending'}"
+                f"Next run: {format_local(task.next_run_at) if task.next_run_at else 'pending'}"
             )
         finally:
             db.close()
@@ -166,8 +169,8 @@ class ScheduleTaskTool(BaseTool):
             for t in tasks:
                 status = "enabled" if t.enabled else "DISABLED"
                 hb = " [heartbeat]" if t.is_heartbeat else ""
-                last = t.last_run_at.strftime("%Y-%m-%d %H:%M") if t.last_run_at else "never"
-                nxt = t.next_run_at.strftime("%Y-%m-%d %H:%M") if t.next_run_at else "—"
+                last = format_local(t.last_run_at) if t.last_run_at else "never"
+                nxt = format_local(t.next_run_at) if t.next_run_at else "—"
                 lines.append(
                     f"- **{t.name}** (id={t.id}, {status}{hb}): "
                     f"{t.schedule_type} `{t.schedule_expr}` | "
@@ -218,7 +221,8 @@ class ScheduleTaskTool(BaseTool):
                 )
 
             updated = ScheduledTaskRepository.update(db, task.id, **filtered)
-            return f"Updated task '{updated.name}' (id={updated.id})."
+            nxt = format_local(updated.next_run_at) if updated.next_run_at else "pending"
+            return f"Updated task '{updated.name}' (id={updated.id}). Next run: {nxt}"
         finally:
             db.close()
 

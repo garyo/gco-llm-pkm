@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 from urllib.parse import urlencode
 
-import requests
+from .http_session import HttpSession
 
 
 class GoogleOAuth:
@@ -39,6 +39,7 @@ class GoogleOAuth:
         self.client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
         self.redirect_uri = os.getenv(redirect_uri_env)
         self.scopes = scopes or self.DEFAULT_SCOPES
+        self.http = HttpSession()
 
         if not all([self.client_id, self.client_secret, self.redirect_uri]):
             raise ValueError(
@@ -98,7 +99,7 @@ class GoogleOAuth:
             "grant_type": "authorization_code",
         }
 
-        response = requests.post(self.TOKEN_URL, data=data)
+        response = self.http.post(self.TOKEN_URL, data=data)
         response.raise_for_status()
 
         token_data = response.json()
@@ -134,7 +135,7 @@ class GoogleOAuth:
             "grant_type": "refresh_token",
         }
 
-        response = requests.post(self.TOKEN_URL, data=data)
+        response = self.http.post(self.TOKEN_URL, data=data)
         response.raise_for_status()
 
         token_data = response.json()

@@ -51,7 +51,12 @@ def test_parse_interval_invalid(expr):
 # compute_next_run
 # ---------------------------------------------------------------------------
 
-from pkm_bridge.scheduler.repository import compute_next_run
+from zoneinfo import ZoneInfo
+
+from pkm_bridge.scheduler.repository import ScheduledTaskRepository, compute_next_run
+
+UTC = ZoneInfo("UTC")
+NEW_YORK = ZoneInfo("America/New_York")
 
 
 def _make_task(**kwargs):
@@ -61,6 +66,7 @@ def _make_task(**kwargs):
     task.schedule_expr = kwargs.get("schedule_expr", "4h")
     task.last_run_at = kwargs.get("last_run_at", None)
     task.created_at = kwargs.get("created_at", datetime(2025, 1, 1, 0, 0))
+    task.next_run_at = kwargs.get("next_run_at", None)
     return task
 
 
@@ -104,7 +110,7 @@ def test_compute_next_run_cron():
     """Cron '0 9 * * *' should give next 9am."""
     task = _make_task(schedule_type="cron", schedule_expr="0 9 * * *")
     now = datetime(2025, 6, 15, 10, 0)
-    result = compute_next_run(task, after=now)
+    result = compute_next_run(task, after=now, tz=UTC)
     assert result == datetime(2025, 6, 16, 9, 0)
 
 
@@ -113,9 +119,58 @@ def test_compute_next_run_cron_weekdays():
     task = _make_task(schedule_type="cron", schedule_expr="0 9 * * 1-5")
     # Friday 10am — next is Monday 9am
     now = datetime(2025, 6, 13, 10, 0)  # Friday
-    result = compute_next_run(task, after=now)
+    result = compute_next_run(task, after=now, tz=UTC)
     assert result.weekday() == 0  # Monday
     assert result.hour == 9
+
+
+def test_compute_next_run_cron_is_local_time():
+    """Cron fields are local wall time; the result is naive UTC (9am EDT = 13:00 UTC)."""
+    task = _make_task(schedule_type="cron", schedule_expr="0 9 * * 1-5")
+    now = datetime(2025, 6, 13, 10, 0)  # Friday 6am EDT
+    result = compute_next_run(task, after=now, tz=NEW_YORK)
+    assert result == datetime(2025, 6, 13, 13, 0)
+
+
+def test_compute_next_run_cron_follows_dst():
+    """Sunday 5pm stays 5pm local when DST ends (Nov 1, 2026): 21:00 UTC, then 22:00."""
+    task = _make_task(schedule_type="cron", schedule_expr="0 17 * * 0")
+    before_change = compute_next_run(task, after=datetime(2026, 10, 20), tz=NEW_YORK)
+    assert before_change == datetime(2026, 10, 25, 21, 0)
+    after_change = compute_next_run(task, after=before_change, tz=NEW_YORK)
+    assert after_change == datetime(2026, 11, 1, 22, 0)
+
+
+def test_compute_next_run_cron_defaults_to_configured_timezone(monkeypatch):
+    monkeypatch.setenv("TIMEZONE", "America/Los_Angeles")
+    task = _make_task(schedule_type="cron", schedule_expr="0 7 * * *")
+    result = compute_next_run(task, after=datetime(2025, 6, 13, 12, 0))
+    assert result == datetime(2025, 6, 13, 14, 0)  # 7am PDT
+
+
+def test_mark_run_interval_ticks_from_scheduled_slot():
+    """A 12h task due at 07:00 that finishes at 07:03 is next due at 19:00, not 19:03."""
+    task = _make_task(
+        schedule_type="interval",
+        schedule_expr="12h",
+        last_run_at=datetime(2025, 1, 1, 19, 2),
+        next_run_at=datetime(2025, 1, 2, 7, 0),
+    )
+    with patch("pkm_bridge.scheduler.repository.datetime") as mock_dt:
+        mock_dt.utcnow.return_value = datetime(2025, 1, 2, 7, 3)
+        ScheduledTaskRepository.mark_run(MagicMock(), task)
+    assert task.last_run_at == datetime(2025, 1, 2, 7, 3)
+    assert task.next_run_at == datetime(2025, 1, 2, 19, 0)
+
+
+def test_mark_run_before_slot_keeps_schedule():
+    """Running a task by hand ahead of its slot doesn't move the slot."""
+    slot = datetime(2025, 1, 2, 19, 0)
+    task = _make_task(schedule_type="interval", schedule_expr="12h", next_run_at=slot)
+    with patch("pkm_bridge.scheduler.repository.datetime") as mock_dt:
+        mock_dt.utcnow.return_value = datetime(2025, 1, 2, 10, 0)
+        ScheduledTaskRepository.mark_run(MagicMock(), task)
+    assert task.next_run_at == slot
 
 
 def test_compute_next_run_unknown_type():
@@ -349,3 +404,32 @@ def test_schema_upgrade_adds_missing_cost_columns():
         "ALTER TABLE daily_token_usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE daily_token_usage ADD COLUMN cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Executor tool context
+# ---------------------------------------------------------------------------
+
+
+
+
+def test_executor_passes_timezone_and_scheduled_flag(monkeypatch):
+    """Scheduled tool calls carry the configured zone and say they're scheduled."""
+    monkeypatch.setenv("TIMEZONE", "America/Chicago")
+    usage = SimpleNamespace(input_tokens=1, output_tokens=1)
+    tool_use = SimpleNamespace(type="tool_use", id="t1", name="ticktick_query", input={})
+    client = MagicMock()
+    client.complete.side_effect = [
+        SimpleNamespace(stop_reason="tool_use", content=[tool_use], usage=usage),
+        SimpleNamespace(stop_reason="end_turn", content=[], usage=usage),
+    ]
+    registry = MagicMock()
+    registry.get_anthropic_tools.return_value = []
+    registry.execute_tool.return_value = "ok"
+
+    TaskExecutor(client, registry, logging.getLogger("test")).execute(
+        "check tasks", model="claude-haiku-4-5"
+    )
+
+    context = registry.execute_tool.call_args.kwargs["context"]
+    assert context == {"user_timezone": "America/Chicago", "scheduled": True}

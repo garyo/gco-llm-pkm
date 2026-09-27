@@ -209,8 +209,14 @@ def _log_tool_execution(tool_name: str, params: dict, result: str, duration_ms: 
 
 
 def _execute_tool(name: str, params: dict, context: dict | None = None) -> str:
-    """Execute a tool from the registry with logging."""
+    """Execute a tool from the registry with logging.
+
+    Claude.ai doesn't send the user's timezone, so tools get the configured one.
+    """
     registry = _get_tool_registry()
+    config = _get_config()
+    tz_name = config.timezone.key if config.timezone else "UTC"
+    context = {"user_timezone": tz_name, **(context or {})}
     start = time.time()
     result = registry.execute_tool(name, params, context=context)
     duration_ms = int((time.time() - start) * 1000)

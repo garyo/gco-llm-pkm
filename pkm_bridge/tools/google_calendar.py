@@ -1,15 +1,23 @@
 """Google Calendar integration tool for Claude."""
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
-from zoneinfo import ZoneInfo
 
 from pkm_bridge.database import get_db
 from pkm_bridge.db_repository import OAuthRepository
 from pkm_bridge.google_calendar_client import EventList, GoogleCalendarClient
 from pkm_bridge.google_oauth import GoogleOAuth
+from pkm_bridge.timezones import context_timezone, resolve_timezone
 from pkm_bridge.tools.base import BaseTool
+
+
+def _is_date_only(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+        return True
+    except ValueError:
+        return False
 
 
 class GoogleCalendarTool(BaseTool):
@@ -124,8 +132,9 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 },
                 "time_max": {
                     "type": "string",
-                    "description": "End of date range in ISO format YYYY-MM-DD "
-                    "(required for list_range, optional for search)",
+                    "description": "End of date range in ISO format YYYY-MM-DD, inclusive: "
+                    "a date covers that whole day, so time_min = time_max = today lists "
+                    "today (required for list_range, optional for search)",
                 },
                 "order": {
                     "type": "string",
@@ -199,17 +208,15 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
     ) -> tuple[Optional[datetime], Optional[datetime]]:
         """Parse optional time_min/time_max params into aware datetimes.
 
-        Date-only inputs parse as naive datetimes; localize them in the user's
-        timezone (falling back to UTC) instead of letting the client silently
-        treat them as UTC.
+        Naive inputs are localized in the user's timezone instead of letting
+        the client silently treat them as UTC. A date-only time_max means the
+        end of that day: the API's bound is exclusive, so midnight would drop
+        the day itself and time_min = time_max would list nothing.
 
         Raises:
             ValueError: If either value is not ISO format.
         """
-        try:
-            range_tz = ZoneInfo(user_timezone) if user_timezone else ZoneInfo("UTC")
-        except Exception:
-            range_tz = ZoneInfo("UTC")
+        range_tz = resolve_timezone(user_timezone)
 
         bounds = []
         for key in ("time_min", "time_max"):
@@ -218,6 +225,8 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 bounds.append(None)
                 continue
             parsed = datetime.fromisoformat(value)
+            if key == "time_max" and _is_date_only(value):
+                parsed += timedelta(days=1)
             bounds.append(parsed if parsed.tzinfo else parsed.replace(tzinfo=range_tz))
 
         return bounds[0], bounds[1]
@@ -272,7 +281,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
         try:
             calendar_id = params.get("calendar_id", "primary")
-            user_timezone = context.get("user_timezone") if context else None
+            user_timezone = context_timezone(context)
             newest_first = params.get("order", "newest_first") == "newest_first"
 
             try:
@@ -369,10 +378,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
                 description = params.get("description")
                 location = params.get("location")
                 attendees = params.get("attendees")
-                # Default to the user's timezone (threaded via context), then the
-                # server config timezone (already folded into user_timezone by
-                # the caller), and only fall back to UTC as a last resort.
-                timezone = params.get("timezone") or user_timezone or "UTC"
+                timezone = params.get("timezone") or user_timezone
 
                 event = client.create_event(
                     summary=summary,
@@ -394,10 +400,7 @@ Connection status: Check /auth/google-calendar/status. If not connected, user ne
 
                 # Build updates dict from provided parameters
                 updates = {}
-                # Default to the user's timezone (threaded via context), then the
-                # server config timezone (already folded into user_timezone by
-                # the caller), and only fall back to UTC as a last resort.
-                timezone = params.get("timezone") or user_timezone or "UTC"
+                timezone = params.get("timezone") or user_timezone
                 if "summary" in params:
                     updates["summary"] = params["summary"]
                 if "start" in params:

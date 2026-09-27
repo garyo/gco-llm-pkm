@@ -339,8 +339,8 @@ Examples:
     parser.add_argument(
         "--model",
         "-m",
-        help="Claude model to use (overrides server default). "
-        "Options: claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-7",
+        help="Claude model to use (overrides server default). Options: claude-haiku-4-5, "
+        "claude-sonnet-5, claude-opus-5, claude-opus-5-5, claude-fable-5-1",
     )
 
     args = parser.parse_args()

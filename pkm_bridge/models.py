@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 MODEL_ROLES: dict[str, str] = {
     "chat": os.getenv("MODEL_CHAT", os.getenv("MODEL", "claude-haiku-4-5")),
     "voice": os.getenv("MODEL_VOICE", "claude-haiku-4-5"),
-    "retrospective": os.getenv("MODEL_RETROSPECTIVE", "claude-sonnet-4-6"),
-    "scheduler": os.getenv("MODEL_SCHEDULER", "claude-sonnet-4-6"),
-    "self_improvement": os.getenv("MODEL_SELF_IMPROVEMENT", "claude-sonnet-4-6"),
+    "retrospective": os.getenv("MODEL_RETROSPECTIVE", "claude-sonnet-5"),
+    "scheduler": os.getenv("MODEL_SCHEDULER", "claude-sonnet-5"),
+    "self_improvement": os.getenv("MODEL_SELF_IMPROVEMENT", "claude-sonnet-5"),
     "curation": os.getenv("MODEL_CURATION", "claude-sonnet-5"),
 }
 

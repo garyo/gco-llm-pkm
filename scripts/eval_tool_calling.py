@@ -344,7 +344,9 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
 
             voyage = VoyageClient(api_key=voyage_key)
             retriever = ContextRetriever(voyage)
-            registry.register(SemanticSearchTool(logger, retriever))
+            registry.register(
+                SemanticSearchTool(logger, retriever, config.org_dir, config.logseq_dir)
+            )
             logger.info("Semantic search tool registered")
     except Exception as e:
         logger.info(f"Semantic search not configured: {e}")

@@ -5,10 +5,11 @@ and formats them for injection into Claude's system prompt.
 """
 
 import logging
+import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, null, or_
+from sqlalchemy import func, null, or_, text
 
 from pkm_bridge.database import Document, DocumentChunk, get_db
 from pkm_bridge.embeddings.voyage_client import VoyageClient
@@ -29,6 +30,34 @@ DEFAULT_MIN_SIMILARITY = 0.35
 VECTOR_WEIGHT = 0.7
 KEYWORD_WEIGHT = 0.3
 RRF_K = 60  # standard damping constant; higher = flatter rank contribution
+
+# Distinct words OR-ed together when the all-terms keyword query comes up short
+MAX_OR_TERMS = 16
+
+# HNSW candidate list size for a vector search (pgvector's default is 40);
+# raised to the candidate pool size when that is larger
+HNSW_EF_SEARCH = 100
+
+
+def keyword_or_terms(query: str, max_terms: int = MAX_OR_TERMS) -> List[str]:
+    """Distinct words of a query, in order, for an any-term keyword search."""
+    seen: Dict[str, None] = {}
+    for word in re.findall(r"\w+", query.lower()):
+        seen.setdefault(word, None)
+    return list(seen)[:max_terms]
+
+
+def merge_ranked(primary: List[Any], fallback: List[Any], n: int, key=lambda x: x) -> List[Any]:
+    """`primary` then unseen items of `fallback`, deduplicated by key, at most n."""
+    merged, seen = [], set()
+    for item in [*primary, *fallback]:
+        k = key(item)
+        if k not in seen:
+            seen.add(k)
+            merged.append(item)
+            if len(merged) >= n:
+                break
+    return merged
 
 
 def rrf_fuse(
@@ -73,8 +102,9 @@ class ContextRetriever:
         """Retrieve relevant chunks via hybrid semantic + keyword search.
 
         Dense candidates (pgvector cosine, thresholded by min_similarity) and
-        keyword candidates (Postgres websearch full-text match, which requires
-        all query terms and so bypasses the similarity threshold) are merged
+        keyword candidates (Postgres websearch full-text match requiring all
+        query terms, topped up with any-term matches when that finds fewer
+        than `limit`; keyword hits bypass the similarity threshold) are merged
         with weighted RRF. Exact-token queries — names, codes, filenames —
         surface through the keyword side even when embeddings rank them low.
 
@@ -117,6 +147,15 @@ class ContextRetriever:
             # Dense candidates (cosine_distance = 1 - cosine_similarity)
             vector_rows = []
             if query_embedding is not None:
+                # An HNSW scan yields at most ef_search rows, before the date
+                # filter; iterative scanning keeps going until `pool` survive.
+                db.execute(
+                    text(
+                        "SELECT set_config('hnsw.ef_search', :ef, true), "
+                        "set_config('hnsw.iterative_scan', 'strict_order', true)"
+                    ),
+                    {"ef": str(min(max(pool, HNSW_EF_SEARCH), 1000))},
+                )
                 vector_rows = (
                     db.query(
                         DocumentChunk,
@@ -134,20 +173,35 @@ class ContextRetriever:
             # input (ANDs terms, tolerates quotes/operators); the expression
             # must match idx_chunks_content_fts exactly to use the GIN index.
             tsvector = func.to_tsvector("english", DocumentChunk.content)
-            tsquery = func.websearch_to_tsquery("english", query)
             distance_col = (
                 DocumentChunk.embedding.cosine_distance(query_embedding)
                 if query_embedding is not None
                 else null()
             ).label("distance")
-            keyword_rows = (
-                db.query(DocumentChunk, Document, distance_col)
-                .join(Document, DocumentChunk.document_id == Document.id)
-                .filter(tsvector.op("@@")(tsquery), *date_filters)
-                .order_by(func.ts_rank_cd(tsvector, tsquery).desc())
-                .limit(pool)
-                .all()
-            )
+
+            def keyword_query(tsquery):
+                return (
+                    db.query(DocumentChunk, Document, distance_col)
+                    .join(Document, DocumentChunk.document_id == Document.id)
+                    .filter(tsvector.op("@@")(tsquery), *date_filters)
+                    .order_by(func.ts_rank_cd(tsvector, tsquery).desc())
+                    .limit(pool)
+                    .all()
+                )
+
+            keyword_rows = keyword_query(func.websearch_to_tsquery("english", query))
+
+            # A natural-language question rarely has every word in one chunk,
+            # so top up with chunks matching any word, best covered first.
+            # Stop words become empty tsqueries, which || ignores.
+            terms = keyword_or_terms(query)
+            if len(keyword_rows) < limit and len(terms) > 1:
+                or_query = func.plainto_tsquery("english", terms[0])
+                for term in terms[1:]:
+                    or_query = or_query.op("||")(func.plainto_tsquery("english", term))
+                keyword_rows = merge_ranked(
+                    keyword_rows, keyword_query(or_query), pool, key=lambda row: row[0].id
+                )
 
             # Collect candidates; rank order within each list feeds RRF.
             candidates: Dict[int, Dict[str, Any]] = {}

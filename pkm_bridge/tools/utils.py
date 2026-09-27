@@ -2,11 +2,15 @@
 
 import logging
 import subprocess
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 
 def run_command_with_error_handling(
-    cmd: List[str], timeout: int = 15, logger: Optional[logging.Logger] = None
+    cmd: List[str],
+    timeout: int = 15,
+    logger: Optional[logging.Logger] = None,
+    cwd: Optional[Path] = None,
 ) -> Tuple[str, str, int]:
     """Run subprocess command with comprehensive error handling.
 
@@ -14,6 +18,7 @@ def run_command_with_error_handling(
         cmd: Command and arguments as list
         timeout: Timeout in seconds
         logger: Optional logger for diagnostics
+        cwd: Optional working directory
 
     Returns:
         Tuple of (stdout, stderr, returncode)
@@ -24,7 +29,14 @@ def run_command_with_error_handling(
         - returncode 2+ = actual error
     """
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+        )
 
         if logger:
             cmd_str = " ".join(cmd)

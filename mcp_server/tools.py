@@ -146,7 +146,9 @@ def _build_tool_registry() -> None:
         if retriever:
             from pkm_bridge.tools.semantic_search import SemanticSearchTool
 
-            registry.register(SemanticSearchTool(tool_logger, retriever))
+            registry.register(
+                SemanticSearchTool(tool_logger, retriever, config.org_dir, config.logseq_dir)
+            )
             logger.info("Semantic search tool registered")
     except Exception as e:
         logger.info(f"Semantic search not available: {e}")
@@ -340,15 +342,19 @@ def register_all_tools(server: FastMCP):
         pattern: str,
         context: int = 3,
         limit: int = 15000,
+        files_only: bool = False,
     ) -> str:
-        """Search PKM notes for a regex pattern. Returns matches from journals and pages
-        (newest first).
+        """Search all notes for a regex pattern: org journals newest first, then other
+        org notes, then Logseq. Results are grouped per file under an org:/logseq: path
+        that read_file accepts.
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
             context: Lines of context around each match
             limit: Approximate character limit for results (default 15000; raise it
                 if you need more matches and the result was truncated)
+            files_only: List matching files with match counts instead of lines
+                (use for broad terms, then read the relevant files)
         """
         return _execute_tool(
             "search_notes",
@@ -356,6 +362,7 @@ def register_all_tools(server: FastMCP):
                 "pattern": pattern,
                 "context": context,
                 "limit": limit,
+                "files_only": files_only,
             },
         )
 
@@ -373,7 +380,8 @@ def register_all_tools(server: FastMCP):
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
-            paths: Optional list of specific files/directories to search
+            paths: Optional files/directories to search, e.g. 'org:journals' or
+                'logseq:Personal/pages' (must be inside the note directories)
             newer: Optional YYYY-MM-DD date filter (only notes >= this date)
             max_results: Maximum number of results
         """
@@ -394,8 +402,9 @@ def register_all_tools(server: FastMCP):
         """Search notes with hybrid retrieval: semantic similarity plus exact keyword matching.
 
         Use this for knowledge-base questions. Exact tokens (names, codes, filenames) are
-        matched even when semantically dissimilar. Returns YAML with filename, similarity
-        score, heading path, content, and line number, sorted by hybrid relevance.
+        matched even when semantically dissimilar. Returns YAML sorted by hybrid relevance:
+        org:/logseq: filename, similarity, heading path, line number, and an excerpt of up
+        to ~600 chars (at most 2 per note); read_file gets the full note.
 
         Args:
             query: Natural language search query
@@ -420,10 +429,12 @@ def register_all_tools(server: FastMCP):
         show_stats: bool = False,
         directory: str = "both",
     ) -> str:
-        """List files in PKM directories.
+        """List files in PKM directories, newest first (at most 100 per directory).
 
         Args:
-            pattern: Glob pattern (e.g., '*.org', '**/*.org')
+            pattern: Glob pattern relative to each directory; '**' matches any depth
+                (e.g. '*', 'journals/2026-09-*', '**/*sciatica*'). An 'org:' or
+                'logseq:' prefix selects the directory.
             show_stats: Show file sizes and modification times
             directory: Which directory: 'both' (default), 'org-mode', or 'logseq'
         """

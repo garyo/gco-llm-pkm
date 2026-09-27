@@ -1,6 +1,14 @@
 """Tests for the hybrid-retrieval RRF fusion in context_retriever."""
 
-from pkm_bridge.context_retriever import KEYWORD_WEIGHT, RRF_K, VECTOR_WEIGHT, rrf_fuse
+from pkm_bridge.context_retriever import (
+    KEYWORD_WEIGHT,
+    MAX_OR_TERMS,
+    RRF_K,
+    VECTOR_WEIGHT,
+    keyword_or_terms,
+    merge_ranked,
+    rrf_fuse,
+)
 
 
 def test_both_lists_beats_single_list():
@@ -45,3 +53,23 @@ def test_weighted_scores_match_formula():
         assert k_pos < v30_pos
     else:
         assert k_pos > v30_pos
+
+
+def test_keyword_or_terms_dedupes_in_order():
+    assert keyword_or_terms("When did I last get a haircut? Haircut!") == [
+        "when",
+        "did",
+        "i",
+        "last",
+        "get",
+        "a",
+        "haircut",
+    ]
+    assert len(keyword_or_terms(" ".join(f"w{i}" for i in range(50)))) == MAX_OR_TERMS
+
+
+def test_merge_ranked_keeps_all_terms_hits_first():
+    all_terms = [("c1",), ("c2",)]
+    any_term = [("c3",), ("c1",), ("c4",), ("c5",)]
+    merged = merge_ranked(all_terms, any_term, 4, key=lambda row: row[0])
+    assert merged == [("c1",), ("c2",), ("c3",), ("c4",)]

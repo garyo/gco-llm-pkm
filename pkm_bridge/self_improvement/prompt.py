@@ -56,7 +56,8 @@ These are your notes from previous runs. Use them to build continuity across run
 
 The PKM system has two user-facing interfaces that share the same backend:
 1. **Custom Web App** (pkm.oberbrunner.com) — Flask + Astro frontend, uses Anthropic API key,
-   has auto-RAG injection, interactive checkboxes, editor integration.
+   interactive checkboxes, editor integration. Its auto-RAG injection is off by default, so
+   like MCP it relies on the model calling semantic_search.
    System prompt: `config/system_prompt.txt`
 2. **Claude.ai MCP Server** (mcp.oberbrunner.com) — accessed via Claude.ai desktop/mobile,
    uses user's Claude subscription, must call semantic_search explicitly.
@@ -69,7 +70,7 @@ Both interfaces share the same tools, skills, and learned rules. When you:
   (search strategy, file safety, adding notes) should stay aligned, while interface-specific
   sections (file links, checkboxes, RAG) are intentionally different
 - Inspect **conversations**: note which interface was used if distinguishable
-  (MCP conversations may look different — no auto-RAG context, different tool names)
+  (MCP conversations may look different — different tool names)
 
 ## What to Look For
 

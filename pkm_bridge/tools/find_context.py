@@ -21,9 +21,11 @@ if __name__ == "__main__":
     # When running as script, add parent directory to path
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from pkm_bridge.logging_config import setup_logging
+    from pkm_bridge.note_paths import RG_NOTE_FILTER, display_path, resolve_note_path
     from pkm_bridge.org_links import rewrite_org_links_to_markdown
     from pkm_bridge.tools.base import BaseTool
 else:
+    from ..note_paths import RG_NOTE_FILTER, display_path, resolve_note_path
     from ..org_links import rewrite_org_links_to_markdown
     from .base import BaseTool
 
@@ -67,7 +69,7 @@ Uses ripgrep for fast searching. Automatically respects .gitignore files to excl
 - Sync/temp files (.syncthing*, *.tmp, etc.)
 
 Returns YAML with the following fields for each match:
-- filename: full path to the file
+- filename: prefixed path (org:pages/foo.md) as read_note accepts
 - file_type: 'org' or 'md'
 - date: note date in YYYY-MM-DD format (extracted from #+title for org files, filename for
   journals, or file mtime)
@@ -88,8 +90,9 @@ Results are sorted by date (most recent first), then limited to max_results.
 
 Arguments:
 - pattern: regex pattern to search for (case-insensitive, required)
-- paths: optional list of files/directories to search (if not provided, searches default
-  directories)
+- paths: optional list of files/directories to search, inside the note directories:
+  'org:journals', 'logseq:Personal/pages', or paths relative to the notes dir
+  (default: all note directories)
 - newer: optional date filter in YYYY-MM-DD format (only returns notes with dates >= this date)
 - max_results: maximum number of results to return (default: 50)
 
@@ -106,8 +109,9 @@ Default directories searched (if paths not provided):
                 "paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional list of files or directories to search. "
-                    "Directories are searched recursively.",
+                    "description": "Optional files or directories to search, e.g. "
+                    "'org:journals' or 'logseq:Personal/pages'. Directories are searched "
+                    "recursively.",
                 },
                 "newer": {
                     "type": "string",
@@ -301,7 +305,9 @@ Default directories searched (if paths not provided):
             self.logger.warning(f"Could not get mtime for {file_path}: {e}")
             return None
 
-    def _run_ripgrep(self, pattern: str, paths: List[str]) -> List[Dict[str, Any]]:
+    def _run_ripgrep(
+        self, pattern: str, paths: List[str]
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """Use ripgrep to find all matches efficiently.
 
         Args:
@@ -309,10 +315,11 @@ Default directories searched (if paths not provided):
             paths: List of directory paths to search
 
         Returns:
-            List of match info dicts with file, line number, and matched text
+            (match info dicts with file, line number and matched text,
+             rg's error message if it failed or partially failed, else None)
         """
         if not paths:
-            return []
+            return [], None
 
         # Build ripgrep command
         # Note: ripgrep respects .gitignore by default, which already excludes
@@ -321,18 +328,24 @@ Default directories searched (if paths not provided):
             "rg",
             "--json",  # JSON output for easy parsing
             "-i",  # Case insensitive
-            "--type-add",
-            "notes:*.{org,md}",  # Define custom type
-            "--type",
-            "notes",  # Only search note files
+            *RG_NOTE_FILTER,
             "--max-count",
             "1",  # Only first match per file
+            "-e",
             pattern,
         ]
         cmd.extend(paths)
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL
+            )
+            # 0 = matches, 1 = none, 2 = error (bad regex, or an unreadable
+            # file alongside real matches)
+            error = None
+            if result.returncode not in (0, 1):
+                error = result.stderr.strip() or f"rg exited with code {result.returncode}"
+                self.logger.warning(f"find_context rg error: {error}")
 
             # Parse JSON output from ripgrep
             matches = []
@@ -354,17 +367,17 @@ Default directories searched (if paths not provided):
                     self.logger.debug(f"Could not parse ripgrep line: {e}")
                     continue
 
-            return matches
+            return matches, error
 
         except subprocess.TimeoutExpired:
             self.logger.error("Ripgrep search timed out after 30s")
-            return []
+            return [], "search timed out after 30s"
         except FileNotFoundError:
             self.logger.error("ripgrep (rg) not found. Please install ripgrep.")
-            return []
+            return [], "ripgrep (rg) is not installed"
         except Exception as e:
             self.logger.error(f"Error running ripgrep: {e}")
-            return []
+            return [], str(e)
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute context search.
@@ -386,14 +399,21 @@ Default directories searched (if paths not provided):
 
         # Determine which directories to search
         search_dirs = []
+        path_problems = []
         if paths:
-            # Use provided paths
+            # Confine requested paths to the note directories
             for path_str in paths:
-                path = Path(path_str).expanduser()
+                try:
+                    path = resolve_note_path(path_str, self.org_dir, self.logseq_dir)
+                except ValueError as e:
+                    path_problems.append(str(e))
+                    continue
                 if not path.exists():
-                    self.logger.warning(f"Path does not exist: {path}")
+                    path_problems.append(f"Path does not exist: {path_str}")
                     continue
                 search_dirs.append(str(path))
+            for problem in path_problems:
+                self.logger.warning(problem)
         else:
             # Use default directories
             if self.org_dir.exists():
@@ -402,13 +422,15 @@ Default directories searched (if paths not provided):
                 search_dirs.append(str(self.logseq_dir))
 
         if not search_dirs:
-            return "No valid directories to search"
+            return "No valid directories to search" + "".join(f"\n- {p}" for p in path_problems)
 
         # Use ripgrep to find all matches (fast!)
         self.logger.info(f"Searching {len(search_dirs)} directories with ripgrep")
-        matches = self._run_ripgrep(pattern, search_dirs)
+        matches, rg_error = self._run_ripgrep(pattern, search_dirs)
         self.logger.info(f"Found {len(matches)} matches")
 
+        if rg_error and not matches:
+            return f"❌ Search failed for pattern {pattern!r}: {rg_error}"
         if not matches:
             return f"No matches found for pattern: {pattern}"
 
@@ -456,7 +478,7 @@ Default directories searched (if paths not provided):
                     matched_text = rewrite_org_links_to_markdown(matched_text)
 
                     result = {
-                        "filename": str(file_path),
+                        "filename": display_path(file_path, self.org_dir, self.logseq_dir),
                         "file_type": file_type,
                         "match_line": match["line_num"],
                         "matched_text": matched_text,
@@ -490,7 +512,7 @@ Default directories searched (if paths not provided):
                     matched_text = match["matched_text"]
 
                     result = {
-                        "filename": str(file_path),
+                        "filename": display_path(file_path, self.org_dir, self.logseq_dir),
                         "file_type": file_type,
                         "match_line": match["line_num"],
                         "matched_text": matched_text,
@@ -525,7 +547,12 @@ Default directories searched (if paths not provided):
         if not all_results:
             return f"No matches found for pattern: {pattern}"
 
-        output = {"pattern": pattern, "total_matches": len(all_results), "results": all_results}
+        output: Dict[str, Any] = {"pattern": pattern}
+        warnings = path_problems + ([f"rg: {rg_error}"] if rg_error else [])
+        if warnings:
+            output["warnings"] = warnings
+        output["total_matches"] = len(all_results)
+        output["results"] = all_results
 
         # Custom representer for multiline strings - use literal block style (|)
         def str_representer(dumper, data):

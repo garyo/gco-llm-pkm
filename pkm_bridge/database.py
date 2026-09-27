@@ -1,6 +1,8 @@
 """Database models and connection management."""
 
 import os
+import threading
+import time
 from datetime import datetime
 from urllib.parse import quote_plus
 
@@ -163,6 +165,71 @@ def get_database_url() -> str:
     return database_url
 
 
+# HNSW replaced the original IVFFlat index (lists=100, built on an empty
+# table so its centroids were meaningless, queried with probes=1), which
+# found only 0.40 of the true top-30 neighbours in production.
+VECTOR_INDEX = "idx_embedding_hnsw"
+_OLD_VECTOR_INDEX = "idx_embedding_cosine"
+_VECTOR_INDEX_LOCK = 0x504B4D01  # pg advisory lock key: one process builds
+_FIND_CHUNK_INDEXES = text("SELECT indexname FROM pg_indexes WHERE tablename = 'document_chunks'")
+
+
+def _start_vector_index_upgrade(engine) -> None:
+    """Upgrade the vector index in a background thread, if it needs it.
+
+    Building HNSW over ~25k chunks takes about a minute, longer than the
+    container health check allows for startup; searches use the old index
+    until the new one commits.
+    """
+    try:
+        with engine.connect() as conn:
+            existing = set(conn.execute(_FIND_CHUNK_INDEXES).scalars())
+    except Exception as e:
+        print(f"[DB] WARNING: could not check vector index: {e}", flush=True)
+        return
+    if VECTOR_INDEX in existing and _OLD_VECTOR_INDEX not in existing:
+        return
+    threading.Thread(
+        target=_upgrade_vector_index, args=(engine,), name="vector-index-upgrade", daemon=True
+    ).start()
+
+
+def _upgrade_vector_index(engine) -> None:
+    """Build the HNSW embedding index and drop the old IVFFlat one, once.
+
+    Runs in one transaction, so a failure or crash leaves the old index in
+    place and the next startup retries. The build takes a SHARE lock:
+    searches keep working (on the old index), embedding writes wait for it.
+    Failures are logged, never raised.
+    """
+    try:
+        with engine.begin() as conn:
+            got_lock = conn.execute(
+                text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": _VECTOR_INDEX_LOCK}
+            ).scalar()
+            if not got_lock:
+                print("[DB] Another process is upgrading the vector index; skipping", flush=True)
+                return
+            existing = set(conn.execute(_FIND_CHUNK_INDEXES).scalars())
+            if VECTOR_INDEX not in existing:
+                print(f"[DB] Building HNSW index {VECTOR_INDEX}...", flush=True)
+                start = time.monotonic()
+                # The default 64MB can't hold the graph, making the build far slower
+                conn.execute(text("SET LOCAL maintenance_work_mem = '512MB'"))
+                conn.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS {VECTOR_INDEX} ON document_chunks "
+                        "USING hnsw (embedding vector_cosine_ops)"
+                    )
+                )
+                print(f"[DB] Built {VECTOR_INDEX} in {time.monotonic() - start:.1f}s", flush=True)
+            if _OLD_VECTOR_INDEX in existing:
+                conn.execute(text(f"DROP INDEX IF EXISTS {_OLD_VECTOR_INDEX}"))
+                print(f"[DB] Dropped old IVFFlat index {_OLD_VECTOR_INDEX}", flush=True)
+    except Exception as e:
+        print(f"[DB] WARNING: vector index upgrade failed, keeping old index: {e}", flush=True)
+
+
 def _upgrade_schema(engine) -> None:
     """Add missing columns to existing tables (lightweight migration)."""
     insp = inspect(engine)
@@ -205,6 +272,7 @@ def _upgrade_schema(engine) -> None:
                     "ON document_chunks USING gin (to_tsvector('english', content))"
                 )
             )
+        _start_vector_index_upgrade(engine)
 
     # ScheduledTask: add per-task model override if missing
     if "scheduled_tasks" in insp.get_table_names():
@@ -368,13 +436,12 @@ class DocumentChunk(Base):
             f"chunk={self.chunk_index}, tokens={self.token_count})>"
         )
 
-    # Vector similarity search index
+    # Vector similarity search index (see _upgrade_vector_index)
     __table_args__ = (
         Index(
-            "idx_embedding_cosine",
+            VECTOR_INDEX,
             embedding,
-            postgresql_using="ivfflat",
-            postgresql_with={"lists": 100},
+            postgresql_using="hnsw",
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )

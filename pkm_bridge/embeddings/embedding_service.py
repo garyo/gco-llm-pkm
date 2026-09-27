@@ -9,10 +9,13 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from sqlalchemy import or_
+
 from config.settings import Config
 from pkm_bridge.database import Document, DocumentChunk, get_db
 from pkm_bridge.embeddings.chunker import NoteChunker
 from pkm_bridge.embeddings.voyage_client import VoyageClient
+from pkm_bridge.note_paths import RG_NOTE_FILTER
 
 
 def compute_file_hash(file_path: Path) -> str:
@@ -167,7 +170,11 @@ def embed_document(
     existing = db.query(Document).filter_by(file_path=str(file_path)).first()
 
     if existing and existing.file_hash == current_hash and not force:
-        log(f"⏭️  Skip (unchanged): {file_path.name}")
+        # Most files are unchanged on most runs; the caller logs a summary
+        if logger:
+            logger.debug(f"⏭️  Skip (unchanged): {file_path.name}")
+        else:
+            print(f"⏭️  Skip (unchanged): {file_path.name}")
         return False
 
     # Chunk the document
@@ -265,7 +272,7 @@ def embed_document(
         return False
 
 
-def find_note_files(directories: list[Path], logger=None) -> list[Path]:
+def scan_note_files(directories: list[Path], logger=None) -> tuple[list[Path], list[Path]]:
     """Find all .org and .md files in directories using ripgrep.
 
     Uses ripgrep to find files, which automatically respects .gitignore
@@ -276,7 +283,11 @@ def find_note_files(directories: list[Path], logger=None) -> list[Path]:
         logger: Optional logger
 
     Returns:
-        List of file paths sorted by modification time (newest first)
+        (file paths sorted by modification time, newest first;
+         the directories whose listing is known to be complete). A directory
+        where rg hit an error (exit 2, e.g. one unreadable subdirectory) still
+        contributes the files it did list, but is not complete, so callers
+        must not treat files missing from it as deleted.
     """
     import subprocess
 
@@ -287,21 +298,28 @@ def find_note_files(directories: list[Path], logger=None) -> list[Path]:
             print(msg)
 
     files = []
+    complete_dirs = []
 
     for directory in directories:
+        directory = Path(directory)
         if not directory.exists():
             log(f"⚠️  Directory not found: {directory}")
             continue
 
-        cmd = ["rg", "--files", "--type-add", "notes:*.{org,md}", "--type", "notes", str(directory)]
+        cmd = ["rg", "--files", *RG_NOTE_FILTER, str(directory)]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL
+            )
 
+            # 0 = listed files; 1 = found none; 2 = listed what it could
+            if result.returncode in (0, 2):
+                files.extend(Path(line) for line in result.stdout.splitlines() if line)
             if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if line:
-                        files.append(Path(line))
+                complete_dirs.append(directory)
+            elif result.returncode == 2:
+                log(f"⚠️  ripgrep partially failed in {directory}: {result.stderr.strip()}")
             else:
                 log(f"⚠️  ripgrep returned code {result.returncode} for {directory}")
 
@@ -313,8 +331,18 @@ def find_note_files(directories: list[Path], logger=None) -> list[Path]:
             for pattern in ["**/*.org", "**/*.md"]:
                 files.extend(directory.glob(pattern))
 
-    # Sort by modification time (newest first)
-    return sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)
+    def mtime(f: Path) -> float:
+        try:
+            return f.stat().st_mtime
+        except OSError:  # deleted since the scan
+            return 0.0
+
+    return sorted(files, key=mtime, reverse=True), complete_dirs
+
+
+def find_note_files(directories: list[Path], logger=None) -> list[Path]:
+    """All note files in directories, newest first (see scan_note_files)."""
+    return scan_note_files(directories, logger)[0]
 
 
 def embed_gmail_messages(
@@ -489,19 +517,23 @@ def embed_gmail_messages(
     return stats
 
 
-def reconcile_deleted_files(files: list[Path], db, logger) -> int:
+def reconcile_deleted_files(
+    files: list[Path], db, logger, scanned_dirs: list[Path] | None = None
+) -> int:
     """Remove Document rows for filesystem files that no longer exist.
 
     Compares the current on-disk scan against `Document.file_path` and
     deletes any row (and its chunks, via cascade) whose path wasn't found.
-    Only reconciles real filesystem-backed documents — paths from external
-    sources (e.g. `gmail://...`, produced by `embed_gmail_messages`) are
-    excluded since they aren't part of this scan.
+    Only documents under `scanned_dirs` are considered, so a directory whose
+    scan failed keeps its embeddings; paths from external sources (e.g.
+    `gmail://...`, produced by `embed_gmail_messages`) are never touched.
 
     Args:
         files: Current on-disk note files (same set used for embedding)
         db: Database session
         logger: Logger instance
+        scanned_dirs: Directories whose listing in `files` is complete;
+            defaults to all filesystem-backed documents
 
     Returns:
         Number of documents removed
@@ -509,12 +541,16 @@ def reconcile_deleted_files(files: list[Path], db, logger) -> int:
     found_paths = {str(f) for f in files}
 
     try:
-        stale_docs = (
-            db.query(Document)
-            .filter(~Document.file_path.startswith("gmail://"))
-            .filter(~Document.file_path.in_(found_paths))
-            .all()
-        )
+        query = db.query(Document).filter(~Document.file_path.startswith("gmail://"))
+        if scanned_dirs is not None:
+            if not scanned_dirs:
+                return 0
+            query = query.filter(
+                or_(
+                    *[Document.file_path.startswith(f"{d}/", autoescape=True) for d in scanned_dirs]
+                )
+            )
+        stale_docs = query.filter(~Document.file_path.in_(found_paths)).all()
 
         for doc in stale_docs:
             logger.info(f"🗑️  Removing embeddings for missing file: {doc.file_path}")
@@ -558,7 +594,7 @@ def run_incremental_embedding(
         directories.append(config.logseq_dir)
 
     # Find files
-    files = find_note_files(directories, logger)
+    files, complete_dirs = scan_note_files(directories, logger)
 
     if not files:
         logger.warning("No files found to embed")
@@ -588,13 +624,16 @@ def run_incremental_embedding(
                 logger.error(f"Error processing {file_path}: {e}")
                 error_count += 1
 
-        # Reconcile deleted/renamed files. Skip if the scan came back empty —
-        # that's more likely a transient failure (e.g. missing directory) than
-        # a genuinely empty PKM, and we don't want to wipe the whole index.
-        if files:
-            deleted_count = reconcile_deleted_files(files, db, logger)
-        else:
-            logger.warning("Skipping deletion reconciliation: no files found in scan")
+        # Reconcile deleted/renamed files, only within directories that were
+        # listed completely: a failed or empty scan is more likely transient
+        # than a genuinely emptied PKM, and must not wipe its embeddings.
+        skipped_dirs = [d for d in directories if Path(d) not in complete_dirs]
+        if skipped_dirs:
+            logger.warning(
+                "Skipping deletion reconciliation for incompletely scanned: "
+                + ", ".join(str(d) for d in skipped_dirs)
+            )
+        deleted_count = reconcile_deleted_files(files, db, logger, scanned_dirs=complete_dirs)
 
         # Embed recent Gmail messages (if connected)
         if gmail_oauth:

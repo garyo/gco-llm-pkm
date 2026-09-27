@@ -1,8 +1,11 @@
 """Tool registry for managing and accessing tools."""
 
+import logging
 from typing import Any, Dict, List
 
 from .base import BaseTool
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
@@ -49,17 +52,23 @@ class ToolRegistry:
         Returns:
             Tool execution result
         """
+        tool = self._tools.get(name)
+        if tool is None:
+            return f"❌ Unknown tool: {name}. Available: {', '.join(self.list_tools())}"
+
         try:
-            tool = self.get_tool(name)
             return tool.execute(params, context=context)
-        except KeyError:
-            error_msg = f"❌ Unknown tool: {name}"
-            # Log if tools have logger access
-            return error_msg
+        except KeyError as e:
+            # Tools read required params as params["x"]; say which one is missing
+            key = e.args[0] if e.args else None
+            if key in tool.input_schema.get("properties", {}) and key not in params:
+                logger.warning(f"Tool {name} called without parameter {key!r}")
+                return f"❌ Tool {name} failed: missing required parameter {key!r}"
+            logger.error(f"Tool {name} failed: KeyError {key!r}", exc_info=True)
+            return f"❌ Tool {name} failed: internal error (KeyError {key!r})"
         except Exception as e:
-            error_msg = f"❌ Tool execution failed for {name}: {str(e)}"
-            # Would log here if we had logger access
-            return error_msg
+            logger.error(f"Tool {name} failed: {e}", exc_info=True)
+            return f"❌ Tool {name} failed: {type(e).__name__}: {e}"
 
     def get_anthropic_tools(self) -> List[Dict[str, Any]]:
         """Get all tools formatted for Anthropic API.

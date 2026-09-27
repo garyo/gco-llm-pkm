@@ -29,6 +29,21 @@ litellm.suppress_debug_info = True
 AGENT_TURN_MAX_TOKENS = 16_000
 
 
+def refusal_note(response: Any) -> str:
+    """User-facing text for a reply that stopped with stop_reason "refusal".
+
+    Newer models (Fable 5.1, Opus 5 and later) run safety classifiers that can
+    decline a request before or partway through the output; any partial output
+    is not a complete answer and is discarded.
+    """
+    category = getattr(getattr(response, "stop_details", None), "category", None)
+    reason = f" ({category})" if category else ""
+    return (
+        f"[Declined by the model's safety filter{reason}. "
+        "Try rephrasing, or ask again with another model such as Sonnet 5.]"
+    )
+
+
 def recover_from_max_tokens(response: Any, max_tokens: int) -> list[dict[str, Any]]:
     """Messages that let an agent loop go on after a reply was cut off at max_tokens.
 

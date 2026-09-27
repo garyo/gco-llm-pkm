@@ -56,7 +56,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from pkm_bridge.llm import LLMClient, response_cost
+from pkm_bridge.llm import LLMClient, refusal_note, response_cost
 from pkm_bridge.models import (
     get_available_models,
     is_anthropic,
@@ -1399,6 +1399,11 @@ def query():
                 final_content = [b for b in final_content if b.get("type") != "tool_use"]
                 final_content.append({"type": "text", "text": CUT_OFF_NOTE})
                 assistant_text = f"{assistant_text}\n\n*{CUT_OFF_NOTE}*".strip()
+            elif response.stop_reason == "refusal":
+                note = refusal_note(response)
+                logger.warning(f"Response refused: {note}")
+                final_content = [{"type": "text", "text": note}]
+                assistant_text = f"*{note}*"
             history.append({"role": "assistant", "content": final_content})
 
             # Save updated history to database

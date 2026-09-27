@@ -40,9 +40,10 @@ def get_role_model(role: str) -> str:
 AVAILABLE_MODELS: list[dict[str, Any]] = [
     # Anthropic (direct)
     {"id": "claude-haiku-4-5", "name": "Haiku 4.5", "provider": "anthropic", "tier": "fast"},
-    {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "provider": "anthropic", "tier": "balanced"},
     {"id": "claude-sonnet-5", "name": "Sonnet 5", "provider": "anthropic", "tier": "balanced"},
-    {"id": "claude-opus-4-7", "name": "Opus 4.7", "provider": "anthropic", "tier": "best"},
+    {"id": "claude-opus-5", "name": "Opus 5", "provider": "anthropic", "tier": "best"},
+    {"id": "claude-opus-5-5", "name": "Opus 5.5", "provider": "anthropic", "tier": "best"},
+    {"id": "claude-fable-5-1", "name": "Fable 5.1", "provider": "anthropic", "tier": "best"},
     # OpenAI (direct)
     {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "tier": "balanced"},
     {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "tier": "fast"},

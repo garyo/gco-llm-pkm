@@ -7,7 +7,7 @@ by the ScheduledTask row (prompt, budget, allowed tools).
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens, response_cost
+from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens, refusal_note, response_cost
 from ..models import TokenUsage, get_role_model, supports_caching
 from ..self_improvement.agent import mark_last_message_for_cache
 from ..self_improvement.budget import Budget
@@ -215,6 +215,8 @@ class TaskExecutor:
                 self.logger.info(f"Scheduler executor: stopped — {budget.stop_reason}")
             if last_stop == "max_tokens":
                 raise RuntimeError("Run ended with its last response cut off at max_tokens")
+            if last_stop == "refusal":
+                raise RuntimeError(f"Run ended with a refusal: {refusal_note(response)}")
         except Exception as e:
             error = str(e)
 

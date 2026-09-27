@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from pkm_bridge.history_manager import CUT_OFF_NOTE, drop_unanswered_tool_uses
-from pkm_bridge.llm import recover_from_max_tokens
+from pkm_bridge.llm import recover_from_max_tokens, refusal_note
 from pkm_bridge.scheduler.executor import TaskExecutor
 
 
@@ -105,3 +105,17 @@ def test_executor_reports_error_when_budget_ends_on_cut_off_reply():
     executor, _, _ = _executor([_response("max_tokens", _text("Drafting"))])
     result = executor.execute("do the thing", model="claude-haiku-4-5", max_turns=1)
     assert result["error"] and "max_tokens" in result["error"]
+
+
+def test_refusal_note_names_the_category():
+    response = SimpleNamespace(stop_details=SimpleNamespace(category="cyber"))
+    assert "(cyber)" in refusal_note(response)
+    assert "safety filter" in refusal_note(SimpleNamespace(stop_details=None))
+
+
+def test_executor_reports_error_on_refusal():
+    refused = _response("refusal")
+    refused.stop_details = SimpleNamespace(category="bio")
+    executor, _, _ = _executor([refused])
+    result = executor.execute("do the thing", model="claude-fable-5-1")
+    assert result["error"] and "refusal" in result["error"] and "(bio)" in result["error"]

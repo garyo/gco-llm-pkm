@@ -100,3 +100,13 @@ def test_response_cost_for_litellm_uses_its_price_table():
         assert response_cost("gpt-4o", response) == 0.0123
     with patch("pkm_bridge.llm.litellm.completion_cost", side_effect=ValueError("unknown")):
         assert response_cost("gpt-4o", response) == 0.0
+
+
+def test_latest_claude_models_are_offered_with_adaptive_thinking():
+    from pkm_bridge.models import AVAILABLE_MODELS, thinking_params
+
+    ids = {m["id"] for m in AVAILABLE_MODELS}
+    for model in ("claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"):
+        assert model in ids
+        # These reject budget_tokens (and Fable 5.1 / Opus 5.5 reject disabling thinking).
+        assert thinking_params(model) == {"thinking": {"type": "adaptive", "display": "summarized"}}

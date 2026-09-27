@@ -97,6 +97,8 @@ function doFilterAndPopulate(): void {
     fileCount,
     fileCountMobile,
   );
+  // Rebuilding the list drops the selection (and any option added for a filtered-out file).
+  if (state.currentFile) showInSelector(fileSelector, state.currentFile);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +126,8 @@ async function loadFileList(): Promise<void> {
   try {
     state.allFiles = await api.loadFileList();
     state.journalDates = buildJournalDates(state.allFiles);
-    updateStatus(`Loaded ${state.allFiles.length} files`);
+    // Once a file is open the status line belongs to it (save state, conflicts).
+    if (!state.currentFile) updateStatus(`Loaded ${state.allFiles.length} files`);
     doFilterAndPopulate();
   } catch (e: unknown) {
     const err = e instanceof Error ? e : new Error(String(e));
@@ -291,10 +294,6 @@ document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') {
     e.preventDefault();
     if (state.currentFile) void saver.save();
-  }
-  if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
-    e.preventDefault();
-    if (state.currentFile) refreshFile();
   }
   if (e.altKey && e.key === 'ArrowLeft' && state.navHistory.length > 0) {
     e.preventDefault();

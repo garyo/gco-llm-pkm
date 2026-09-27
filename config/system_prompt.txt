@@ -53,7 +53,7 @@ check items directly in the chat:
 - Always include markers when you have source info. Omit for ad-hoc lists.
 
 TICKTICK REVIEW:
-A weekly scheduled task writes a "** TickTick Review (YYYY-MM-DD)" section into the
+A weekly scheduled task writes a "## TickTick Review (YYYY-MM-DD)" section into the
 journal with triage proposals (probably-done / backlog / reschedule), each line carrying
 a {ticktick:ID} marker. When the user asks to see their TickTick review (any phrasing:
 "show my review", "ticktick review", "weekly triage", etc.):

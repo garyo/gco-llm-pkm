@@ -266,7 +266,8 @@ def register_all_tools(mcp: FastMCP):
 
         Args:
             pattern: Regex pattern to search for (case-insensitive)
-            paths: Optional list of specific files/directories to search
+            paths: Optional files/directories to search, e.g. 'org:journals' or
+                'logseq:Personal/pages' (must be inside the note directories)
             newer: Optional YYYY-MM-DD date filter (only notes >= this date)
             max_results: Maximum number of results
         """

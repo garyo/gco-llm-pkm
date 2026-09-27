@@ -8,6 +8,7 @@ import pytest
 
 from pkm_bridge.note_paths import display_path, recency, resolve_note_path
 from pkm_bridge.tools.files import MAX_LISTED_FILES, ListFilesTool
+from pkm_bridge.tools.find_context import FindContextTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 
 logger = logging.getLogger("test")
@@ -167,3 +168,33 @@ def test_list_files_rejects_escaping_patterns(notes):
     tool = ListFilesTool(logger, org, logseq)
     assert tool.execute({"pattern": "../*"}).startswith("No files matching")
     assert "Invalid pattern" in tool.execute({"pattern": "/etc/*"})
+
+
+# --- find_context -------------------------------------------------------------
+
+
+def test_find_context_surfaces_regex_errors(notes):
+    org, logseq = notes
+    out = FindContextTool(logger, org, logseq).execute({"pattern": "("})
+    assert "Search failed" in out
+    assert "regex parse error" in out
+
+
+def test_find_context_resolves_prefixed_and_relative_paths(notes):
+    org, logseq = notes
+    tool = FindContextTool(logger, org, logseq)
+    for paths in (["org:pages"], ["pages"]):
+        out = tool.execute({"pattern": "haircut", "paths": paths})
+        assert "filename: org:pages/haircuts.md" in out
+        assert "journals" not in out
+
+
+def test_find_context_confines_paths(notes, tmp_path):
+    org, logseq = notes
+    _write(tmp_path / "secret.md", "haircut secret\n")
+    out = FindContextTool(logger, org, logseq).execute(
+        {"pattern": "haircut", "paths": [str(tmp_path / "secret.md"), "../secret.md"]}
+    )
+    assert "secret" in out  # named in the error...
+    assert "haircut secret" not in out  # ...but never searched
+    assert out.startswith("No valid directories to search")

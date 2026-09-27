@@ -608,6 +608,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   }
 
   async function startProposalReview() {
+    if (activeQuery) return;
     switchTab('chat');
     newSession();
     input.value =
@@ -623,6 +624,34 @@ import EditorInterface from '../components/EditorInterface.astro';
   window.addEventListener('proposals:changed', () => {
     checkPendingProposals();
   });
+
+  // Follow streaming output only while the reader is at the bottom, so a long
+  // answer can be read from its start while the rest arrives.
+  const STICK_THRESHOLD_PX = 80;
+  const latestPill = document.getElementById('latest-pill')!;
+  let stickToBottom = true;
+
+  function scrollToLatest() {
+    chat.scrollTop = chat.scrollHeight;
+    stickToBottom = true;
+    latestPill.classList.add('hidden');
+  }
+
+  function followOutput() {
+    if (stickToBottom) chat.scrollTop = chat.scrollHeight;
+    else latestPill.classList.remove('hidden');
+  }
+
+  chat.addEventListener('scroll', () => {
+    stickToBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight <= STICK_THRESHOLD_PX;
+    if (stickToBottom) latestPill.classList.add('hidden');
+  }, { passive: true });
+  latestPill.addEventListener('click', scrollToLatest);
+
+  function insertIntoChat(el: HTMLElement) {
+    chat.insertBefore(el, loading);
+    followOutput();
+  }
 
   // Currently-streaming assistant message — text/reasoning deltas append here
   // until a tool_call (or 'done') arrives, at which point we finalize and any
@@ -643,8 +672,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     const textEl = document.createElement('div');
     textEl.className = 'streaming-text whitespace-pre-wrap';
     container.appendChild(textEl);
-    chat.insertBefore(container, loading);
-    chat.scrollTop = chat.scrollHeight;
+    insertIntoChat(container);
     currentStreaming = { container, textEl, reasoningEl: null, text: '', reasoning: '' };
     return currentStreaming;
   }
@@ -653,7 +681,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     const m = ensureStreamingMessage();
     m.text += text;
     m.textEl.textContent = m.text;
-    chat.scrollTop = chat.scrollHeight;
+    followOutput();
   }
 
   function appendReasoningDelta(text: string) {
@@ -667,7 +695,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     }
     m.reasoning += text;
     if (m.reasoningEl) m.reasoningEl.textContent = m.reasoning;
-    chat.scrollTop = chat.scrollHeight;
+    followOutput();
   }
 
   // Mark the current streaming message "frozen" — its text stays in the chat
@@ -703,8 +731,7 @@ import EditorInterface from '../components/EditorInterface.astro';
         <span class="text-gray-500 truncate" title="${escapeHtml(inputStr)}">${escapeHtml(inputStr)}</span>
       </div>
     `;
-    chat.insertBefore(div, loading);
-    chat.scrollTop = chat.scrollHeight;
+    insertIntoChat(div);
     return div;
   }
 
@@ -763,8 +790,7 @@ import EditorInterface from '../components/EditorInterface.astro';
         <a href="${url}" class="px-3 py-1 bg-yellow-500 hover:bg-yellow-600 text-white rounded text-sm font-medium">Reconnect</a>
       </div>
     `;
-    chat.insertBefore(div, loading);
-    chat.scrollTop = chat.scrollHeight;
+    insertIntoChat(div);
   }
 
   // Show login (hide app)
@@ -811,13 +837,8 @@ import EditorInterface from '../components/EditorInterface.astro';
       // Persist the draft and write any pending edit before leaving the editor tab.
       (window as any).flushEditor?.();
 
-      // Scroll chat to bottom when switching to it
-      setTimeout(() => {
-        const chatDiv = document.getElementById('chat');
-        if (chatDiv) {
-          chatDiv.scrollTop = chatDiv.scrollHeight;
-        }
-      }, 0);
+      // A hidden chat loses its scroll position; start from the latest.
+      setTimeout(scrollToLatest, 0);
 
       input.focus();
     } else {
@@ -989,68 +1010,134 @@ import EditorInterface from '../components/EditorInterface.astro';
   }
   window.addEventListener('auth:expired', handle401);
 
-  // Send message
+  // The server sends a keepalive before every LLM call and an event around
+  // every tool, whose longest timeout is 120s; this much silence means the
+  // stream is dead even though the connection hasn't said so.
+  const STREAM_IDLE_MS = 150_000;
+
+  type StopReason = 'user' | 'stalled';
+  interface ActiveQuery {
+    controller: AbortController;
+    stopReason: StopReason | null;
+    /** Restart the idle watchdog; call whenever bytes arrive. */
+    touch(): void;
+  }
+  let activeQuery: ActiveQuery | null = null;
+
+  // User messages the server has on record for this session; a recovered
+  // reply must belong to a turn beyond these.
+  let knownUserTurns = 0;
+
+  function startQuery(): ActiveQuery {
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const query: ActiveQuery = {
+      controller: new AbortController(),
+      stopReason: null,
+      touch() {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => stopQuery(query, 'stalled'), STREAM_IDLE_MS);
+      },
+    };
+    query.controller.signal.addEventListener('abort', () => clearTimeout(idleTimer));
+    query.touch();
+    return query;
+  }
+
+  function stopQuery(query: ActiveQuery | null, reason: StopReason) {
+    if (!query || query.controller.signal.aborted) return;
+    query.stopReason = reason;
+    query.controller.abort();
+  }
+
+  // A backgrounded phone freezes timers and the reader alike; give the stream
+  // a fresh window to deliver what arrived meanwhile.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') activeQuery?.touch();
+  });
+
+  // While a query streams, Send becomes Stop, and Sessions/New wait.
+  function setStreaming(on: boolean) {
+    input.disabled = on;
+    sendBtn.textContent = on ? 'Stop' : 'Send';
+    sendBtn.classList.toggle('bg-blue-500', !on);
+    sendBtn.classList.toggle('hover:bg-blue-600', !on);
+    sendBtn.classList.toggle('bg-red-500', on);
+    sendBtn.classList.toggle('hover:bg-red-600', on);
+    for (const id of ['sessions-btn', 'new-session-btn']) {
+      const btn = document.getElementById(id) as HTMLButtonElement | null;
+      if (btn) btn.disabled = on;
+    }
+    loading.classList.toggle('hidden', !on);
+    loading.classList.toggle('flex', on);
+  }
+
+  function sendOrStop() {
+    if (activeQuery) stopQuery(activeQuery, 'user');
+    else send();
+  }
+
   async function send() {
-    // Stop voice recording if still active
+    if (activeQuery) return;
+
+    // Stopping flushes any speech still being transcribed into the input.
     if (voiceInput && voiceInput.isActive()) {
       await voiceInput.stop();
     }
-
-    // Hide voice status bar
-    const voiceStatus = document.getElementById('voice-status');
-    if (voiceStatus) {
-      voiceStatus.classList.add('hidden');
-    }
+    document.getElementById('voice-status')?.classList.add('hidden');
 
     const message = input.value.trim();
     if (!message) return;
+    await runQuery(message, isVoiceMessage);
+  }
 
-    input.value = '';
-    input.style.height = 'auto'; // Reset textarea height
-    input.disabled = true;
-    sendBtn.disabled = true;
-
+  async function runQuery(message: string, isVoice: boolean) {
+    const query = startQuery();
+    activeQuery = query;
+    setStreaming(true);
     emptyState.style.display = 'none';
+    const userBubble = appendMessage('user', message);
+    scrollToLatest();
 
-    appendMessage('user', message);
-
-    loading.classList.remove('hidden');
-    loading.classList.add('flex');
-    chat.scrollTop = chat.scrollHeight;
-
+    let failure: string | null = null;
     try {
-      // Get user's timezone from browser
-      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
       const requestBody: any = {
-        message: message,
+        message,
         session_id: sessionId,
         model: selectedModel,
-        timezone: userTimezone,
-        is_voice: isVoiceMessage  // Add voice flag
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        is_voice: isVoice,
       };
-
       if (thinkingEnabled) {
         requestBody.thinking = { type: 'enabled', budget_tokens: 10000 };
       }
 
-      // Reset voice flag after using it
-      isVoiceMessage = false;
-
-      const res = await fetchWithTimeout('/query', {
+      const res = await fetch('/query', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify(requestBody)
-      }, 600000); // 10min safety net — server emits keepalives so the proxy stays alive
+        body: JSON.stringify(requestBody),
+        signal: query.controller.signal,
+      });
 
       if (res.status === 401) {
         handle401();
+        failure = 'Not sent — you were logged out. Log in and tap Retry.';
+        return;
+      }
+      if (!res.ok || !res.body) {
+        const detail = await res.json().then((d) => d?.error, () => null);
+        failure = `❌ ${detail || `Server error ${res.status}`}`;
         return;
       }
 
-      // /query streams NDJSON: keepalive events while work proceeds, then either
-      // a 'done' event with the final payload or an 'error' event. Read line-by-line.
-      if (!res.body) throw new Error('No response body from /query');
+      // Accepted: only now is the typed text safe to clear.
+      if (input.value.trim() === message) {
+        input.value = '';
+        input.style.height = 'auto';
+      }
+      isVoiceMessage = false;
+
+      // /query streams NDJSON: deltas, tool events and keepalives while work
+      // proceeds, then a 'done' event with the final payload or an 'error'.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
@@ -1060,6 +1147,7 @@ import EditorInterface from '../components/EditorInterface.astro';
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
+        query.touch();
         buf += decoder.decode(value, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf('\n')) !== -1) {
@@ -1084,31 +1172,18 @@ import EditorInterface from '../components/EditorInterface.astro';
             updateToolCallBlock(event.id, !!event.ok, event.preview || '', event.duration_ms);
           } else if (event.type === 'auth_required') {
             appendAuthBanner(event.provider);
-            // Refresh the header chip too
             checkIntegrationsStatus();
           }
-          // 'keepalive' events: ignored — they exist to flush bytes through proxies
+          // 'keepalive' events only exist to keep bytes flowing through proxies
         }
       }
 
-      loading.classList.add('hidden');
-      loading.classList.remove('flex');
-
       if (errorEvent) {
-        removeCurrentStreamingMessage();
-        appendMessage('assistant', errorEvent.error || '❌ Query failed');
+        failure = errorEvent.error || '❌ Query failed';
         return;
       }
       if (!finalEvent) {
-        // Stream ended without a final 'done' event — connection dropped
-        // mid-flight (proxy timeout, network blip, server crash). Preserve
-        // whatever partial text/reasoning was already streamed instead of
-        // discarding it, so the user sees what they got.
-        finalizeStreamingMessage();
-        appendMessage(
-          'assistant',
-          '⚠️ Connection ended before the response finished. Any partial text above is what arrived; the server may still have saved a complete reply — refresh to check.'
-        );
+        failure = '⚠️ The connection ended before the reply finished.';
         return;
       }
 
@@ -1116,97 +1191,102 @@ import EditorInterface from '../components/EditorInterface.astro';
       // version takes its place (intermediate streaming messages from earlier
       // tool-loop turns stay in the chat as plain text).
       removeCurrentStreamingMessage();
+      knownUserTurns++;
 
       const data = finalEvent;
       appendMessage('assistant', data.response, data.query_id, data.usage);
 
-      // Auto-update Activity panel if it's open
       const toolLogsPanel = document.getElementById('tool-logs-panel');
       if (toolLogsPanel && !toolLogsPanel.classList.contains('hidden')) {
         loadToolLogs();
       }
-
-      // Update cost warning if > $1.00
-      if (data.session_cost && data.session_cost > 1.0) {
-        const costWarning = document.getElementById('cost-warning');
-        const costAmount = document.getElementById('cost-amount');
-        if (costWarning && costAmount) {
-          costAmount.textContent = `$${data.session_cost.toFixed(2)}`;
-          costWarning.classList.remove('hidden');
-        }
-      }
+      showSessionCost(data.session_cost);
     } catch (e: any) {
-      loading.classList.add('hidden');
-      loading.classList.remove('flex');
-
-      if (e.name === 'AbortError') {
-        // Query timed out - verify if it completed on server
-        // Skip verification if offline - recovery will be faster
-        if (!navigator.onLine) {
-          appendMessage('assistant', '❌ Query timed out (offline)');
-          return;
-        }
-
-        appendMessage('assistant', '⏱️ Response timed out, checking server...');
-
-        try {
-          // Count only user/assistant messages before reload — tool-call blocks
-          // and system banners are also `.message` divs but aren't part of the
-          // server-side history array we're comparing against below.
-          const messagesBefore = chat.querySelectorAll('.message.user, .message.assistant').length;
-
-          // Reload history to sync with server state
-          // Use short timeout to fail fast if network is still down
-          const res = await fetchWithTimeout(`/sessions/${sessionId}/history`, {
-            headers: getAuthHeaders()
-          }, 3000);
-
-          if (res.ok) {
-            const history = await res.json();
-
-            // Check if there are new messages (query completed on server)
-            if (history.length > messagesBefore) {
-              // Clear chat and reload all history
-              const messages = chat.querySelectorAll('.message');
-              messages.forEach(msg => msg.remove());
-
-              history.forEach((msg: any) => appendMessage(msg.role, msg.text));
-
-              // Remove the timeout message and show success
-              const timeoutMsg = chat.querySelector('.message.assistant:last-child');
-              if (timeoutMsg && timeoutMsg.textContent?.includes('timed out')) {
-                timeoutMsg.remove();
-              }
-              appendMessage('assistant', 'ℹ️ Response received (connection was slow)');
-            } else {
-              // Query truly failed - update timeout message
-              const timeoutMsg = chat.querySelector('.message.assistant:last-child');
-              if (timeoutMsg) {
-                timeoutMsg.textContent = '❌ Query timed out and did not complete on server';
-              }
-            }
-          } else {
-            // Couldn't verify - show warning
-            const timeoutMsg = chat.querySelector('.message.assistant:last-child');
-            if (timeoutMsg) {
-              timeoutMsg.textContent = '⚠️ Query timed out. Could not verify server state.';
-            }
-          }
-        } catch (verifyError) {
-          console.error('Failed to verify query completion:', verifyError);
-          const timeoutMsg = chat.querySelector('.message.assistant:last-child');
-          if (timeoutMsg) {
-            timeoutMsg.textContent = '⚠️ Query timed out. Could not verify server state.';
-          }
-        }
-      } else {
-        appendMessage('assistant', '❌ Error: ' + e.message);
-      }
+      if (query.stopReason === 'user') failure = 'Stopped.';
+      else if (query.stopReason === 'stalled') {
+        failure = `⚠️ No response for ${STREAM_IDLE_MS / 60_000} minutes, so I stopped waiting.`;
+      } else failure = `❌ Connection error: ${e.message}`;
     } finally {
-      input.disabled = false;
-      sendBtn.disabled = false;
+      // Releases the connection if we bailed out mid-stream, and the watchdog.
+      query.controller.abort();
+      finalizeStreamingMessage();
+      // Still "streaming" while we check, so nothing new starts underneath.
+      if (failure !== null && !(await recoverReplyFromServer(message))) {
+        appendFailure(failure, userBubble, message, isVoice);
+      }
+      activeQuery = null;
+      setStreaming(false);
       input.focus();
     }
+  }
+
+  /**
+   * After a stopped or broken stream: if the server finished the turn anyway,
+   * show the conversation as it saved it. Returns false when it didn't.
+   */
+  async function recoverReplyFromServer(message: string): Promise<boolean> {
+    if (!authToken) return false;
+    try {
+      const res = await fetchWithTimeout(`/sessions/${sessionId}/history`, {
+        headers: getAuthHeaders()
+      }, 10000);
+      if (!res.ok) return false;
+      const history: HistoryEntry[] = await res.json();
+      const userTurns = history.filter((m) => m.role === 'user').length;
+      const lastUser = history.map((m) => m.role).lastIndexOf('user');
+      const answered =
+        userTurns > knownUserTurns &&
+        history[lastUser]?.text.trim() === message &&
+        history.slice(lastUser + 1).some((m) => m.role === 'assistant');
+      if (!answered) return false;
+      renderHistory(history);
+      appendNotice('Recovered the reply the server saved.');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // A failed turn: say why and offer to send it again in place.
+  function appendFailure(reason: string, userBubble: HTMLElement, message: string, isVoice: boolean) {
+    const div = document.createElement('div');
+    div.className = 'message assistant failure';
+    const text = document.createElement('p');
+    text.textContent = reason;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'retry-btn';
+    retry.textContent = 'Retry';
+    retry.addEventListener('click', () => {
+      if (activeQuery) return;
+      // Replace the failed exchange (and any partial reply) with the new attempt.
+      let node: Element | null = userBubble;
+      while (node && node !== loading) {
+        const next: Element | null = node.nextElementSibling;
+        node.remove();
+        if (node === div) break;
+        node = next;
+      }
+      runQuery(message, isVoice);
+    });
+    div.append(text, retry);
+    insertIntoChat(div);
+  }
+
+  function appendNotice(text: string) {
+    const div = document.createElement('div');
+    div.className = 'message system text-xs text-gray-500 text-center';
+    div.textContent = text;
+    insertIntoChat(div);
+  }
+
+  function showSessionCost(cost: number | undefined) {
+    const costWarning = document.getElementById('cost-warning');
+    const costAmount = document.getElementById('cost-amount');
+    if (!costWarning || !costAmount) return;
+    const show = cost !== undefined && cost > 1.0;
+    if (show) costAmount.textContent = `$${cost.toFixed(2)}`;
+    costWarning.classList.toggle('hidden', !show);
   }
 
   // Send example query
@@ -1231,7 +1311,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     cost: number;
   }
 
-  function appendMessage(role: string, text: string, queryId?: string, usage?: UsageInfo) {
+  function appendMessage(role: string, text: string, queryId?: string, usage?: UsageInfo): HTMLElement {
     const div = document.createElement('div');
     div.className = `message ${role}`;
 
@@ -1252,45 +1332,61 @@ import EditorInterface from '../components/EditorInterface.astro';
       rendered = processPkmFileLinks(rendered);
       div.innerHTML = rendered;
 
-      // Add feedback bar for assistant messages with a query_id
-      if (queryId) {
-        const feedbackBar = document.createElement('div');
-        feedbackBar.className = 'feedback-bar';
-        feedbackBar.dataset.queryId = queryId;
-
-        // Build usage summary if available
-        let usageHtml = '';
-        if (usage) {
-          const parts = [];
-          if (usage.tool_calls > 0) {
-            parts.push(`${usage.tool_calls} tool${usage.tool_calls !== 1 ? 's' : ''}`);
-          }
-          parts.push(`${formatTokens(usage.input_tokens)} in`);
-          parts.push(`${formatTokens(usage.output_tokens)} out`);
-          if (usage.cache_read_tokens > 0) {
-            parts.push(`${formatTokens(usage.cache_read_tokens)} cached`);
-          }
-          const costStr = usage.cost < 0.01
-            ? `$${usage.cost.toFixed(4)}`
-            : `$${usage.cost.toFixed(3)}`;
-          usageHtml = `<span class="usage-info" title="Input / Output / Cache read tokens">${parts.join(' / ')} &middot; ${costStr}</span>`;
-        }
-
-        feedbackBar.innerHTML = `
-          ${usageHtml}
-          <span class="feedback-buttons">
-            <button class="feedback-btn thumbs-up" title="Good response">&#128077;</button>
-            <button class="feedback-btn thumbs-down" title="Bad response">&#128078;</button>
-          </span>
-        `;
-        div.appendChild(feedbackBar);
-      }
+      div.appendChild(buildMessageBar(text, queryId, usage));
     } else {
       div.textContent = text;
     }
 
-    chat.insertBefore(div, loading);
-    chat.scrollTop = chat.scrollHeight;
+    insertIntoChat(div);
+    return div;
+  }
+
+  // Copy, plus usage and feedback when the reply came from this page (has a query_id).
+  function buildMessageBar(text: string, queryId?: string, usage?: UsageInfo): HTMLElement {
+    const bar = document.createElement('div');
+    bar.className = 'feedback-bar';
+    if (queryId) bar.dataset.queryId = queryId;
+
+    let usageHtml = '';
+    if (usage) {
+      const parts = [];
+      if (usage.tool_calls > 0) {
+        parts.push(`${usage.tool_calls} tool${usage.tool_calls !== 1 ? 's' : ''}`);
+      }
+      parts.push(`${formatTokens(usage.input_tokens)} in`);
+      parts.push(`${formatTokens(usage.output_tokens)} out`);
+      if (usage.cache_read_tokens > 0) {
+        parts.push(`${formatTokens(usage.cache_read_tokens)} cached`);
+      }
+      const costStr = usage.cost < 0.01
+        ? `$${usage.cost.toFixed(4)}`
+        : `$${usage.cost.toFixed(3)}`;
+      usageHtml = `<span class="usage-info" title="Input / Output / Cache read tokens">${parts.join(' / ')} &middot; ${costStr}</span>`;
+    }
+
+    bar.innerHTML = `
+      ${usageHtml}
+      <span class="feedback-buttons">
+        <button type="button" class="copy-btn" title="Copy reply as Markdown">Copy</button>
+        ${queryId ? `
+          <button class="feedback-btn thumbs-up" title="Good response">&#128077;</button>
+          <button class="feedback-btn thumbs-down" title="Bad response">&#128078;</button>
+        ` : ''}
+      </span>
+    `;
+
+    const copyBtn = bar.querySelector('.copy-btn') as HTMLButtonElement;
+    copyBtn.addEventListener('click', async () => {
+      const markdown = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+      try {
+        await navigator.clipboard.writeText(markdown);
+        copyBtn.textContent = 'Copied';
+      } catch {
+        copyBtn.textContent = 'Copy failed';
+      }
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+    return bar;
   }
 
   // Handle interactive checkbox clicks via event delegation
@@ -1555,6 +1651,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Switch to a different session
   async function switchToSession(newSessionId: string) {
+    if (activeQuery) return;
     if (newSessionId === sessionId) {
       hideSessionHistory();
       return;
@@ -1562,18 +1659,8 @@ import EditorInterface from '../components/EditorInterface.astro';
 
     sessionId = newSessionId;
     localStorage.setItem('pkm-sessionId', sessionId);
-
-    // Hide cost warning for new session
-    const costWarning = document.getElementById('cost-warning');
-    if (costWarning) {
-      costWarning.classList.add('hidden');
-    }
-
-    // Clear current chat
-    const messages = chat.querySelectorAll('.message');
-    messages.forEach(msg => msg.remove());
-
-    // Load new session history
+    showSessionCost(undefined);
+    renderHistory([]);
     await loadHistory();
 
     // Reconnect SSE with new session ID
@@ -1581,24 +1668,34 @@ import EditorInterface from '../components/EditorInterface.astro';
     if (reconnectSSE) reconnectSSE();
 
     hideSessionHistory();
-    console.log('Switched to session:', sessionId);
   }
 
   // Start new session
   function newSession() {
+    if (activeQuery) return;
     sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
     localStorage.setItem('pkm-sessionId', sessionId);
-
-    const messages = chat.querySelectorAll('.message');
-    messages.forEach(msg => msg.remove());
-
-    emptyState.style.display = 'block';
+    showSessionCost(undefined);
+    renderHistory([]);
 
     // Reconnect SSE with new session ID
     const reconnectSSE = (window as any).reconnectSSEForNewSession;
     if (reconnectSSE) reconnectSSE();
+  }
 
-    console.log('New session started:', sessionId);
+  interface HistoryEntry {
+    role: string;
+    text: string;
+  }
+
+  // Replace the chat with a session's saved conversation.
+  function renderHistory(history: HistoryEntry[]) {
+    chat.querySelectorAll('.message').forEach((msg) => msg.remove());
+    currentStreaming = null;
+    history.forEach((msg) => appendMessage(msg.role, msg.text));
+    knownUserTurns = history.filter((m) => m.role === 'user').length;
+    emptyState.style.display = history.length > 0 ? 'none' : '';
+    scrollToLatest();
   }
 
   // Load conversation history
@@ -1613,12 +1710,7 @@ import EditorInterface from '../components/EditorInterface.astro';
         return;
       }
 
-      const history = await res.json();
-
-      if (history.length > 0) {
-        emptyState.style.display = 'none';
-        history.forEach((msg: any) => appendMessage(msg.role, msg.text));
-      }
+      renderHistory(await res.json());
     } catch (e) {
       console.error('Error loading history:', e);
     }
@@ -1920,6 +2012,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Make functions globally available
   (window as any).send = send;
+  (window as any).sendOrStop = sendOrStop;
   (window as any).sendExample = sendExample;
   (window as any).showModelSettings = showModelSettings;
   (window as any).hideModelSettings = hideModelSettings;

@@ -134,7 +134,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 <script>
   import MarkdownIt from 'markdown-it';
   import markdownItTaskLists from 'markdown-it-task-lists';
-  import { VoiceInput, type VoiceStatus } from '../utils/VoiceInput';
+  import type { VoiceInput, VoiceInputConfig, VoiceStatus } from '../utils/VoiceInput';
 
   const md = new MarkdownIt({
     html: false,  // Don't render raw HTML from model/tool output (XSS: this app holds the JWT)
@@ -355,8 +355,10 @@ import EditorInterface from '../components/EditorInterface.astro';
   const modelSelect = document.getElementById('model-select') as HTMLSelectElement;
   const thinkingToggle = document.getElementById('thinking-toggle') as HTMLInputElement;
 
-  // Voice input
+  // Voice input. vad-web and onnxruntime are large, so they load on the first mic tap.
   let voiceInput: VoiceInput | null = null;
+  let voiceLoading: Promise<VoiceInput> | null = null;
+  let voiceInitialized = false;
   let isVoiceMessage = false;  // Track if current message is from voice
 
   // Fetch with timeout to prevent hanging on poor connectivity
@@ -406,6 +408,8 @@ import EditorInterface from '../components/EditorInterface.astro';
 
   // Initialize voice input
   function initializeVoiceInput() {
+    if (voiceInitialized) return;
+    voiceInitialized = true;
     const voiceBtn = document.getElementById('voice-btn') as HTMLButtonElement;
     const voiceStatus = document.getElementById('voice-status') as HTMLDivElement;
     const voiceStatusText = document.getElementById('voice-status-text') as HTMLSpanElement;
@@ -415,7 +419,7 @@ import EditorInterface from '../components/EditorInterface.astro';
       return;
     }
 
-    voiceInput = new VoiceInput({
+    const voiceConfig: VoiceInputConfig = {
       language: 'en',
       getAuthHeaders: () => getAuthHeaders(),
 
@@ -447,7 +451,10 @@ import EditorInterface from '../components/EditorInterface.astro';
       },
 
       onStatusChange: (status: VoiceStatus) => {
-        if (status === 'listening') {
+        if (status === 'loading') {
+          voiceStatus.classList.remove('hidden');
+          voiceStatusText.textContent = 'Loading voice model…';
+        } else if (status === 'listening') {
           voiceStatusText.textContent = 'Listening...';
         } else if (status === 'transcribing') {
           voiceStatusText.textContent = 'Transcribing...';
@@ -465,10 +472,9 @@ import EditorInterface from '../components/EditorInterface.astro';
           voiceStatus.classList.remove('bg-red-50', 'border-red-200', 'text-red-700');
         }, 3000);
       }
-    });
+    };
 
-    // Check browser support
-    if (!voiceInput.isSupported()) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       voiceBtn.disabled = true;
       voiceBtn.classList.add('disabled');
       voiceBtn.title = 'Voice input not supported in this browser';
@@ -510,13 +516,27 @@ import EditorInterface from '../components/EditorInterface.astro';
     voiceBtn.addEventListener('pointercancel', cancelLongPress);
 
     // Click handler -- skip if long-press already fired
-    voiceBtn.addEventListener('click', async (e) => {
-      if (!voiceInput) return;
+    voiceBtn.addEventListener('click', async () => {
       if (didLongPress) {
         didLongPress = false;
         return;
       }
-      await voiceInput.toggle();
+      if (voiceInput) {
+        await voiceInput.toggle();
+        return;
+      }
+      if (voiceLoading) return;  // first tap is still fetching the code
+      voiceConfig.onStatusChange?.('loading');
+      voiceLoading = import('../utils/VoiceInput').then(
+        (mod) => (voiceInput = new mod.VoiceInput(voiceConfig)),
+      );
+      try {
+        await (await voiceLoading).start();
+      } catch (e) {
+        console.error('Failed to load voice input:', e);
+        voiceLoading = null;
+        voiceConfig.onError?.('Could not load voice input. Check your connection.');
+      }
     });
 
     // Stop mic when user manually edits text (programmatic .value changes don't fire 'input')

@@ -294,7 +294,7 @@ class FileEditor:
         Returns:
             Dict with content, path (canonical — may differ from the request
             when the pages/-fallback found the file elsewhere), modified
-            timestamp, size, and 'truncated' flag.
+            timestamp, size, total_chars (of the whole file), and 'truncated' flag.
 
         Raises:
             ValueError: If file path is invalid or file doesn't exist
@@ -329,6 +329,7 @@ class FileEditor:
             "hash": digest,
             "modified": stat.st_mtime,
             "size": stat.st_size,
+            "total_chars": total_chars,
             "truncated": truncated,
         }
 

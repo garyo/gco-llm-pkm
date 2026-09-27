@@ -65,6 +65,10 @@ class ScheduleTaskTool(BaseTool):
                     "type": "integer",
                     "description": "Task ID (alternative to name for update/delete/toggle)",
                 },
+                "max_turns": {
+                    "type": "integer",
+                    "description": "Optional turn limit per run (for 'create'; default 10)",
+                },
                 "updates": {
                     "type": "object",
                     "description": "Fields to update (for 'update' action): prompt, "
@@ -143,6 +147,7 @@ class ScheduleTaskTool(BaseTool):
                 schedule_type=schedule_type,
                 schedule_expr=schedule_expr,
                 created_by="chat",
+                **({"max_turns": params["max_turns"]} if params.get("max_turns") else {}),
             )
             return (
                 f"Created scheduled task '{task.name}' (id={task.id}).\n"

@@ -207,6 +207,7 @@
   let eventSource: EventSource | null = (window as any)[SSE_GLOBAL_KEY] || null;
   let lastEventTime: number = 0;  // Track last SSE event for stale detection
   let reconnectAttempts: number = 0;  // For exponential backoff
+  let authExpired = false;  // Set on 401 until the user logs in again
   const MAX_RECONNECT_DELAY = 30000;  // Cap reconnect delay at 30 seconds
   let lastResumeRefresh: number = 0;  // Debounce visibility+focus double-fire
 
@@ -264,7 +265,8 @@
 
   // Save plumbing: accounting, drafts, autosave, conflicts all live in the
   // shared controller; this component only renders its callbacks.
-  const fileApi = new FileApi();
+  // On 401 the page shows its login screen; see 'auth:expired' in index.astro.
+  const fileApi = new FileApi(() => window.dispatchEvent(new Event('auth:expired')));
   const docAdapter = new ViewAdapter(() => editorView);
   const saver = new SaveController({
     api: fileApi,
@@ -327,6 +329,19 @@
     return headers;
   }
 
+  /** False only when the server explicitly rejects the stored token; network errors count as valid. */
+  async function tokenStillValid(): Promise<boolean> {
+    try {
+      const res = await fetchWithTimeout('/verify-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: localStorage.getItem('pkm-authToken') }),
+      }, 10000);
+      return (await res.json()).valid !== false;
+    } catch {
+      return true;
+    }
+  }
 
   // Load all files from backend
   async function loadFileList() {
@@ -698,6 +713,11 @@
       return; // Already connected or connecting
     }
 
+    if (authExpired) {
+      console.log('connectSSE() skipped - logged out');
+      return;
+    }
+
     console.log('connectSSE() called - creating new connection');
 
     try {
@@ -753,14 +773,20 @@
         if (eventSource?.readyState === EventSource.CLOSED) {
           // Clear global lock so we can reconnect
           (window as any)[SSE_GLOBAL_KEY] = null;
-
-          // Calculate exponential backoff delay
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
-          reconnectAttempts++;
-          console.log(`SSE connection closed, reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
-
           eventSource = null;
-          setTimeout(connectSSE, delay);
+
+          // EventSource hides the HTTP status, so an expired token would look
+          // like a flaky network and reconnect forever. Check it first.
+          void tokenStillValid().then((valid) => {
+            if (!valid) {
+              window.dispatchEvent(new Event('auth:expired'));
+              return;
+            }
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+            reconnectAttempts++;
+            console.log(`SSE connection closed, reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+            setTimeout(connectSSE, delay);
+          });
         }
         // If readyState is CONNECTING, EventSource is auto-reconnecting - let it
       };
@@ -844,6 +870,22 @@
 
   // Handle editor:navigate events from org links inside the editor
   // (id: and file: links dispatched by shared/editor/org-links.ts)
+  // Logged out: stop the live-update stream and let saves wait (the text stays
+  // in the editor and in a local draft). Logged back in: resume both.
+  window.addEventListener('auth:expired', () => {
+    authExpired = true;
+    eventSource?.close();
+    eventSource = null;
+    (window as any)[SSE_GLOBAL_KEY] = null;
+    updateConnectionStatus('disconnected');
+  });
+  window.addEventListener('auth:restored', () => {
+    authExpired = false;
+    reconnectAttempts = 0;
+    connectSSE();
+    saver.retryNow();
+  });
+
   window.addEventListener('editor:navigate', ((e: CustomEvent) => {
     const { path, line } = e.detail || {};
     if (!path) return;

@@ -44,6 +44,14 @@ export interface SaveOptions {
   timeoutMs?: number;
 }
 
+/** The server rejected our credentials; retrying without logging in again is pointless. */
+export class UnauthorizedError extends Error {
+  constructor() {
+    super('Not logged in');
+    this.name = 'UnauthorizedError';
+  }
+}
+
 export class FileApi {
   constructor(private readonly onUnauthorized: () => void = () => {}) {}
 
@@ -88,7 +96,7 @@ export class FileApi {
       const res = await fetch(url, { ...init, headers: authHeaders(), signal: controller.signal });
       if (res.status === 401) {
         this.onUnauthorized();
-        throw new Error('Unauthorized');
+        throw new UnauthorizedError();
       }
       return res;
     } finally {

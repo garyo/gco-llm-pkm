@@ -388,6 +388,7 @@ import EditorInterface from '../components/EditorInterface.astro';
         authToken = data.token;
         localStorage.setItem('pkm-authToken', authToken);
         showApp();
+        window.dispatchEvent(new Event('auth:restored'));
       } else {
         loginError.textContent = data.error || 'Invalid password';
         loginError.classList.remove('hidden');
@@ -974,13 +975,18 @@ import EditorInterface from '../components/EditorInterface.astro';
     return headers;
   }
 
-  // Handle 401 errors
+  // Handle 401 errors. Several requests can fail at once, so only the first
+  // one (while we still held a token) tells the user.
   function handle401() {
+    const wasLoggedIn = authToken !== null;
     authToken = null;
     localStorage.removeItem('pkm-authToken');
     showLogin();
-    alert('Your session has expired. Please log in again.');
+    if (wasLoggedIn) {
+      alert('Your session has expired. Please log in again. Unsaved editor text is kept.');
+    }
   }
+  window.addEventListener('auth:expired', handle401);
 
   // Send message
   async function send() {

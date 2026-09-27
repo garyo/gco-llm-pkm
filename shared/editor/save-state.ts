@@ -9,7 +9,7 @@
 //   replacements are rebased over edits made in the meantime.
 
 import type { FileApi, FileData, ConflictReason } from './file-api';
-import { isAbortError } from './file-api';
+import { isAbortError, UnauthorizedError } from './file-api';
 import type { DraftStore } from './draft-store';
 import type { DocAdapter } from './diff-apply';
 import { STORAGE_KEYS } from './types';
@@ -56,6 +56,9 @@ export interface SaveControllerOptions {
 export const MAX_WAIT_MS = 10_000;
 export const DRAFT_DEBOUNCE_MS = 300;
 export const KEEPALIVE_LIMIT_CHARS = 60_000;
+/** Retry delay after the first failed save; doubles per consecutive failure. */
+export const RETRY_BASE_MS = 2000;
+export const RETRY_MAX_MS = 60_000;
 const STATUS_TICK_MS = 5000;
 
 const realClock: Clock = {
@@ -84,6 +87,9 @@ export class SaveController {
 
   private savedDoc = '';
   private firstDirtyAt: number | null = null;
+  /** Consecutive failed saves, and why the last one failed; drives retry backoff. */
+  private failures = 0;
+  private lastFailure = '';
   private pendingSave = false;
   private autosaveTimer: unknown = null;
   private draftTimer: unknown = null;
@@ -107,6 +113,7 @@ export class SaveController {
     this.savedDoc = data.content;
     this.lastSaveTime = null;
     this.firstDirtyAt = null;
+    this.failures = 0;
     this.autosavePaused = false;
     this.setConflict(null);
     this.setDirty(false);
@@ -164,8 +171,17 @@ export class SaveController {
     const now = this.clock.now();
     if (this.firstDirtyAt === null) this.firstDirtyAt = now;
     // Trailing debounce, but never later than MAX_WAIT after the first unsaved keystroke.
-    const wait = Math.max(0, Math.min(settings.delayMs, this.firstDirtyAt + MAX_WAIT_MS - now));
-    this.opts.onStatus(`Modified • Auto-saving in ${Math.ceil(wait / 1000)}s...`);
+    let wait = Math.max(0, Math.min(settings.delayMs, this.firstDirtyAt + MAX_WAIT_MS - now));
+    if (this.failures > 0) {
+      // Back off after failures; MAX_WAIT alone would retry immediately, forever.
+      wait = Math.max(wait, Math.min(RETRY_BASE_MS * 2 ** (this.failures - 1), RETRY_MAX_MS));
+      this.opts.onStatus(
+        `${this.lastFailure} — retrying in ${Math.ceil(wait / 1000)}s; your text is kept locally`,
+        true,
+      );
+    } else {
+      this.opts.onStatus(`Modified • Auto-saving in ${Math.ceil(wait / 1000)}s...`);
+    }
     this.autosaveTimer = this.clock.setTimeout(() => void this.save(), wait);
   }
 
@@ -253,8 +269,14 @@ export class SaveController {
         this.afterSave('Saved (response was slow)');
         return 'saved';
       }
-      const message = isAbortError(e) ? 'Save timed out' : (e as Error).message;
-      this.opts.onStatus(`${message} — your text is kept locally; will retry`, true);
+      this.failures++;
+      if (e instanceof UnauthorizedError) {
+        // Retrying can't help until the user logs in again (see retryNow).
+        this.lastFailure = 'Not logged in';
+        this.opts.onStatus('Not saved — log in again; your text is kept locally', true);
+        return 'failed';
+      }
+      this.lastFailure = isAbortError(e) ? 'Save timed out' : (e as Error).message;
       this.scheduleAutoSave();
       return 'failed';
     } finally {
@@ -279,7 +301,14 @@ export class SaveController {
     }
   }
 
+  /** Save now, forgetting earlier failures (e.g. after logging back in). */
+  retryNow(): void {
+    this.failures = 0;
+    if (this.dirty) void this.save();
+  }
+
   private adoptSaved(hash: string, modified: number): void {
+    this.failures = 0;
     this.baseHash = hash;
     this.baseMtime = modified;
     this.lastSaveTime = this.clock.now();

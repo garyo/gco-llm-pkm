@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { SaveController, MAX_WAIT_MS, type Clock } from '@pkm/editor/save-state';
 import { DraftStore } from '@pkm/editor/draft-store';
 import type { DocAdapter, Checkpoint } from '@pkm/editor/diff-apply';
-import type { FileApi, FileData, SaveResult } from '@pkm/editor/file-api';
+import { UnauthorizedError, type FileApi, type FileData, type SaveResult } from '@pkm/editor/file-api';
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -67,6 +67,8 @@ class FakeApi {
   nextResponse: ((content: string) => SaveResult | Error) | null = null;
   pending: (() => void)[] = [];
   hold = false;
+  /** When set, every save throws it. */
+  failWith: Error | null = null;
 
   constructor(content: string) {
     this.disk = { content, path: 'org:a.org', hash: h(content), modified: 100, size: content.length };
@@ -78,6 +80,7 @@ class FakeApi {
 
   async save(_path: string, content: string, opts: { baseHash?: string | null; baseMtime?: number | null; keepalive?: boolean }) {
     this.calls.push({ content, ...opts });
+    if (this.failWith) throw this.failWith;
     if (this.hold) await new Promise<void>((r) => this.pending.push(r));
     if (this.nextResponse) {
       const r = this.nextResponse(content);
@@ -385,6 +388,55 @@ describe('file switching', () => {
 
     expect(saver.path).toBe('org:b.org');
     expect(saver.baseHash).toBe(h('B\n'));
+    expect(saver.dirty).toBe(false);
+  });
+});
+
+describe('SaveController failures', () => {
+  test('failed saves back off instead of retrying immediately', async () => {
+    const { clock, api, saver, status, type } = setup();
+    api.failWith = new Error('Failed to save file: 500');
+    type('x');
+    await clock.tick(2000);
+    expect(api.calls.length).toBe(1);
+    // Past MAX_WAIT the old code retried with no delay at all.
+    await clock.tick(MAX_WAIT_MS + 20_000);
+    // Retries at +2s, +4s, +8s, +16s: a handful, not a storm.
+    expect(api.calls.length).toBeLessThanOrEqual(5);
+    expect(status.at(-1)).toContain('retrying in');
+
+    api.failWith = null;
+    await clock.tick(60_000);
+    expect(saver.dirty).toBe(false);
+  });
+
+  test('a success resets the backoff', async () => {
+    const { clock, api, type } = setup();
+    api.failWith = new Error('Failed to save file: 502');
+    type('x');
+    await clock.tick(2000);
+    api.failWith = null;
+    await clock.tick(2000); // first retry succeeds
+    const saves = api.calls.length;
+    type('y');
+    await clock.tick(2000); // back to the normal debounce
+    expect(api.calls.length).toBe(saves + 1);
+  });
+
+  test('unauthorized stops retrying until retryNow', async () => {
+    const { clock, api, saver, status, type } = setup();
+    api.failWith = new UnauthorizedError();
+    type('x');
+    await clock.tick(2000);
+    await clock.tick(120_000);
+    expect(api.calls.length).toBe(1);
+    expect(status.at(-1)).toContain('log in again');
+    expect(saver.dirty).toBe(true);
+
+    api.failWith = null;
+    saver.retryNow();
+    await flush();
+    expect(api.calls.length).toBe(2);
     expect(saver.dirty).toBe(false);
   });
 });

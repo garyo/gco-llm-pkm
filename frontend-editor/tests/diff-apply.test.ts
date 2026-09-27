@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { EditorState, ChangeSet } from '@codemirror/state';
-import { minimalChange } from '@pkm/editor/diff-apply';
+import { EditorState, ChangeSet, type TransactionSpec } from '@codemirror/state';
+import type { EditorView, ViewUpdate } from '@codemirror/view';
+import { minimalChange, ViewAdapter } from '@pkm/editor/diff-apply';
 
 function apply(current: string, next: string): string {
   const change = minimalChange(current, next);
@@ -49,5 +50,48 @@ describe('minimalChange', () => {
     const change = ChangeSet.of([minimalChange(base, merged)!], base.length).map(typedSince);
     const live = EditorState.create({ doc: base }).update({ changes: typedSince }).state;
     expect(live.update({ changes: change }).state.doc.toString()).toBe('inserted\nline1\nline2\ntyped');
+  });
+});
+
+/** Just enough of an EditorView for ViewAdapter, reporting each change to `adapter`. */
+class FakeView {
+  composing = false;
+  adapter: ViewAdapter | null = null;
+  constructor(public state: EditorState) {}
+  dispatch(spec: TransactionSpec) {
+    const tr = this.state.update(spec);
+    this.state = tr.state;
+    this.adapter?.onUpdate({ view: this, docChanged: tr.docChanged, changes: tr.changes } as unknown as ViewUpdate);
+  }
+}
+
+describe('ViewAdapter', () => {
+  function setup(doc: string) {
+    let view = new FakeView(EditorState.create({ doc }));
+    const adapter = new ViewAdapter(() => view as unknown as EditorView);
+    view.adapter = adapter;
+    const replaceView = (next: string) => {
+      view = new FakeView(EditorState.create({ doc: '' }));
+      view.adapter = adapter;
+      view.dispatch({ changes: { from: 0, insert: next } });
+    };
+    return { adapter, view: () => view, replaceView };
+  }
+
+  test('rebase keeps text typed after the checkpoint', () => {
+    const { adapter, view } = setup('abc');
+    const cp = adapter.checkpoint();
+    view().dispatch({ changes: { from: 3, insert: 'X' } });
+    adapter.rebase(cp, 'Zabc');
+    expect(view().state.doc.toString()).toBe('ZabcX');
+  });
+
+  test('a checkpoint from a replaced view neither breaks the new view nor edits it', () => {
+    const { adapter, view, replaceView } = setup('old file');
+    const cp = adapter.checkpoint(); // e.g. a save in flight during a file switch
+    replaceView('new file');
+    view().dispatch({ changes: { from: 0, insert: '>' } });
+    adapter.rebase(cp, 'merged old file');
+    expect(view().state.doc.toString()).toBe('>new file');
   });
 });

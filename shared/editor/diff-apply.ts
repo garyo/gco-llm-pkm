@@ -68,13 +68,16 @@ const COMPOSITION_RETRY_MS = 250;
 
 /** Adapter over a CodeMirror view. Feed `onUpdate` from the view's update listener. */
 export class ViewAdapter implements DocAdapter {
-  private readonly live = new Set<Checkpoint>();
+  /** Outstanding checkpoints and the view each was taken from; a file switch replaces the view. */
+  private readonly live = new Map<Checkpoint, EditorView | null>();
 
   constructor(private readonly getView: () => EditorView | null) {}
 
   onUpdate(update: ViewUpdate): void {
     if (!update.docChanged) return;
-    for (const cp of this.live) cp.since = cp.since.compose(update.changes);
+    for (const [cp, view] of this.live) {
+      if (view === update.view) cp.since = cp.since.compose(update.changes);
+    }
   }
 
   getText(): string {
@@ -88,7 +91,7 @@ export class ViewAdapter implements DocAdapter {
   checkpoint(): Checkpoint {
     const text = this.getText();
     const cp = { text, since: ChangeSet.empty(text.length) };
-    this.live.add(cp);
+    this.live.set(cp, this.getView());
     return cp;
   }
 
@@ -98,7 +101,8 @@ export class ViewAdapter implements DocAdapter {
 
   rebase(checkpoint: Checkpoint, text: string): void {
     const view = this.getView();
-    if (!view) {
+    if (!view || this.live.get(checkpoint) !== view) {
+      // Taken from a view that has since been replaced by another file.
       this.release(checkpoint);
       return;
     }

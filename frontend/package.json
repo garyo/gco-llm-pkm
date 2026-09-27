@@ -20,11 +20,13 @@
     "@tailwindcss/vite": "^4.1.16",
     "astro": "^5.15.1",
     "codemirror": "^6.0.2",
+    "markdown-it": "^14",
     "markdown-it-task-lists": "^2.1.1",
     "onnxruntime-web": "^1.22.0",
     "tailwindcss": "^4.1.16"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "vite-plugin-static-copy": "^3.2.0"
   }
 }

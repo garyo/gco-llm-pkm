@@ -132,14 +132,15 @@ import EditorInterface from '../components/EditorInterface.astro';
 </Layout>
 
 <script>
+  import MarkdownIt from 'markdown-it';
+  import markdownItTaskLists from 'markdown-it-task-lists';
   import { VoiceInput, type VoiceStatus } from '../utils/VoiceInput';
 
-  // Initialize markdown-it with task-lists plugin
-  const md = (window as any).markdownit({
+  const md = new MarkdownIt({
     html: false,  // Don't render raw HTML from model/tool output (XSS: this app holds the JWT)
     linkify: true,
     typographer: true
-  }).use((window as any).markdownitTaskLists, {enabled: true});
+  }).use(markdownItTaskLists, {enabled: true});
 
   // Post-process HTML to convert "DONE" items to checked checkboxes
   function processDoneItems(html: string): string {

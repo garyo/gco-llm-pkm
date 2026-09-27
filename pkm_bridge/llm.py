@@ -23,6 +23,38 @@ logger = logging.getLogger(__name__)
 litellm.suppress_debug_info = True
 
 
+# Per-response output cap for the background agent loops (scheduler, self-
+# improvement). They call non-streaming; the SDK refuses non-streaming requests
+# whose max_tokens could outlast its 10-minute timeout (~21k), so stay below.
+AGENT_TURN_MAX_TOKENS = 16_000
+
+
+def recover_from_max_tokens(response: Any, max_tokens: int) -> list[dict[str, Any]]:
+    """Messages that let an agent loop go on after a reply was cut off at max_tokens.
+
+    A tool call in a truncated reply may have incomplete input, so none of its
+    calls are replayed or run; the model is told so and asked to continue in
+    smaller steps. Returns [assistant_message, user_notice] to append.
+    """
+    texts = [
+        {"type": "text", "text": b.text}
+        for b in response.content
+        if getattr(b, "type", "") == "text" and b.text
+    ]
+    dropped = [b.name for b in response.content if getattr(b, "type", "") == "tool_use"]
+    notice = f"[Your last response hit the {max_tokens}-token output limit and was cut off"
+    if dropped:
+        notice += f"; these tool calls were NOT run: {', '.join(dropped)}"
+    notice += (
+        ". Continue from where you stopped. Split large writes into several smaller "
+        "calls (for example, one section at a time).]"
+    )
+    return [
+        {"role": "assistant", "content": texts or [{"type": "text", "text": "[cut off]"}]},
+        {"role": "user", "content": [{"type": "text", "text": notice}]},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Response wrappers — mimic Anthropic SDK response shapes for non-Anthropic
 # ---------------------------------------------------------------------------

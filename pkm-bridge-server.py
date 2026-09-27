@@ -478,7 +478,9 @@ file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
 
 # Initialize history manager for conversation truncation
 from pkm_bridge.history_manager import (
+    CUT_OFF_NOTE,
     HistoryManager,
+    drop_unanswered_tool_uses,
     mark_cache_breakpoints,
     user_visible_text,
 )
@@ -1038,6 +1040,10 @@ def query():
             finally:
                 db.close()
 
+            repaired = drop_unanswered_tool_uses(history)
+            if repaired:
+                logger.warning(f"Removed {repaired} unanswered tool_use block(s) from history")
+
             # Append user message
             history.append(
                 {
@@ -1083,7 +1089,9 @@ def query():
             # Build API call parameters (LLMClient handles provider-specific details)
             api_params: Dict[str, Any] = {
                 "model": model,
-                "max_tokens": 8192,
+                # Thinking counts against this too. Streaming, so a high cap costs
+                # nothing unless used; other providers may reject large values.
+                "max_tokens": 32000 if is_anthropic(model) else 8192,
                 "system": system_prompt_blocks,
                 "messages": api_messages,
                 "tools": tools,
@@ -1333,9 +1341,15 @@ def query():
                 if getattr(block, "type", "") == "text":
                     assistant_text += block.text
 
-            history.append(
-                {"role": "assistant", "content": serialize_message_content(response.content)}
-            )
+            final_content = serialize_message_content(response.content)
+            if response.stop_reason == "max_tokens":
+                # Drop any tool call cut off mid-input: it can never get a result,
+                # and an unanswered tool_use makes every later request a 400.
+                logger.warning("Response cut off at max_tokens")
+                final_content = [b for b in final_content if b.get("type") != "tool_use"]
+                final_content.append({"type": "text", "text": CUT_OFF_NOTE})
+                assistant_text = f"{assistant_text}\n\n*{CUT_OFF_NOTE}*".strip()
+            history.append({"role": "assistant", "content": final_content})
 
             # Save updated history to database
             db = get_db()

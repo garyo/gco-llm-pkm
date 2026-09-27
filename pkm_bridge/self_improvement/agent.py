@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens
 from ..models import get_role_model, supports_caching
 from ..tools.registry import ToolRegistry
 from .budget import Budget
@@ -254,6 +255,7 @@ class SelfImprovementAgent:
             system_blocks = system_prompt
             extra_headers = None
 
+        last_stop = None
         try:
             # Agent loop
             while budget.can_continue:
@@ -264,7 +266,7 @@ class SelfImprovementAgent:
 
                 api_params = {
                     "model": model,
-                    "max_tokens": 4096,
+                    "max_tokens": AGENT_TURN_MAX_TOKENS,
                     "system": system_blocks,
                     "messages": messages,
                     "tools": tools,
@@ -283,6 +285,12 @@ class SelfImprovementAgent:
                     f"SI Agent: turn {budget.turns_used}/{budget.max_turns} "
                     f"(tokens: {input_tokens}+{output_tokens})"
                 )
+
+                last_stop = response.stop_reason
+                if last_stop == "max_tokens":
+                    self.logger.warning("SI Agent: response cut off at max_tokens")
+                    messages.extend(recover_from_max_tokens(response, AGENT_TURN_MAX_TOKENS))
+                    continue
 
                 # If no tool use, we're done
                 if response.stop_reason != "tool_use":
@@ -366,6 +374,8 @@ class SelfImprovementAgent:
             # Check if we stopped due to budget
             if not budget.can_continue:
                 self.logger.info(f"SI Agent: stopped — {budget.stop_reason}")
+            if last_stop == "max_tokens":
+                raise RuntimeError("Run ended with its last response cut off at max_tokens")
 
         except Exception as e:
             result["error"] = str(e)

@@ -107,6 +107,41 @@ def mark_cache_breakpoints(messages: List[Dict[str, Any]]) -> None:
             break
 
 
+CUT_OFF_NOTE = "[Response cut off at the output limit.]"
+
+
+def drop_unanswered_tool_uses(history: List[Dict[str, Any]]) -> int:
+    """Remove assistant tool_use blocks that no following tool_result answers.
+
+    A reply cut off at max_tokens can end in a tool call that never ran. The
+    API rejects any history containing one, so left in place it breaks every
+    later request in the session. Returns the number of blocks removed.
+    """
+    removed = 0
+    for i, msg in enumerate(history):
+        content = msg.get("content")
+        if msg.get("role") != "assistant" or not isinstance(content, list):
+            continue
+        answered = set()
+        if i + 1 < len(history) and isinstance(history[i + 1].get("content"), list):
+            answered = {
+                b.get("tool_use_id")
+                for b in history[i + 1]["content"]
+                if isinstance(b, dict) and b.get("type") == "tool_result"
+            }
+        kept = [
+            b
+            for b in content
+            if not (
+                isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") not in answered
+            )
+        ]
+        if len(kept) != len(content):
+            removed += len(content) - len(kept)
+            history[i] = {**msg, "content": kept or [{"type": "text", "text": CUT_OFF_NOTE}]}
+    return removed
+
+
 class HistoryManager:
     """Manages conversation history with token budget constraints."""
 

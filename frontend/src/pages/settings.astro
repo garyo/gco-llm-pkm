@@ -142,7 +142,7 @@ import Layout from '../layouts/Layout.astro';
             <!-- Daily Budget Bar -->
             <div class="budget-card" id="budget-card">
                 <div class="budget-header">
-                    <span class="budget-label">Daily Token Budget</span>
+                    <span class="budget-label">Daily Budget</span>
                     <span id="budget-summary" class="budget-summary">Loading...</span>
                 </div>
                 <div class="budget-bar-container">
@@ -151,7 +151,7 @@ import Layout from '../layouts/Layout.astro';
                     </div>
                 </div>
                 <div class="budget-details">
-                    <span id="budget-input">Input: —</span>
+                    <span id="budget-cost">Cost: —</span>
                     <span id="budget-output">Output: —</span>
                     <span id="budget-runs">Runs: —</span>
                 </div>
@@ -1428,12 +1428,12 @@ import Layout from '../layouts/Layout.astro';
             const res = await fetch('/api/scheduled-tasks/budget', { headers: authHeaders() });
             if (!res.ok) return;
             const d = await res.json();
-            const pct = Math.max(d.input_pct, d.output_pct);
+            const pct = Math.max(d.cost_pct, d.output_pct);
             const fill = document.getElementById('budget-bar-fill') as HTMLElement;
             fill.style.width = `${Math.min(pct, 100)}%`;
             fill.className = 'budget-bar-fill' + (pct >= 95 ? ' critical' : pct >= 80 ? ' warning' : '');
             document.getElementById('budget-summary')!.textContent = `${pct.toFixed(0)}% used today`;
-            document.getElementById('budget-input')!.textContent = `Input: ${(d.input_tokens / 1000).toFixed(0)}k / ${(d.input_limit / 1_000_000).toFixed(1)}M`;
+            document.getElementById('budget-cost')!.textContent = `Cost: $${d.cost_usd.toFixed(2)} / $${d.cost_limit_usd.toFixed(2)}`;
             document.getElementById('budget-output')!.textContent = `Output: ${(d.output_tokens / 1000).toFixed(0)}k / ${(d.output_limit / 1000).toFixed(0)}k`;
             document.getElementById('budget-runs')!.textContent = `Runs: ${d.task_runs}`;
         } catch (e) {
@@ -1678,7 +1678,7 @@ import Layout from '../layouts/Layout.astro';
                     </div>
                     <div class="run-meta">
                         <div>${formatDateTime(r.started_at)}</div>
-                        <div>${r.turns_used} turns, ${((r.input_tokens + r.output_tokens) / 1000).toFixed(0)}k tokens</div>
+                        <div>${r.turns_used} turns, $${(r.cost_usd ?? 0).toFixed(2)}</div>
                     </div>
                 </div>
             `).join('');
@@ -1815,6 +1815,8 @@ import Layout from '../layouts/Layout.astro';
             const outputTokens = fromDb
                 ? (run.output_tokens != null ? `${(run.output_tokens / 1000).toFixed(0)}k` : '—')
                 : (run.budget?.output_tokens ?? '—');
+            const costUsd = fromDb ? run.cost_usd : run.budget?.cost_usd;
+            const cost = costUsd != null ? `$${Number(costUsd).toFixed(2)}` : '—';
             const summary = run.summary || '(no summary)';
 
             container.innerHTML = `
@@ -1825,6 +1827,7 @@ import Layout from '../layouts/Layout.astro';
                     <span>Turns: ${escapeHtml(turns)}</span>
                     <span>Input tokens: ${escapeHtml(inputTokens)}</span>
                     <span>Output tokens: ${escapeHtml(outputTokens)}</span>
+                    <span>Cost: ${escapeHtml(cost)}</span>
                 </div>
                 ${run.error ? `<div class="si-run-error">Error: ${escapeHtml(run.error)}</div>` : ''}
             `;

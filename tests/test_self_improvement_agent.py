@@ -13,7 +13,12 @@ import pytest
 # ---------------------------------------------------------------------------
 # Budget
 # ---------------------------------------------------------------------------
+from pkm_bridge.models import TokenUsage
 from pkm_bridge.self_improvement.budget import Budget
+
+
+def _turn(input_tokens: int = 0, output_tokens: int = 0, **cached: int) -> TokenUsage:
+    return TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens, **cached)
 
 
 class TestBudget:
@@ -27,13 +32,14 @@ class TestBudget:
 
     def test_record_turn(self):
         b = Budget(max_turns=2)
-        b.record_turn(1000, 500)
+        b.record_turn(_turn(1000, 500), cost_usd=0.01)
         assert b.turns_used == 1
-        assert b.input_tokens_used == 1000
+        assert b.usage.input_tokens == 1000
         assert b.output_tokens_used == 500
+        assert b.cost_usd == 0.01
         assert b.can_continue
 
-        b.record_turn(1000, 500)
+        b.record_turn(_turn(1000, 500))
         assert b.turns_used == 2
         assert not b.can_continue
         assert "max turns" in b.stop_reason
@@ -49,25 +55,35 @@ class TestBudget:
 
     def test_token_cap(self):
         b = Budget(max_input_tokens=100)
-        b.record_turn(101, 0)
+        b.record_turn(_turn(101, 0))
         assert not b.can_continue
+        assert "input token cap" in b.stop_reason
+
+    def test_cache_reads_count_toward_input_cap(self):
+        # Haiku 4.5 cache reads cost 0.1x uncached input.
+        b = Budget(max_input_tokens=1000, model="claude-haiku-4-5")
+        b.record_turn(_turn(3, 0, cache_read_tokens=9_000))
+        assert b.can_continue
+        b.record_turn(_turn(3, 0, cache_read_tokens=1_000))
         assert "input token cap" in b.stop_reason
 
     def test_output_token_cap(self):
         b = Budget(max_output_tokens=100)
-        b.record_turn(0, 101)
+        b.record_turn(_turn(0, 101))
         assert not b.can_continue
         assert "output token cap" in b.stop_reason
 
     def test_summary(self):
         b = Budget(max_turns=5, max_actions=3, max_input_tokens=1000, max_output_tokens=500)
-        b.record_turn(100, 50)
+        b.record_turn(_turn(100, 50, cache_read_tokens=7), cost_usd=0.012345)
         b.record_action()
         s = b.summary()
         assert s["turns"] == "1/5"
         assert s["actions"] == "1/3"
-        assert s["input_tokens"] == "100/1000"
+        assert s["input_tokens"] == "107/1000"
         assert s["output_tokens"] == "50/500"
+        assert s["cache_read_tokens"] == 7
+        assert s["cost_usd"] == 0.0123
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +475,34 @@ class TestAgentLoop:
         assert result["trigger"] == "manual"
         assert "All looks good" in result["summary"]
         assert mock_client.complete.call_count == 1
+
+    def test_run_records_cache_tokens_and_cost(self, tmp_path: Path):
+        response = self._make_mock_response("Done.")
+        response.usage.cache_creation_input_tokens = 2000
+        response.usage.cache_read_input_tokens = 30_000
+        mock_client = MagicMock()
+        mock_client.complete.return_value = response
+
+        mock_config = MagicMock()
+        mock_config.org_dir = str(tmp_path)
+        ensure_pkm_structure(tmp_path)
+        agent = SelfImprovementAgent(mock_client, logging.getLogger("test"), mock_config)
+
+        with (
+            patch(
+                "pkm_bridge.self_improvement.agent.get_role_model",
+                return_value="claude-sonnet-4-6",
+            ),
+            patch("pkm_bridge.self_improvement.agent.gather_run_stats", return_value={}),
+            patch("pkm_bridge.self_improvement.agent.SelfImprovementAgent._save_run_to_db") as save,
+        ):
+            result = agent.run()
+
+        budget = save.call_args.args[1]
+        assert (budget.usage.cache_write_tokens, budget.usage.cache_read_tokens) == (2000, 30_000)
+        # Sonnet 4.6: 1000 x $3 + 2000 x $3.75 + 30k x $0.30 + 500 x $15, per million.
+        assert budget.cost_usd == pytest.approx(0.027)
+        assert result["budget"]["cost_usd"] == 0.027
 
     def test_tool_loop(self, tmp_path: Path):
         """Agent calls a tool, gets a result, then finishes."""

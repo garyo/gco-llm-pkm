@@ -1,7 +1,7 @@
 """Task dispatcher — 60-second tick that finds and runs due tasks.
 
 Uses a threading Lock so only one task executes at a time.
-Enforces daily global token budgets.
+Enforces a daily global budget in dollars and output tokens.
 """
 
 import logging
@@ -20,8 +20,24 @@ from .repository import (
     ScheduledTaskRunRepository,
 )
 
-DEFAULT_DAILY_INPUT_LIMIT = 2_000_000
+DEFAULT_DAILY_COST_LIMIT_USD = 5.0
 DEFAULT_DAILY_OUTPUT_LIMIT = 200_000
+
+
+def daily_cost_limit_usd() -> float:
+    return float(os.environ.get("CRON_DAILY_COST_LIMIT_USD", DEFAULT_DAILY_COST_LIMIT_USD))
+
+
+def daily_output_limit() -> int:
+    return int(os.environ.get("CRON_DAILY_OUTPUT_TOKEN_LIMIT", DEFAULT_DAILY_OUTPUT_LIMIT))
+
+
+def daily_budget_fraction(usage) -> float:
+    """How much of today's budget a DailyTokenUsage row has used (1.0 = exhausted)."""
+    return max(
+        usage.cost_usd / max(daily_cost_limit_usd(), 0.01),
+        usage.output_tokens / max(daily_output_limit(), 1),
+    )
 
 
 def prompt_with_date(prompt: str, tz: Optional[tzinfo]) -> str:
@@ -51,31 +67,22 @@ class TaskDispatcher:
         self.timezone = timezone
         self._lock = threading.Lock()
 
-    @property
-    def _daily_input_limit(self) -> int:
-        return int(os.environ.get("CRON_DAILY_INPUT_TOKEN_LIMIT", DEFAULT_DAILY_INPUT_LIMIT))
-
-    @property
-    def _daily_output_limit(self) -> int:
-        return int(os.environ.get("CRON_DAILY_OUTPUT_TOKEN_LIMIT", DEFAULT_DAILY_OUTPUT_LIMIT))
-
     def _check_global_budget(self, db) -> bool:
         """Return True if daily budget still has room."""
         usage = DailyTokenUsageRepository.get_today(db)
-        if usage.input_tokens >= self._daily_input_limit:
-            self.logger.info("Scheduler: daily input token limit reached")
-            return False
-        if usage.output_tokens >= self._daily_output_limit:
-            self.logger.info("Scheduler: daily output token limit reached")
+        if daily_budget_fraction(usage) >= 1.0:
+            self.logger.info(
+                f"Scheduler: daily budget reached (${usage.cost_usd:.2f} of "
+                f"${daily_cost_limit_usd():.2f}, {usage.output_tokens} of "
+                f"{daily_output_limit()} output tokens)"
+            )
             return False
         return True
 
     def _broadcast_budget_warning(self, db) -> None:
         """Broadcast SSE warning at 80% and 95% of daily budget."""
         usage = DailyTokenUsageRepository.get_today(db)
-        input_pct = usage.input_tokens / max(self._daily_input_limit, 1)
-        output_pct = usage.output_tokens / max(self._daily_output_limit, 1)
-        pct = max(input_pct, output_pct)
+        pct = daily_budget_fraction(usage)
 
         if pct >= 0.95:
             event_manager.broadcast(
@@ -83,7 +90,7 @@ class TaskDispatcher:
                 {
                     "level": "critical",
                     "percent": round(pct * 100),
-                    "input_tokens": usage.input_tokens,
+                    "cost_usd": round(usage.cost_usd, 4),
                     "output_tokens": usage.output_tokens,
                 },
             )
@@ -93,7 +100,7 @@ class TaskDispatcher:
                 {
                     "level": "warning",
                     "percent": round(pct * 100),
-                    "input_tokens": usage.input_tokens,
+                    "cost_usd": round(usage.cost_usd, 4),
                     "output_tokens": usage.output_tokens,
                 },
             )
@@ -190,6 +197,9 @@ class TaskDispatcher:
             turns_used=result["turns_used"],
             input_tokens=result["input_tokens"],
             output_tokens=result["output_tokens"],
+            cache_write_tokens=result["cache_write_tokens"],
+            cache_read_tokens=result["cache_read_tokens"],
+            cost_usd=result["cost_usd"],
             summary=result.get("summary", ""),
             error=error,
         )
@@ -202,6 +212,9 @@ class TaskDispatcher:
             db,
             input_tokens=result["input_tokens"],
             output_tokens=result["output_tokens"],
+            cache_write_tokens=result["cache_write_tokens"],
+            cache_read_tokens=result["cache_read_tokens"],
+            cost_usd=result["cost_usd"],
         )
 
         # Broadcast completion/failure event
@@ -223,13 +236,15 @@ class TaskDispatcher:
                     "task_name": task.name,
                     "summary": result.get("summary", "")[:500],
                     "tokens_used": result["input_tokens"] + result["output_tokens"],
+                    "cost_usd": round(result["cost_usd"], 4),
                     "duration_s": round(duration_s, 1),
                 },
             )
             self.logger.info(
                 f"Scheduler: '{task.name}' completed in {duration_s:.1f}s "
                 f"({result['turns_used']} turns, "
-                f"{result['input_tokens']}+{result['output_tokens']} tokens)"
+                f"{result['input_tokens']}+{result['output_tokens']} tokens, "
+                f"${result['cost_usd']:.4f})"
             )
 
     def run_task_now(self, task_id: int) -> None:

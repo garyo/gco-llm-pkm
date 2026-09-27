@@ -7,8 +7,8 @@ by the ScheduledTask row (prompt, budget, allowed tools).
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens
-from ..models import get_role_model, supports_caching
+from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens, response_cost
+from ..models import TokenUsage, get_role_model, supports_caching
 from ..self_improvement.agent import mark_last_message_for_cache
 from ..self_improvement.budget import Budget
 
@@ -43,20 +43,23 @@ class TaskExecutor:
         Args:
             prompt: The user message to send to Claude.
             max_turns: Maximum API round-trips.
-            max_input_tokens: Input token budget.
+            max_input_tokens: Billable input token budget (see Budget).
             max_output_tokens: Output token budget.
             tools_allowed: Restrict to these tool names (None = all).
             model: Model override (None = the scheduler role default).
 
         Returns:
-            Dict with keys: summary, input_tokens, output_tokens, turns_used,
-                            error (str|None).
+            Dict with keys: summary, turns_used, input_tokens (uncached),
+                            output_tokens, cache_write_tokens, cache_read_tokens,
+                            cost_usd, error (str|None).
         """
+        model = model or get_role_model("scheduler")
         budget = Budget(
             max_turns=max_turns,
             max_actions=999,  # no action limit for scheduled tasks
             max_input_tokens=max_input_tokens,
             max_output_tokens=max_output_tokens,
+            model=model,
         )
 
         # Build tool list (optionally filtered)
@@ -71,7 +74,6 @@ class TaskExecutor:
 
         agent_summary = ""
 
-        model = model or get_role_model("scheduler")
         # Cache the static parts (system prompt + tools) so multi-turn loops
         # only pay full price for the system/tools on the first call.
         cache_enabled = supports_caching(model)
@@ -89,6 +91,7 @@ class TaskExecutor:
             tools[-1]["cache_control"] = {"type": "ephemeral"}
 
         last_stop = None
+        error: Optional[str] = None
         try:
             while budget.can_continue:
                 # Move the cache breakpoint to the tail of the growing history
@@ -108,13 +111,15 @@ class TaskExecutor:
 
                 response = self.client.complete(**api_params)
 
-                input_tokens = getattr(response.usage, "input_tokens", 0)
-                output_tokens = getattr(response.usage, "output_tokens", 0)
-                budget.record_turn(input_tokens, output_tokens)
+                turn = TokenUsage.from_response(response)
+                turn_cost = response_cost(model, response)
+                budget.record_turn(turn, turn_cost)
 
                 self.logger.info(
                     f"Scheduler executor: turn {budget.turns_used}/{budget.max_turns} "
-                    f"(tokens: {input_tokens}+{output_tokens})"
+                    f"(tokens in/out: {turn.input_tokens}/{turn.output_tokens}, cache "
+                    f"write/read: {turn.cache_write_tokens}/{turn.cache_read_tokens}, "
+                    f"${turn_cost:.4f})"
                 )
 
                 last_stop = response.stop_reason
@@ -178,10 +183,16 @@ class TaskExecutor:
                 # mid-task with its work unfiled and no final summary.
                 turns_left = budget.turns_remaining
                 out_left = budget.max_output_tokens - budget.output_tokens_used
-                if turns_left <= 3 or out_left < budget.max_output_tokens * 0.2:
+                in_left = budget.max_input_tokens - budget.billable_input_tokens
+                if (
+                    turns_left <= 3
+                    or out_left < budget.max_output_tokens * 0.2
+                    or in_left < budget.max_input_tokens * 0.2
+                ):
                     notice = (
                         f"[Scheduler: nearly out of budget ({turns_left} turn(s), "
-                        f"~{max(out_left, 0)} output tokens left). Stop exploring — take "
+                        f"~{max(out_left, 0)} output and ~{max(round(in_left), 0)} input "
+                        f"tokens left). Stop exploring — take "
                         f"your concluding actions NOW, then reply with your final summary "
                         f"(a reply without tool calls ends the run cleanly).]"
                     )
@@ -200,20 +211,16 @@ class TaskExecutor:
                 self.logger.info(f"Scheduler executor: stopped — {budget.stop_reason}")
             if last_stop == "max_tokens":
                 raise RuntimeError("Run ended with its last response cut off at max_tokens")
-
         except Exception as e:
-            return {
-                "summary": agent_summary[:1000] if agent_summary else "",
-                "input_tokens": budget.input_tokens_used,
-                "output_tokens": budget.output_tokens_used,
-                "turns_used": budget.turns_used,
-                "error": str(e),
-            }
+            error = str(e)
 
         return {
             "summary": agent_summary[:1000] if agent_summary else "",
-            "input_tokens": budget.input_tokens_used,
-            "output_tokens": budget.output_tokens_used,
             "turns_used": budget.turns_used,
-            "error": None,
+            "input_tokens": budget.usage.input_tokens,
+            "output_tokens": budget.usage.output_tokens,
+            "cache_write_tokens": budget.usage.cache_write_tokens,
+            "cache_read_tokens": budget.usage.cache_read_tokens,
+            "cost_usd": budget.cost_usd,
+            "error": error,
         }

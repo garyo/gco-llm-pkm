@@ -115,7 +115,11 @@ from pkm_bridge.org_links import resolve_org_id_to_file
 from pkm_bridge.query_enhancer import QueryEnhancer
 from pkm_bridge.redact import redact_obj
 from pkm_bridge.retrospective import SessionRetrospective
-from pkm_bridge.scheduler.dispatcher import TaskDispatcher
+from pkm_bridge.scheduler.dispatcher import (
+    TaskDispatcher,
+    daily_cost_limit_usd,
+    daily_output_limit,
+)
 from pkm_bridge.scheduler.executor import TaskExecutor
 from pkm_bridge.scheduler.heartbeat import ensure_heartbeat_task
 from pkm_bridge.scheduler.repository import (
@@ -3358,6 +3362,9 @@ def get_self_improve_log():
                     "turns_used": run.turns_used,
                     "input_tokens": run.input_tokens,
                     "output_tokens": run.output_tokens,
+                    "cache_write_tokens": run.cache_write_tokens,
+                    "cache_read_tokens": run.cache_read_tokens,
+                    "cost_usd": run.cost_usd,
                     "actions_summary": run.actions_summary,
                     "summary": run.summary,
                     "error": run.error,
@@ -3807,6 +3814,9 @@ def get_scheduled_task_runs():
                     "turns_used": r.turns_used,
                     "input_tokens": r.input_tokens,
                     "output_tokens": r.output_tokens,
+                    "cache_write_tokens": r.cache_write_tokens,
+                    "cache_read_tokens": r.cache_read_tokens,
+                    "cost_usd": r.cost_usd,
                     "summary": r.summary,
                     "error": r.error,
                 }
@@ -3820,7 +3830,7 @@ def get_scheduled_task_runs():
 @app.route("/api/scheduled-tasks/budget", methods=["GET"])
 @limiter.limit("30 per minute")
 def get_scheduled_task_budget():
-    """Get today's token usage vs daily limits."""
+    """Get today's scheduled-task usage and cost vs the daily limits."""
     auth_err = _check_auth()
     if auth_err:
         return auth_err
@@ -3828,17 +3838,20 @@ def get_scheduled_task_budget():
     db = get_db()
     try:
         usage = DailyTokenUsageRepository.get_today(db)
-        input_limit = int(os.environ.get("CRON_DAILY_INPUT_TOKEN_LIMIT", 2_000_000))
-        output_limit = int(os.environ.get("CRON_DAILY_OUTPUT_TOKEN_LIMIT", 200_000))
+        cost_limit = daily_cost_limit_usd()
+        output_limit = daily_output_limit()
         return jsonify(
             {
                 "date": usage.date,
                 "input_tokens": usage.input_tokens,
                 "output_tokens": usage.output_tokens,
+                "cache_write_tokens": usage.cache_write_tokens,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "cost_usd": round(usage.cost_usd, 4),
                 "task_runs": usage.task_runs,
-                "input_limit": input_limit,
+                "cost_limit_usd": cost_limit,
                 "output_limit": output_limit,
-                "input_pct": round(usage.input_tokens / max(input_limit, 1) * 100, 1),
+                "cost_pct": round(usage.cost_usd / max(cost_limit, 0.01) * 100, 1),
                 "output_pct": round(usage.output_tokens / max(output_limit, 1) * 100, 1),
             }
         )

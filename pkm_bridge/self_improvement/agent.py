@@ -10,8 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens
-from ..models import get_role_model, supports_caching
+from ..llm import AGENT_TURN_MAX_TOKENS, recover_from_max_tokens, response_cost
+from ..models import TokenUsage, get_role_model, supports_caching
 from ..tools.registry import ToolRegistry
 from .budget import Budget
 from .filesystem import ensure_pkm_structure, get_runs_dir
@@ -162,8 +162,11 @@ class SelfImprovementAgent:
                     completed_at=datetime.utcnow(),
                     trigger=self._current_trigger,
                     turns_used=budget.turns_used,
-                    input_tokens=budget.input_tokens_used,
-                    output_tokens=budget.output_tokens_used,
+                    input_tokens=budget.usage.input_tokens,
+                    output_tokens=budget.usage.output_tokens,
+                    cache_write_tokens=budget.usage.cache_write_tokens,
+                    cache_read_tokens=budget.usage.cache_read_tokens,
+                    cost_usd=budget.cost_usd,
                     actions_summary=[{"description": a} for a in actions_log],
                     summary=agent_summary,
                     error=error,
@@ -205,8 +208,8 @@ class SelfImprovementAgent:
         # Ensure .pkm/ directory structure exists
         ensure_pkm_structure(self.org_dir)
 
-        # Set up budget
-        budget = Budget(**self.default_budget_params)
+        model = get_role_model("self_improvement")
+        budget = Budget(**self.default_budget_params, model=model)
 
         # Set up tools
         registry = self._setup_tools()
@@ -236,7 +239,6 @@ class SelfImprovementAgent:
         tools = registry.get_anthropic_tools()
         agent_summary = ""
 
-        model = get_role_model("self_improvement")
         # Cache the static parts (system prompt + tools) so re-sending them
         # each turn costs ~10% of the full input rate.
         caching = supports_caching(model)
@@ -272,14 +274,15 @@ class SelfImprovementAgent:
 
                 response = self.client.complete(**api_params)
 
-                # Track token usage
-                input_tokens = getattr(response.usage, "input_tokens", 0)
-                output_tokens = getattr(response.usage, "output_tokens", 0)
-                budget.record_turn(input_tokens, output_tokens)
+                turn = TokenUsage.from_response(response)
+                turn_cost = response_cost(model, response)
+                budget.record_turn(turn, turn_cost)
 
                 self.logger.info(
                     f"SI Agent: turn {budget.turns_used}/{budget.max_turns} "
-                    f"(tokens: {input_tokens}+{output_tokens})"
+                    f"(tokens in/out: {turn.input_tokens}/{turn.output_tokens}, cache "
+                    f"write/read: {turn.cache_write_tokens}/{turn.cache_read_tokens}, "
+                    f"${turn_cost:.4f})"
                 )
 
                 last_stop = response.stop_reason
@@ -431,8 +434,7 @@ class SelfImprovementAgent:
         self.last_run_result = result
         self.logger.info(
             f"SI Agent: complete — {budget.turns_used} turns, "
-            f"{len(actions_log)} actions, "
-            f"{budget.input_tokens_used}+{budget.output_tokens_used} tokens"
+            f"{len(actions_log)} actions, ${budget.cost_usd:.4f}"
         )
 
         return result

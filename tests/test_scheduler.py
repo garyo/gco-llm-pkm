@@ -235,29 +235,117 @@ def test_prompt_with_date_no_timezone_falls_back_to_local():
 # Budget (reuse existing Budget class)
 # ---------------------------------------------------------------------------
 
+from types import SimpleNamespace
+
+from pkm_bridge.models import TokenUsage
+from pkm_bridge.scheduler.dispatcher import TaskDispatcher, daily_budget_fraction
+from pkm_bridge.scheduler.executor import TaskExecutor
 from pkm_bridge.self_improvement.budget import Budget
 
 
 def test_budget_can_continue():
     b = Budget(max_turns=3, max_input_tokens=1000, max_output_tokens=500)
     assert b.can_continue
-    b.record_turn(400, 200)
+    b.record_turn(TokenUsage(input_tokens=300, output_tokens=100))
     assert b.can_continue
-    b.record_turn(400, 200)
+    b.record_turn(TokenUsage(input_tokens=300, output_tokens=100))
     assert b.can_continue
-    b.record_turn(400, 200)
+    b.record_turn(TokenUsage(input_tokens=300, output_tokens=100))
     assert not b.can_continue  # 3 turns used
+    assert "max turns" in b.stop_reason
 
 
 def test_budget_input_token_limit():
     b = Budget(max_turns=100, max_input_tokens=500, max_output_tokens=100_000)
-    b.record_turn(600, 10)
+    b.record_turn(TokenUsage(input_tokens=600, output_tokens=10))
     assert not b.can_continue
     assert "input token" in b.stop_reason
 
 
+def test_budget_counts_cached_input_at_its_price():
+    """A few uncached tokens plus a large cache read must still use up the input budget."""
+    b = Budget(max_turns=100, max_input_tokens=10_000, model="claude-sonnet-5")
+    b.record_turn(TokenUsage(input_tokens=3, cache_write_tokens=4000))  # 3 + 5000
+    assert b.can_continue
+    b.record_turn(TokenUsage(input_tokens=3, cache_read_tokens=50_000))  # 3 + 5000
+    assert not b.can_continue
+    assert b.billable_input_tokens == pytest.approx(10_006)
+    assert (b.usage.cache_write_tokens, b.usage.cache_read_tokens) == (4000, 50_000)
+
+
 def test_budget_output_token_limit():
     b = Budget(max_turns=100, max_input_tokens=100_000, max_output_tokens=50)
-    b.record_turn(10, 60)
+    b.record_turn(TokenUsage(input_tokens=10, output_tokens=60))
     assert not b.can_continue
     assert "output token" in b.stop_reason
+
+
+def test_executor_reports_cache_tokens_and_cost():
+    usage = SimpleNamespace(
+        input_tokens=5,
+        output_tokens=1000,
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=100_000,
+    )
+    client = MagicMock()
+    client.complete.return_value = SimpleNamespace(
+        stop_reason="end_turn", content=[SimpleNamespace(type="text", text="Done")], usage=usage
+    )
+    registry = MagicMock()
+    registry.get_anthropic_tools.return_value = []
+    executor = TaskExecutor(client, registry, logging.getLogger("test"))
+
+    result = executor.execute("task", model="claude-sonnet-5")
+
+    assert result["error"] is None
+    assert result["input_tokens"] == 5
+    assert (result["cache_write_tokens"], result["cache_read_tokens"]) == (2000, 100_000)
+    # Sonnet 5: 5 x $2 + 2000 x $2.50 + 100k x $0.20 + 1000 x $10, per million.
+    assert result["cost_usd"] == pytest.approx(0.03501)
+
+
+def _daily_usage(cost_usd=0.0, output_tokens=0):
+    return SimpleNamespace(cost_usd=cost_usd, output_tokens=output_tokens)
+
+
+def test_daily_budget_is_the_larger_of_cost_and_output_shares(monkeypatch):
+    monkeypatch.setenv("CRON_DAILY_COST_LIMIT_USD", "2.0")
+    monkeypatch.setenv("CRON_DAILY_OUTPUT_TOKEN_LIMIT", "1000")
+    assert daily_budget_fraction(_daily_usage(1.0, 100)) == pytest.approx(0.5)
+    assert daily_budget_fraction(_daily_usage(0.1, 900)) == pytest.approx(0.9)
+
+
+def test_dispatcher_stops_when_daily_cost_limit_reached(monkeypatch, logger):
+    monkeypatch.setenv("CRON_DAILY_COST_LIMIT_USD", "1.0")
+    dispatcher = TaskDispatcher(MagicMock(), logger)
+    with patch(
+        "pkm_bridge.scheduler.dispatcher.DailyTokenUsageRepository.get_today",
+        return_value=_daily_usage(cost_usd=1.0, output_tokens=10),
+    ):
+        assert not dispatcher._check_global_budget(MagicMock())
+    with patch(
+        "pkm_bridge.scheduler.dispatcher.DailyTokenUsageRepository.get_today",
+        return_value=_daily_usage(cost_usd=0.99, output_tokens=10),
+    ):
+        assert dispatcher._check_global_budget(MagicMock())
+
+
+def test_schema_upgrade_adds_missing_cost_columns():
+    from pkm_bridge.database import _upgrade_schema
+
+    engine = MagicMock()
+    conn = MagicMock()
+    engine.begin.return_value.__enter__ = MagicMock(return_value=conn)
+    engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["daily_token_usage"]
+    inspector.get_columns.return_value = [{"name": "id"}, {"name": "cache_read_tokens"}]
+
+    with patch("pkm_bridge.database.inspect", return_value=inspector):
+        _upgrade_schema(engine)
+
+    statements = [str(call.args[0]) for call in conn.execute.call_args_list]
+    assert statements == [
+        "ALTER TABLE daily_token_usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE daily_token_usage ADD COLUMN cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0",
+    ]

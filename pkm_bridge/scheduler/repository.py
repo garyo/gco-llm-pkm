@@ -169,17 +169,35 @@ class DailyTokenUsageRepository:
         today = datetime.utcnow().strftime("%Y-%m-%d")
         row = db.query(DailyTokenUsage).filter_by(date=today).first()
         if not row:
-            row = DailyTokenUsage(date=today, input_tokens=0, output_tokens=0, task_runs=0)
+            row = DailyTokenUsage(
+                date=today,
+                input_tokens=0,
+                output_tokens=0,
+                cache_write_tokens=0,
+                cache_read_tokens=0,
+                cost_usd=0.0,
+                task_runs=0,
+            )
             db.add(row)
             db.commit()
             db.refresh(row)
         return row
 
     @staticmethod
-    def record_usage(db: Session, input_tokens: int, output_tokens: int) -> DailyTokenUsage:
+    def record_usage(
+        db: Session,
+        input_tokens: int,
+        output_tokens: int,
+        cache_write_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cost_usd: float = 0.0,
+    ) -> DailyTokenUsage:
         row = DailyTokenUsageRepository.get_today(db)
         row.input_tokens += input_tokens
         row.output_tokens += output_tokens
+        row.cache_write_tokens += cache_write_tokens
+        row.cache_read_tokens += cache_read_tokens
+        row.cost_usd += cost_usd
         row.task_runs += 1
         db.commit()
         db.refresh(row)

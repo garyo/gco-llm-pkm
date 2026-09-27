@@ -219,6 +219,24 @@ def _upgrade_schema(engine) -> None:
                 conn.execute(text("ALTER TABLE tool_execution_logs ADD COLUMN was_helpful BOOLEAN"))
                 print("[DB] Added 'was_helpful' column to tool_execution_logs", flush=True)
 
+    # Background-job usage: cache tokens and dollar cost next to the token counts
+    cost_columns = {
+        "cache_write_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cache_read_tokens": "INTEGER NOT NULL DEFAULT 0",
+        "cost_usd": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+    }
+    for table in ("scheduled_task_runs", "daily_token_usage", "agent_run_log"):
+        if table not in insp.get_table_names():
+            continue
+        existing = {c["name"] for c in insp.get_columns(table)}
+        missing = {name: ddl for name, ddl in cost_columns.items() if name not in existing}
+        if not missing:
+            continue
+        with engine.begin() as conn:
+            for name, ddl in missing.items():
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                print(f"[DB] Added '{name}' column to {table}", flush=True)
+
 
 def init_db() -> None:
     """Initialize database connection and create tables."""
@@ -477,8 +495,11 @@ class ScheduledTaskRun(Base):
     completed_at = Column(DateTime, nullable=True)
     status = Column(String(20))  # 'running', 'completed', 'failed', 'budget_exceeded'
     turns_used = Column(Integer, default=0)
-    input_tokens = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0)  # uncached input
     output_tokens = Column(Integer, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd = Column(Float, nullable=False, default=0.0)
     summary = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
 
@@ -496,8 +517,11 @@ class DailyTokenUsage(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     date = Column(String(10), unique=True, index=True)  # 'YYYY-MM-DD'
-    input_tokens = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0)  # uncached input
     output_tokens = Column(Integer, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd = Column(Float, nullable=False, default=0.0)
     task_runs = Column(Integer, default=0)
 
     def __repr__(self):
@@ -551,8 +575,11 @@ class AgentRunLog(Base):
     completed_at = Column(DateTime, nullable=True)
     trigger = Column(String(20), nullable=False)  # 'scheduled', 'manual'
     turns_used = Column(Integer, nullable=False, default=0)
-    input_tokens = Column(Integer, nullable=False, default=0)
+    input_tokens = Column(Integer, nullable=False, default=0)  # uncached input
     output_tokens = Column(Integer, nullable=False, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd = Column(Float, nullable=False, default=0.0)
     actions_summary = Column(JSON, nullable=True)  # [{description}]
     summary = Column(Text, nullable=True)  # agent's own summary
     error = Column(Text, nullable=True)

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from ..redact import redact_secrets, subprocess_env
 from .base import BaseTool
 
 
@@ -173,11 +174,13 @@ Security notes:
         # Validate against blacklist
         is_valid, error = validate_command(command, self.dangerous_patterns)
         if not is_valid:
-            self.logger.warning(f"[SHELL_BLOCKED] command={command[:200]}, reason={error}")
+            self.logger.warning(
+                f"[SHELL_BLOCKED] command={redact_secrets(command[:200])}, reason={error}"
+            )
             return f"❌ {error}"
 
         # Log for audit
-        self.logger.info(f"[SHELL_EXEC] cwd={working_dir}, command={command[:200]}")
+        self.logger.info(f"[SHELL_EXEC] cwd={working_dir}, command={redact_secrets(command[:200])}")
 
         try:
             start_time = time.time()
@@ -186,6 +189,7 @@ Security notes:
                 shell=True,
                 executable="/bin/bash",  # Use bash for brace expansion, process substitution, etc.
                 cwd=working_dir,
+                env=subprocess_env(),
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -350,7 +354,7 @@ Security notes:
         self.logger.info(
             f"[SCRIPT_EXEC] description={description}, " f"path={script_path}, cwd={working_dir}"
         )
-        self.logger.info(f"[SCRIPT_CONTENT]\n{full_script}")
+        self.logger.info(f"[SCRIPT_CONTENT]\n{redact_secrets(full_script)}")
 
         # Execute script
         try:
@@ -358,6 +362,7 @@ Security notes:
             result = subprocess.run(
                 [script_path],
                 cwd=working_dir,
+                env=subprocess_env(),
                 capture_output=True,
                 text=True,
                 timeout=120,  # Longer timeout for scripts

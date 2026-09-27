@@ -15,6 +15,7 @@ from .database import (
     ToolExecutionLog,
     UserSettings,
 )
+from .redact import redact_obj, redact_secrets
 
 
 class OAuthRepository:
@@ -294,8 +295,8 @@ class ToolExecutionLogRepository:
             query_id=query_id,
             user_message=user_message,
             tool_name=tool_name,
-            tool_params=tool_params,
-            result_summary=result_summary,
+            tool_params=redact_obj(tool_params),
+            result_summary=redact_secrets(result_summary),
             exit_code=exit_code,
             execution_time_ms=execution_time_ms,
         )

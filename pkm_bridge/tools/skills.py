@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 import yaml
 
 from ..fileio import atomic_write
+from ..redact import subprocess_env
 from .base import BaseTool
 
 # Regex for valid skill names
@@ -448,6 +449,7 @@ class UseSkillTool(BaseTool):
                 text=True,
                 timeout=60,
                 cwd=str(self.org_dir),
+                env=subprocess_env(),
             )
             elapsed = int((time.time() - start_time) * 1000)
 

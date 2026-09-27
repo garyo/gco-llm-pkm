@@ -113,6 +113,7 @@ from pkm_bridge.logging_config import setup_logging
 # Import org-mode link utilities
 from pkm_bridge.org_links import resolve_org_id_to_file
 from pkm_bridge.query_enhancer import QueryEnhancer
+from pkm_bridge.redact import redact_obj
 from pkm_bridge.retrospective import SessionRetrospective
 from pkm_bridge.scheduler.dispatcher import TaskDispatcher
 from pkm_bridge.scheduler.executor import TaskExecutor
@@ -1193,7 +1194,9 @@ def query():
                     if getattr(block, "type", None) == "tool_use":
                         tool_call_count += 1
                         tool_names_used.append(block.name)
-                        logger.info(f">>> Tool call: {block.name} with params: {block.input}")
+                        logger.info(
+                            f">>> Tool call: {block.name} with params: {redact_obj(block.input)}"
+                        )
 
                         # Surface the call to the UI before we run it — for slow
                         # tools (network, LLM-driven scripts) the user sees what

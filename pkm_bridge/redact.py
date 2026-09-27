@@ -23,8 +23,8 @@ _PATTERNS = [
     re.compile(r"(authorization\s*[:=]\s*[\"']?\s*(?:bearer|basic|token)\s+)[^\s\"']+", re.I),
     # Bare "Bearer xyz" (e.g. in a JSON header map)
     re.compile(r"(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.I),
-    # curl -u user:pass / --user user:pass (keep the user)
-    re.compile(r"((?:^|\s)(?:-u|--user)\s+[\"']?[^\s:\"']+:)[^\s\"']+"),
+    # curl -u user:pass / --user user:pass (keep the user; not `date -u +%H:%M`)
+    re.compile(r"((?:^|\s)(?:-u|--user)\s+[\"']?[\w.@-]+:)[^\s\"']+"),
     # Credentials embedded in URLs: scheme://user:pass@host
     re.compile(r"(://[^\s/:@]+:)[^\s/@]+(?=@)"),
     # key=value / "key": "value" for secret-ish keys (headers, query strings, JSON)

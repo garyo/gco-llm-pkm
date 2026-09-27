@@ -40,6 +40,7 @@ def test_ordinary_text_untouched():
     for text in (
         'rg -i "bearer of bad news" journals/ && echo token count: 5',
         "sed -n 1,20p journals/2026-09-27.md",
+        "date -u +%Y-%m-%dT%H:%M:%SZ",
     ):
         assert redact_secrets(text) == text
 

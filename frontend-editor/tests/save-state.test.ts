@@ -390,6 +390,31 @@ describe('file switching', () => {
     expect(saver.baseHash).toBe(h('B\n'));
     expect(saver.dirty).toBe(false);
   });
+  test('text typed while the next file loads is kept as a draft and saved', async () => {
+    const { clock, api, drafts, saver, type } = setup('hello\n', { enabled: false, delayMs: 2000 });
+    saver.beginLoad();
+    type('typed during load');
+    saver.dispose();
+    await clock.tick(1000);
+    expect(drafts.get('org:a.org')?.content).toBe('hello\ntyped during load');
+    expect(api.calls).toHaveLength(0); // autosave off: draft only
+  });
+
+  test('dispose saves pending edits when autosave is on', () => {
+    const { api, saver, type } = setup();
+    saver.beginLoad();
+    type('x');
+    saver.dispose();
+    expect(api.calls.at(-1)?.content).toBe('hello\nx');
+  });
+
+  test('a later load supersedes an earlier one', () => {
+    const { saver } = setup();
+    const first = saver.beginLoad();
+    const second = saver.beginLoad();
+    expect(saver.isLatestLoad(first)).toBe(false);
+    expect(saver.isLatestLoad(second)).toBe(true);
+  });
 });
 
 describe('SaveController failures', () => {

@@ -1,26 +1,29 @@
 import { STORAGE_KEYS } from './types';
 import { fetchWithTimeout } from './utils';
 
-/** Check if the stored JWT token is valid. Returns true if authenticated.
- * Always asks the server: with auth disabled it reports valid even without
- * a token, and the response body (not just HTTP status) is authoritative. */
+/** Whether to start logged in. Always asks the server: with auth disabled it
+ * reports valid even without a token. Only an explicit rejection means no --
+ * after network or server errors (retried) a stored token is trusted, and a
+ * stale one still ends at the login screen on the first 401. */
 export async function checkAuth(): Promise<boolean> {
   const token = localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
 
-  try {
-    const res = await fetchWithTimeout('/verify-token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    }, 5000);
-
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.valid === true;
-  } catch {
-    return false;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetchWithTimeout('/verify-token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }, 5000);
+      if (res.ok) return (await res.json()).valid === true;
+      if (res.status < 500 && res.status !== 429) return false;
+    } catch {
+      // Offline, timed out, or a proxy error page; retry below.
+    }
+    if (attempt === 3) return token !== null;
+    await new Promise((r) => setTimeout(r, attempt * 1000));
   }
 }
 

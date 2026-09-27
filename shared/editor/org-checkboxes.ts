@@ -8,13 +8,17 @@ import { STORAGE_KEYS } from './types';
 // checkbox completes the task in TickTick via /api/checkbox/toggle, then
 // marks the line [X] in the document. The {ticktick:...} marker is the
 // source of truth and stays in the file; it's just folded out of view.
+//
+// In markdown files plain "- [ ]" task items get a checkbox too, which just
+// toggles the [ ] / [x] text.
 const CHECKBOX_RE = /^(\s*)- \[( |X|x)\] /;
 const TICKTICK_MARKER_RE = /\s?\{ticktick:([^}\s]+)\}/;
 
 class TicktickCheckboxWidget extends WidgetType {
+  /** `taskId` null: a plain task item that toggles locally. */
   constructor(
     private checked: boolean,
-    private taskId: string,
+    private taskId: string | null,
   ) {
     super();
   }
@@ -23,12 +27,14 @@ class TicktickCheckboxWidget extends WidgetType {
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.checked = this.checked;
-    input.disabled = this.checked;
     input.className = 'tt-checkbox';
-    input.dataset.taskId = this.taskId;
-    input.title = this.checked
-      ? 'Completed in TickTick'
-      : 'Click to complete this task in TickTick';
+    if (this.taskId) {
+      input.disabled = this.checked;
+      input.dataset.taskId = this.taskId;
+      input.title = this.checked
+        ? 'Completed in TickTick'
+        : 'Click to complete this task in TickTick';
+    }
     input.style.cssText =
       'cursor: pointer; margin: 0 2px; vertical-align: middle; accent-color: #6cb6ff;';
     return input;
@@ -43,7 +49,11 @@ class TicktickCheckboxWidget extends WidgetType {
   }
 }
 
-function buildCheckboxDecorations(doc: Text, selection: CMEditorState['selection']): DecorationSet {
+function buildCheckboxDecorations(
+  doc: Text,
+  selection: CMEditorState['selection'],
+  plainTasks: boolean,
+): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const cursors = selection.ranges.map((r) => ({ from: r.from, to: r.to }));
   const overlapsCursor = (from: number, to: number) =>
@@ -54,9 +64,9 @@ function buildCheckboxDecorations(doc: Text, selection: CMEditorState['selection
     const box = CHECKBOX_RE.exec(line.text);
     if (!box) continue;
     const marker = TICKTICK_MARKER_RE.exec(line.text);
-    if (!marker) continue;
+    if (!marker && !plainTasks) continue;
 
-    const taskId = marker[1];
+    const taskId = marker ? marker[1] : null;
     const checked = box[2] !== ' ';
 
     // Replace the "[ ]" token with a live checkbox widget
@@ -70,6 +80,7 @@ function buildCheckboxDecorations(doc: Text, selection: CMEditorState['selection
       );
     }
 
+    if (!marker) continue;
     // Fold the {ticktick:...} marker (and its leading space) out of view
     const markFrom = line.from + (marker.index ?? 0);
     const markTo = markFrom + marker[0].length;
@@ -81,20 +92,31 @@ function buildCheckboxDecorations(doc: Text, selection: CMEditorState['selection
   return Decoration.set(decorations, true);
 }
 
-/** StateField that renders {ticktick:ID} checkbox lines interactively,
- * revealing the raw text when the cursor enters them. */
-export const ticktickCheckboxField = StateField.define<DecorationSet>({
-  create(state) {
-    return buildCheckboxDecorations(state.doc, state.selection);
-  },
-  update(value, tr) {
-    if (tr.docChanged || tr.selection) {
-      return buildCheckboxDecorations(tr.state.doc, tr.state.selection);
-    }
-    return value;
-  },
-  provide: (f) => EditorView.decorations.from(f),
-});
+/** StateField that renders checkbox lines interactively, revealing the raw
+ * text when the cursor enters them. `plainTasks` adds plain task items. */
+export function checkboxField(plainTasks: boolean) {
+  return StateField.define<DecorationSet>({
+    create(state) {
+      return buildCheckboxDecorations(state.doc, state.selection, plainTasks);
+    },
+    update(value, tr) {
+      if (tr.docChanged || tr.selection) {
+        return buildCheckboxDecorations(tr.state.doc, tr.state.selection, plainTasks);
+      }
+      return value;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
+/** Flip the [ ] / [x] of the task item holding `input`. */
+function togglePlainTask(view: EditorView, input: HTMLInputElement): void {
+  const line = view.state.doc.lineAt(view.posAtDOM(input));
+  const m = CHECKBOX_RE.exec(line.text);
+  if (!m) return;
+  const pos = line.from + m[1].length + 3;
+  view.dispatch({ changes: { from: pos, to: pos + 1, insert: m[2] === ' ' ? 'x' : ' ' } });
+}
 
 /** Complete the task in TickTick, then mark the line [X] in the document. */
 function completeTicktickTask(view: EditorView, input: HTMLInputElement): void {
@@ -133,13 +155,14 @@ function completeTicktickTask(view: EditorView, input: HTMLInputElement): void {
 
 /** Click handler for the checkbox widgets. Uses mousedown (like org links)
  * to act before CodeMirror moves the cursor and unfolds the widget. */
-export const ticktickCheckboxClickHandler = EditorView.domEventHandlers({
+export const checkboxClickHandler = EditorView.domEventHandlers({
   mousedown(event: MouseEvent, view: EditorView) {
     const input = (event.target as HTMLElement).closest('.tt-checkbox') as HTMLInputElement | null;
     if (!input || input.disabled) return false;
     event.preventDefault();
     event.stopPropagation();
-    completeTicktickTask(view, input);
+    if (input.dataset.taskId) completeTicktickTask(view, input);
+    else togglePlainTask(view, input);
     return true;
   },
 });

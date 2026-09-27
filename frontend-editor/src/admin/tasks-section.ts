@@ -161,7 +161,7 @@ export function initTasksSection(container: HTMLElement): void {
 
   const tbody = container.querySelector('#tasks-tbody')!;
   const statusEl = container.querySelector('#tasks-status')!;
-  const budgetEl = container.querySelector('#tasks-budget')!;
+  const budgetEl = container.querySelector<HTMLElement>('#tasks-budget')!;
   const runsContainer = container.querySelector('#tasks-runs')!;
   const createFormContainer = container.querySelector('#tasks-create-form') as HTMLElement;
 
@@ -184,12 +184,12 @@ export function initTasksSection(container: HTMLElement): void {
 
   async function loadBudget() {
     try {
-      const budget = (await getScheduledTaskBudget()) as Record<string, unknown>;
-      if (budget && typeof budget === 'object') {
-        const used = budget.used_today ?? 0;
-        const limit = budget.daily_limit ?? '?';
-        budgetEl.textContent = `Budget: ${used}/${limit} runs today`;
-      }
+      const b = await getScheduledTaskBudget();
+      const pct = Math.max(b.input_pct, b.output_pct);
+      budgetEl.textContent = `Budget: ${pct.toFixed(0)}% used today · ${b.task_runs} runs`;
+      budgetEl.title =
+        `Input ${(b.input_tokens / 1000).toFixed(0)}k / ${(b.input_limit / 1000).toFixed(0)}k tokens, ` +
+        `output ${(b.output_tokens / 1000).toFixed(0)}k / ${(b.output_limit / 1000).toFixed(0)}k`;
     } catch {
       // Budget endpoint may not exist yet; ignore
     }

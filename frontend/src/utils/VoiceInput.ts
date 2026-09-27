@@ -9,7 +9,7 @@
 
 import { MicVAD } from '@ricky0123/vad-web';
 
-export type VoiceStatus = 'listening' | 'transcribing';
+export type VoiceStatus = 'loading' | 'listening' | 'transcribing';
 
 export interface VoiceInputConfig {
   language?: string;
@@ -69,10 +69,12 @@ function writeString(view: DataView, offset: number, str: string) {
   }
 }
 
+type State = 'idle' | 'starting' | 'listening' | 'stopping';
+
 export class VoiceInput {
   private vad: MicVAD | null = null;
-  private active = false;
-  private starting = false;  // mutex: prevents concurrent start() calls
+  private state: State = 'idle';
+  private stopping: Promise<void> | null = null;
   private pendingTranscription: Promise<void> | null = null;  // in-flight /transcribe call
   private config: Required<VoiceInputConfig>;
 
@@ -88,16 +90,14 @@ export class VoiceInput {
     };
   }
 
-  public isSupported(): boolean {
-    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-  }
-
   public async start(): Promise<void> {
-    if (this.active || this.starting) return;
-    this.starting = true;
+    if (this.state !== 'idle') return;
+    this.state = 'starting';
+    this.config.onStatusChange('loading');
 
+    let vad: MicVAD | null = null;
     try {
-      this.vad = await MicVAD.new({
+      vad = await MicVAD.new({
         // Serve all VAD/ONNX assets from /vad/ (copied by vite-plugin-static-copy)
         baseAssetPath: '/vad/',
         onnxWASMBasePath: '/vad/',
@@ -107,17 +107,14 @@ export class VoiceInput {
         minSpeechMs: 300,
         preSpeechPadMs: 500,
         redemptionMs: 800,
-
-        onSpeechStart: () => {
-          // Speech detected -- no visible change needed
-        },
+        // Stopping mid-utterance (or within redemptionMs of its end) submits
+        // it instead of discarding it.
+        submitUserSpeechOnPause: true,
 
         onSpeechEnd: (audio: Float32Array) => {
           // Skip very short segments (noise/clicks) -- 0.3s at 16kHz
           if (audio.length < 4800) return;
-
-          // Guard: stop() may have been called while VAD was processing
-          if (!this.active) return;
+          if (this.state !== 'listening' && this.state !== 'stopping') return;
 
           // Track the in-flight call so stop() can flush it instead of the
           // final utterance being silently discarded (see transcribe()).
@@ -127,20 +124,24 @@ export class VoiceInput {
             if (this.pendingTranscription === p) this.pendingTranscription = null;
           });
         },
-
-        onVADMisfire: () => {
-          // Speech was too short -- ignore
-        },
       });
-
-      this.vad.start();
-      this.active = true;
-      this.starting = false;
+      if (this.state !== 'starting') {
+        vad.destroy();  // stopped while the model loaded
+        return;
+      }
+      await vad.start();  // opens the mic (may prompt for permission)
+      if (this.state !== 'starting') {
+        vad.destroy();  // stopped while waiting for the mic
+        return;
+      }
+      this.vad = vad;
+      this.state = 'listening';
       this.config.onStart();
       this.config.onStatusChange('listening');
     } catch (e: any) {
-      this.active = false;
-      this.starting = false;
+      vad?.destroy();
+      if (this.state !== 'starting') return;
+      this.state = 'idle';
       let msg = 'Failed to start voice input.';
       if (e.name === 'NotAllowedError') {
         msg = 'Microphone permission denied. Enable in browser settings.';
@@ -152,10 +153,10 @@ export class VoiceInput {
   }
 
   // POST one speech segment to /transcribe and deliver the result via
-  // onTranscript. Runs to completion even if stop() flips `active` to false
-  // partway through -- stop() awaits the promise this returns so the final
-  // utterance is flushed to the caller instead of silently dropped (e.g.
-  // the user taps Send the instant speech ends, before the response lands).
+  // onTranscript. Runs to completion even while stopping -- stop() awaits the
+  // promise this returns so the final utterance is flushed to the caller
+  // instead of silently dropped (e.g. the user taps Send the instant speech
+  // ends, before the response lands).
   private async transcribe(audio: Float32Array): Promise<void> {
     this.config.onStatusChange('transcribing');
 
@@ -193,48 +194,57 @@ export class VoiceInput {
       }
     } catch (e: any) {
       console.error('Transcription failed:', e);
-      if (this.active) {
-        this.config.onError(`Transcription error: ${e.message}`);
-      }
+      this.config.onError(`Transcription error: ${e.message}`);
     } finally {
-      if (this.active) {
+      if (this.state === 'listening') {
         this.config.onStatusChange('listening');
       }
     }
   }
 
-  public async stop(): Promise<void> {
-    this.starting = false;  // cancel any in-progress start()
-    if (!this.active) return;
-    this.active = false;
-
-    if (this.vad) {
-      this.vad.destroy();
-      this.vad = null;
+  /** Close the mic; resolves once the last utterance has been transcribed. */
+  public stop(): Promise<void> {
+    if (this.state === 'starting') {
+      this.state = 'idle';  // start() sees this and tears down what it built
+      this.config.onEnd();
+      return Promise.resolve();
     }
+    if (this.state === 'stopping') return this.stopping!;
+    if (this.state !== 'listening') return Promise.resolve();
 
+    this.state = 'stopping';
+    this.stopping = this.finishStopping();
+    return this.stopping;
+  }
+
+  private async finishStopping(): Promise<void> {
+    const vad = this.vad;
+    this.vad = null;
+    if (vad) {
+      // Pausing submits speech still in progress through onSpeechEnd.
+      await vad.pause().catch((e) => console.error('VAD pause failed:', e));
+      vad.destroy();
+    }
     // Flush any transcription still in flight so the last utterance reaches
     // onTranscript before callers (e.g. send()) read the input value.
     if (this.pendingTranscription) {
       await this.pendingTranscription;
     }
-
+    this.state = 'idle';
+    this.stopping = null;
     this.config.onEnd();
   }
 
   public async toggle(): Promise<void> {
-    if (this.active) {
-      await this.stop();
-    } else {
+    if (this.state === 'idle') {
       await this.start();
+    } else {
+      await this.stop();
     }
   }
 
+  /** Listening, or on the way there or back. */
   public isActive(): boolean {
-    return this.active;
-  }
-
-  public destroy(): void {
-    this.stop();
+    return this.state !== 'idle';
   }
 }

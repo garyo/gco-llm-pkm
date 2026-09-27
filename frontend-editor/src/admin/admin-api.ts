@@ -126,7 +126,18 @@ export async function getScheduledTaskRuns(): Promise<unknown[]> {
   return res.json();
 }
 
-export async function getScheduledTaskBudget(): Promise<unknown> {
+/** Today's background-task token usage (GET /api/scheduled-tasks/budget). */
+export interface TaskBudget {
+  task_runs: number;
+  input_tokens: number;
+  output_tokens: number;
+  input_limit: number;
+  output_limit: number;
+  input_pct: number;
+  output_pct: number;
+}
+
+export async function getScheduledTaskBudget(): Promise<TaskBudget> {
   const res = await authFetch('/api/scheduled-tasks/budget');
   if (!res.ok) throw new Error(`Failed to load budget: ${res.status}`);
   return res.json();

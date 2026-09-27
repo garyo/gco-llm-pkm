@@ -5,29 +5,40 @@ import examples from '../../../config/examples.json';
 
 <div id="app" class="hidden flex flex-col h-full">
   <!-- Chat Area -->
-  <div id="chat" class="flex-1 overflow-y-auto p-4 space-y-4">
-    <!-- Empty State -->
-    <div class="empty-state text-center py-12" id="empty-state">
-      <h2 class="text-2xl font-semibold text-gray-800 mb-2">Welcome to your PKM Assistant</h2>
-      <p class="text-gray-600 mb-8">Ask me anything about your notes</p>
+  <div class="relative flex-1 min-h-0 flex flex-col">
+    <div id="chat" class="flex-1 overflow-y-auto p-4 space-y-4">
+      <!-- Empty State -->
+      <div class="empty-state text-center py-12" id="empty-state">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-2">Welcome to your PKM Assistant</h2>
+        <p class="text-gray-600 mb-8">Ask me anything about your notes</p>
 
-      <div class="max-w-md mx-auto space-y-2">
-        {examples.map((example) => (
-          <button
-            class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-            onclick={`sendExample('${example.replace(/'/g, "\\'")}')`}
-          >
-            {example}
-          </button>
-        ))}
+        <div class="max-w-md mx-auto space-y-2">
+          {examples.map((example) => (
+            <button
+              class="example-query w-full text-left px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              onclick={`sendExample('${example.replace(/'/g, "\\'")}')`}
+            >
+              {example}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <!-- Loading Indicator -->
+      <div id="loading" class="hidden items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-xl max-w-[80%]">
+        <div class="w-4 h-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
+        <span class="text-gray-600">Thinking...</span>
       </div>
     </div>
 
-    <!-- Loading Indicator -->
-    <div id="loading" class="hidden items-center gap-2 px-6 py-3 bg-white border border-gray-200 rounded-xl max-w-[80%]">
-      <div class="w-4 h-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
-      <span class="text-gray-600">Thinking...</span>
-    </div>
+    <!-- Shown when output arrives while scrolled up -->
+    <button
+      id="latest-pill"
+      type="button"
+      class="hidden absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-sm shadow-md"
+    >
+      ↓ latest
+    </button>
   </div>
 
   <!-- Controls -->
@@ -50,14 +61,16 @@ import examples from '../../../config/examples.json';
     </button>
 
     <button
+      id="sessions-btn"
       onclick="showSessionHistory()"
-      class="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors whitespace-nowrap"
+      class="px-3 py-2 disabled:opacity-50 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors whitespace-nowrap"
     >
       Sessions
     </button>
     <button
+      id="new-session-btn"
       onclick="newSession()"
-      class="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors whitespace-nowrap"
+      class="px-3 py-2 disabled:opacity-50 bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors whitespace-nowrap"
     >
       New
     </button>
@@ -159,7 +172,7 @@ import examples from '../../../config/examples.json';
 
     <button
       id="send-btn"
-      onclick="send()"
+      onclick="sendOrStop()"
       class="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed self-end"
     >
       Send
@@ -523,8 +536,37 @@ import examples from '../../../config/examples.json';
   }
 
   .feedback-bar .feedback-buttons {
+    margin-left: auto;
     display: flex;
     gap: 0.25rem;
+  }
+
+  .feedback-bar .copy-btn,
+  .message.failure .retry-btn {
+    background: none;
+    border: 1px solid rgb(209 213 219);
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    color: rgb(75 85 99);
+  }
+
+  .feedback-bar .copy-btn:hover,
+  .message.failure .retry-btn:hover {
+    background-color: rgb(243 244 246);
+  }
+
+  .message.failure {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .message.failure p {
+    margin: 0;
   }
 
   .feedback-btn {

@@ -313,10 +313,12 @@ def register_all_tools(mcp: FastMCP):
         show_stats: bool = False,
         directory: str = "both",
     ) -> str:
-        """List files in PKM directories.
+        """List files in PKM directories, newest first (at most 100 per directory).
 
         Args:
-            pattern: Glob pattern (e.g., '*.org', '**/*.org')
+            pattern: Glob pattern relative to each directory; '**' matches any depth
+                (e.g. '*', 'journals/2026-09-*', '**/*sciatica*'). An 'org:' or
+                'logseq:' prefix selects the directory.
             show_stats: Show file sizes and modification times
             directory: Which directory: 'both' (default), 'org-mode', or 'logseq'
         """

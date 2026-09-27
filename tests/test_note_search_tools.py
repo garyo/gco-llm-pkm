@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from pkm_bridge.note_paths import display_path, recency, resolve_note_path
+from pkm_bridge.tools.files import MAX_LISTED_FILES, ListFilesTool
 from pkm_bridge.tools.search_notes import SearchNotesTool
 
 logger = logging.getLogger("test")
@@ -128,3 +129,41 @@ def test_search_notes_pattern_starting_with_dash(notes):
     org, logseq = notes
     out = SearchNotesTool(logger, org, logseq).execute({"pattern": "- booked"})
     assert _file_headers(out) == ["org:journals/2026-09-20.md"]
+
+
+# --- list_files ---------------------------------------------------------------
+
+
+def test_list_files_recursive_glob(notes):
+    org, logseq = notes
+    out = ListFilesTool(logger, org, logseq).execute({"pattern": "**/*haircut*"})
+    assert out.splitlines() == ["org:pages/haircuts.md"]
+    # '**/' also matches at the top level
+    out = ListFilesTool(logger, org, logseq).execute({"pattern": "**/sciatica*"})
+    assert out.splitlines() == ["org:sciatica-history.md"]
+
+
+def test_list_files_newest_first_and_capped(tmp_path):
+    org = tmp_path / "org"
+    for day in range(1, 151):
+        date = f"2026-{(day - 1) // 28 + 1:02d}-{(day - 1) % 28 + 1:02d}"
+        _write(org / "journals" / f"{date}.md", "x", mtime=0)
+    out = ListFilesTool(logger, org).execute({"pattern": "journals/*.md"}).splitlines()
+    assert out[0] == "org:journals/2026-06-10.md"
+    assert len(out) == MAX_LISTED_FILES + 1
+    assert out[-1].startswith(f"... showing {MAX_LISTED_FILES} of 150")
+
+
+def test_list_files_prefix_selects_directory_and_hides_dotfiles(notes):
+    org, logseq = notes
+    out = ListFilesTool(logger, org, logseq).execute({"pattern": "logseq:**/pages/*"})
+    assert out.splitlines() == ["logseq:Personal/pages/Mario.md"]
+    out = ListFilesTool(logger, org, logseq).execute({"pattern": "org:**/*.md"})
+    assert ".pkm" not in out
+
+
+def test_list_files_rejects_escaping_patterns(notes):
+    org, logseq = notes
+    tool = ListFilesTool(logger, org, logseq)
+    assert tool.execute({"pattern": "../*"}).startswith("No files matching")
+    assert "Invalid pattern" in tool.execute({"pattern": "/etc/*"})

@@ -85,7 +85,7 @@ from pkm_bridge.auth import AuthManager
 from pkm_bridge.context_retriever import DEFAULT_MIN_SIMILARITY, ContextRetriever
 
 # Import database
-from pkm_bridge.database import get_db, init_db
+from pkm_bridge.database import get_db, init_db, start_vector_index_upgrade
 
 # Import database components
 from pkm_bridge.db_repository import (
@@ -365,6 +365,7 @@ if config.debug and HOT_RELOAD_AVAILABLE:
 # Initialize database
 try:
     init_db()
+    start_vector_index_upgrade()
     logger.info("Database initialized")
 except Exception as e:
     logger.warning(f"Database initialization failed (will retry on use): {e}")

@@ -175,13 +175,18 @@ _VECTOR_INDEX_LOCK = 0x504B4D01  # pg advisory lock key: one process builds
 _FIND_CHUNK_INDEXES = text("SELECT indexname FROM pg_indexes WHERE tablename = 'document_chunks'")
 
 
-def _start_vector_index_upgrade(engine) -> None:
+def start_vector_index_upgrade(engine=None) -> None:
     """Upgrade the vector index in a background thread, if it needs it.
 
-    Building HNSW over ~25k chunks takes about a minute, longer than the
-    container health check allows for startup; searches use the old index
-    until the new one commits.
+    Building HNSW over ~25k chunks takes minutes, longer than the container
+    health check allows for startup; searches use the old index until the new
+    one commits. Call it only from a long-lived process: the thread dies with
+    its process, and a short-lived one (a migration script) would hold the
+    build lock, then abandon the build.
     """
+    engine = engine or _engine
+    if engine is None:
+        return
     try:
         with engine.connect() as conn:
             existing = set(conn.execute(_FIND_CHUNK_INDEXES).scalars())
@@ -276,7 +281,6 @@ def _upgrade_schema(engine) -> None:
                     "ON document_chunks USING gin (to_tsvector('english', content))"
                 )
             )
-        _start_vector_index_upgrade(engine)
 
     # ScheduledTask: add per-task model override if missing
     if "scheduled_tasks" in insp.get_table_names():

@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 from pkm_bridge.database import (
     VECTOR_INDEX,
-    _start_vector_index_upgrade,
     _upgrade_vector_index,
+    start_vector_index_upgrade,
 )
 
 
@@ -38,14 +38,14 @@ def _sql(conn: MagicMock) -> list[str]:
 def test_no_thread_when_already_upgraded():
     engine = _engine(_conn(True, [VECTOR_INDEX, "idx_chunks_content_fts"]))
     with patch("pkm_bridge.database.threading.Thread") as thread:
-        _start_vector_index_upgrade(engine)
+        start_vector_index_upgrade(engine)
     thread.assert_not_called()
 
 
 def test_upgrade_starts_in_background():
     engine = _engine(_conn(True, ["idx_embedding_cosine"]))
     with patch("pkm_bridge.database.threading.Thread") as thread:
-        _start_vector_index_upgrade(engine)
+        start_vector_index_upgrade(engine)
     assert thread.call_args.kwargs["target"] is _upgrade_vector_index
     thread.return_value.start.assert_called_once()
 
@@ -72,3 +72,17 @@ def test_failure_is_logged_not_raised(capsys):
     conn.execute.side_effect = RuntimeError("out of memory")
     _upgrade_vector_index(_engine(conn))
     assert "vector index upgrade failed" in capsys.readouterr().out
+
+
+def test_schema_upgrade_does_not_start_the_index_build():
+    """Short-lived processes (migration scripts) run init_db too; they must not start it."""
+    from pkm_bridge.database import _upgrade_schema
+
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["document_chunks"]
+    with (
+        patch("pkm_bridge.database.inspect", return_value=inspector),
+        patch("pkm_bridge.database.threading.Thread") as thread,
+    ):
+        _upgrade_schema(_engine(_conn(True, ["idx_embedding_cosine"])))
+    thread.assert_not_called()

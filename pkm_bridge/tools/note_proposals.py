@@ -8,6 +8,7 @@ the change immediately through FileEditor's atomic write path.
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..anchored_edits import FIND_SCHEMA
 from ..file_editor import FileEditor
 from .base import BaseTool
 
@@ -24,10 +25,7 @@ EDITS_SCHEMA = {
                     "'org:notes.org' or 'org:notes.md'"
                 ),
             },
-            "find": {
-                "type": "string",
-                "description": "Exact text currently in the file (must occur exactly once)",
-            },
+            "find": FIND_SCHEMA,
             "replace": {
                 "type": "string",
                 "description": "Replacement text (typically the same text with [[links]] added)",

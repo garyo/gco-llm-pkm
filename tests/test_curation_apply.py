@@ -134,3 +134,24 @@ class TestApplyProposal:
         result = apply_proposal("add_links", payload, editor, LOGGER)
         assert result["status"] == "applied"
         assert len(result["written"]) == 2
+
+    def test_two_edits_to_one_file_both_land(self, editor, tmp_path):
+        payload = {
+            "edits": [
+                link_edit(),
+                {
+                    "file": "logseq:journals/2026_07_01.md",
+                    "find": "other stuff",
+                    "replace": "other [[stuff]]",
+                },
+            ]
+        }
+        result = apply_proposal("add_links", payload, editor, LOGGER)
+        assert result["status"] == "applied"
+        journal = (tmp_path / "logseq" / "journals" / "2026_07_01.md").read_text()
+        assert journal == "- worked on the [[dovetail jig]] today\n- other [[stuff]]\n"
+
+    def test_overlapping_anchors_refused(self, editor):
+        payload = {"edits": [link_edit(), link_edit(find="dovetail jig today", replace="x")]}
+        problems = validate_payload("add_links", payload, editor)
+        assert any("overlaps" in p for p in problems)

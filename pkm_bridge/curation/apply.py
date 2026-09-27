@@ -22,12 +22,13 @@ target file. Anchors are checked at proposal time (so the curator can't file
 broken proposals) and re-checked at apply time (so a file edited in between —
 locally, or via Syncthing from another machine — makes the proposal stale
 instead of mis-applying). Writes go through FileEditor: atomic temp-file +
-rename, with an mtime conflict check between our read and our write.
+rename, three-way merged with anything that changed between our read and write.
 """
 
 import logging
 from typing import Any, Dict, List
 
+from ..anchored_edits import AnchorError, apply_edits
 from ..file_editor import ConflictError, FileEditor
 
 VALID_KINDS = ("add_links", "new_page", "insight")
@@ -67,28 +68,20 @@ def validate_payload(kind: str, payload: Dict[str, Any], editor: FileEditor) -> 
             except ValueError as e:
                 problems.append(f"Invalid page path '{page_file}': {e}")
 
-    for i, edit in enumerate(edits):
-        file = edit.get("file", "")
-        find = edit.get("find", "")
-        replace = edit.get("replace")
-        label = f"edit {i + 1} ({file or 'no file'})"
+    by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for i, edit in enumerate(edits, 1):
+        if not edit.get("file"):
+            problems.append(f"edit {i}: needs 'file'")
+        else:
+            by_file.setdefault(edit["file"], []).append(edit)
 
-        if not file or not find or replace is None:
-            problems.append(f"{label}: needs 'file', 'find', and 'replace'")
-            continue
-        if find == replace:
-            problems.append(f"{label}: 'find' and 'replace' are identical")
-            continue
+    for file, file_edits in by_file.items():
         try:
-            result = editor.read_file(file, max_chars=None)
+            apply_edits(editor.read_file(file, max_chars=None)["content"], file_edits)
+        except AnchorError as e:
+            problems.extend(f"{file}: {p}" for p in e.problems)
         except ValueError as e:
-            problems.append(f"{label}: {e}")
-            continue
-        count = result["content"].count(find)
-        if count == 0:
-            problems.append(f"{label}: anchor text not found in file")
-        elif count > 1:
-            problems.append(f"{label}: anchor text occurs {count} times (must be unique)")
+            problems.append(f"{file}: {e}")
 
     return problems
 
@@ -111,20 +104,16 @@ def apply_proposal(
     if problems:
         return {"status": "stale", "problems": problems}
 
-    # Read all edit targets up front so the apply works from one snapshot.
-    edits = payload.get("edits", [])
-    snapshots = []
-    for edit in edits:
-        result = editor.read_file(edit["file"], max_chars=None)
-        snapshots.append(
-            {
-                "file": result["path"],  # canonical path after pages/ fallback
-                "content": result["content"],
-                "mtime": result["modified"],
-                "find": edit["find"],
-                "replace": edit["replace"],
+    # Read each edit target once, up front, so the apply works from one
+    # snapshot and a file with several edits is written once.
+    snapshots: Dict[str, Dict[str, Any]] = {}
+    for edit in payload.get("edits", []):
+        if edit["file"] not in snapshots:
+            snapshots[edit["file"]] = {
+                **editor.read_file(edit["file"], max_chars=None),
+                "edits": [],
             }
-        )
+        snapshots[edit["file"]]["edits"].append(edit)
 
     written: List[str] = []
 
@@ -135,18 +124,19 @@ def apply_proposal(
             return {"status": "stale", "problems": [f"Page already exists: {page['file']}"]}
         written.append(result["path"])
 
-    for snap in snapshots:
-        new_content = snap["content"].replace(snap["find"], snap["replace"], 1)
+    for snap in snapshots.values():
+        new_content = apply_edits(snap["content"], snap["edits"])
         try:
-            editor.write_file(snap["file"], new_content, expected_mtime=snap["mtime"])
+            # snap["path"] is canonical after the pages/ fallback.
+            editor.write_file(snap["path"], new_content, base_hash=snap["hash"])
         except ConflictError as e:
-            logger.warning(f"Proposal apply conflict on {snap['file']}: {e}")
+            logger.warning(f"Proposal apply conflict on {snap['path']}: {e}")
             return {
                 "status": "conflict",
                 "written": written,
-                "problems": [f"{snap['file']} changed during apply: {e}"],
+                "problems": [f"{snap['path']} changed during apply: {e}"],
             }
-        written.append(snap["file"])
+        written.append(snap["path"])
 
     logger.info(f"Applied {kind} proposal: wrote {len(written)} file(s)")
     return {"status": "applied", "written": written}

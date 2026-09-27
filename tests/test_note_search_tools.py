@@ -3,12 +3,15 @@
 import logging
 import os
 from pathlib import Path
+from typing import Any, Dict
 
 import pytest
 
 from pkm_bridge.note_paths import display_path, recency, resolve_note_path
+from pkm_bridge.tools.base import BaseTool
 from pkm_bridge.tools.files import MAX_LISTED_FILES, ListFilesTool
 from pkm_bridge.tools.find_context import FindContextTool
+from pkm_bridge.tools.registry import ToolRegistry
 from pkm_bridge.tools.search_notes import SearchNotesTool
 
 logger = logging.getLogger("test")
@@ -198,3 +201,53 @@ def test_find_context_confines_paths(notes, tmp_path):
     assert "secret" in out  # named in the error...
     assert "haircut secret" not in out  # ...but never searched
     assert out.startswith("No valid directories to search")
+
+
+# --- registry -----------------------------------------------------------------
+
+
+class _EchoTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "echo"
+
+    @property
+    def description(self) -> str:
+        return "echo"
+
+    @property
+    def input_schema(self) -> Dict[str, Any]:
+        return {"type": "object", "properties": {"text": {"type": "string"}}}
+
+    def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
+        if params.get("text") == "boom":
+            return {}["internal"]
+        if params.get("text") == "fail":
+            raise RuntimeError("disk on fire")
+        return params["text"]
+
+
+def test_registry_unknown_tool():
+    registry = ToolRegistry()
+    registry.register(_EchoTool(logger))
+    assert registry.execute_tool("nope", {}).startswith("❌ Unknown tool: nope")
+
+
+def test_registry_missing_parameter_is_not_unknown_tool():
+    registry = ToolRegistry()
+    registry.register(_EchoTool(logger))
+    out = registry.execute_tool("echo", {})
+    assert "Unknown tool" not in out
+    assert "missing required parameter 'text'" in out
+
+
+def test_registry_logs_internal_errors(caplog):
+    registry = ToolRegistry()
+    registry.register(_EchoTool(logger))
+    with caplog.at_level(logging.ERROR):
+        out = registry.execute_tool("echo", {"text": "boom"})
+        assert "internal error" in out and "'internal'" in out
+        out = registry.execute_tool("echo", {"text": "fail"})
+        assert "RuntimeError: disk on fire" in out
+    assert all(r.exc_info for r in caplog.records)
+    assert len(caplog.records) == 2

@@ -1,7 +1,7 @@
 # PKM Bridge — Claude Code Project Guide
 
 AI-powered Personal Knowledge Management bridge: natural language access to
-org-mode files, Google Calendar, and TickTick via Claude, with a modern web UI
+Markdown notes, Google Calendar, and TickTick via Claude, with a modern web UI
 and Claude.ai MCP integration.
 
 ## Architecture
@@ -32,26 +32,30 @@ and sharing the same backend modules, database, and org files:
 - Flask + Astro frontend + Editor SPA
 - Uses Anthropic API key (server-side)
 - System prompt: `config/system_prompt.txt`
-- **Advantages**: RAG auto-injection (embeddings), interactive checkboxes,
-  deep editor integration, voice input (VAD + Whisper), self-contained UI
+- **Advantages**: interactive checkboxes, deep editor integration,
+  voice input (VAD + Whisper), web search, self-contained UI
 
 ### 2. Claude.ai MCP Server (`mcp.oberbrunner.com`)
 - Accessed via Claude.ai desktop/mobile apps
 - Uses the user's Claude subscription (Opus-capable)
-- System prompt: `config/system_prompt_mcp.txt`
+- System prompt: `config/system_prompt_mcp.txt`, sent as the server's `instructions`
+  (Claude.ai loads those into every chat); `read_prompt_context` adds user context,
+  learned patterns and recent journals
 - **Advantages**: Claude.ai UX, mobile app, no API key cost,
   access to latest Claude models via subscription
 
 ### Shared between both
 - `pkm_bridge/` modules, tool implementations, skills, learned rules
 - PostgreSQL database + pgvector embeddings
-- Org-mode and Logseq files
+- Notes: ORG (all current notes, Markdown) and LOGSEQ (read-only pre-2026 archive)
+- Note-writing tools `journal_append` / `edit_note` (merge-safe writes via `FileEditor`)
 - Self-improvement agent
 
 ### Key differences
 - System prompts are **separate** files — core PKM behavior should stay aligned,
-  but interface-specific features (file links, checkboxes, RAG) are intentionally different
-- Custom app has auto-RAG injection; MCP must call `semantic_search` explicitly
+  but interface-specific features (file links, checkboxes, web search) are intentionally different
+- Neither interface injects RAG context automatically; both call `semantic_search` as a tool.
+  The web app's auto-injection still exists behind `RAG_AUTO_INJECT=true` (off by default).
 - Both must be tested when changing tools or backend logic
 
 ## Development

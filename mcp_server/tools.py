@@ -271,10 +271,9 @@ def build_prompt_context() -> str:
 
     user_context, rules = None, None
     try:
-        from pkm_bridge.database import get_db, init_db
+        from pkm_bridge.database import get_db
         from pkm_bridge.db_repository import LearnedRuleRepository, UserSettingsRepository
 
-        init_db()
         db = get_db()
         try:
             user_context = UserSettingsRepository.get_user_context(db, user_id="default")
@@ -836,10 +835,9 @@ def register_all_tools(server: FastMCP):
         """
         start = time.time()
         try:
-            from pkm_bridge.database import get_db, init_db
+            from pkm_bridge.database import get_db
             from pkm_bridge.db_repository import QueryFeedbackRepository
 
-            init_db()
             db = get_db()
             try:
                 query_id = f"mcp-feedback-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"

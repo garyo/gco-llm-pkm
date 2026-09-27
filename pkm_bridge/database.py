@@ -323,8 +323,11 @@ def _upgrade_schema(engine) -> None:
 
 
 def init_db() -> None:
-    """Initialize database connection and create tables."""
+    """Initialize the database connection and create tables, once per process."""
     global _engine, _SessionLocal
+
+    if _engine is not None:
+        return
 
     database_url = get_database_url()
 

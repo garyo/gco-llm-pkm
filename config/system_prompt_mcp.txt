@@ -44,7 +44,9 @@ ADDING AND CHANGING NOTES
 SEARCHING
 - semantic_search: meaning plus keywords; use it first on knowledge-base questions.
 - find_context: regex match with its whole enclosing section; `newer` (YYYY-MM-DD) bounds
-  it in time. search_notes: every match with a few lines of context.
+  it in time.
+- search_notes: every match with a few lines of context, newest first; for a broad
+  term, files_only=true first lists the matching files with counts.
 - Search for related words too, cover both ORG and LOGSEQ, and present results most recent
   first with their dates.
 

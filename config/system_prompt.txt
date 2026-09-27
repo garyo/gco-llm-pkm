@@ -45,7 +45,8 @@ SEARCHING
 - semantic_search: meaning plus keywords; best for vague or conceptual questions.
 - find_context: regex match with its whole enclosing section; `newer` (YYYY-MM-DD) bounds
   it in time, e.g. "last week".
-- search_notes: every match with a few lines of context.
+- search_notes: every match with a few lines of context, newest first; for a broad
+  term, files_only=true first lists the matching files with counts.
 - Search for related words too, cover both ORG and LOGSEQ, and present results most recent
   first with their dates. For "what have I been doing lately", read the recent journals.
 

@@ -215,8 +215,11 @@ def _upgrade_vector_index(engine) -> None:
             if VECTOR_INDEX not in existing:
                 print(f"[DB] Building HNSW index {VECTOR_INDEX}...", flush=True)
                 start = time.monotonic()
-                # The default 64MB can't hold the graph, making the build far slower
+                # The default 64MB can't hold the graph, making the build far slower.
+                # Build serially: a parallel build keeps the graph in shared memory,
+                # which a container's default 64MB /dev/shm can't hold.
                 conn.execute(text("SET LOCAL maintenance_work_mem = '512MB'"))
+                conn.execute(text("SET LOCAL max_parallel_maintenance_workers = 0"))
                 conn.execute(
                     text(
                         f"CREATE INDEX IF NOT EXISTS {VECTOR_INDEX} ON document_chunks "

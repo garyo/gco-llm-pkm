@@ -11,7 +11,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   <!-- App Container -->
   <div id="app-container" class="hidden h-dvh flex flex-col overflow-hidden">
     <!-- Unified Header - Always visible at top -->
-    <div class="bg-blue-500 text-white px-2 sm:px-4 py-2 sm:py-3 shadow-md flex items-center gap-2 sm:gap-4 flex-shrink-0 sticky top-0 z-10">
+    <div class="bg-blue-500 text-white px-2 sm:px-4 py-2 sm:py-3 shadow-md flex items-center gap-2 sm:gap-4 flex-shrink-0 sticky top-0 z-10" data-swipe-tabs>
       <!-- Title: Short on mobile, full on desktop -->
       <h1 class="text-lg sm:text-xl font-semibold whitespace-nowrap">
         <span class="sm:hidden">GCO PKM</span>
@@ -389,7 +389,7 @@ import EditorInterface from '../components/EditorInterface.astro';
 
       if (res.ok) {
         authToken = data.token;
-        localStorage.setItem('pkm-authToken', authToken);
+        localStorage.setItem('pkm-authToken', data.token);
         showApp();
         window.dispatchEvent(new Event('auth:restored'));
       } else {
@@ -562,8 +562,8 @@ import EditorInterface from '../components/EditorInterface.astro';
     updateModelButtonHighlight();
     loadAvailableModels(); // Fetch models from backend and populate dropdown
 
-    // Always start on chat tab
-    switchTab('chat');
+    // Reopen the tab that was in use last time.
+    switchTab(localStorage.getItem('pkm-currentTab') === 'editor' ? 'editor' : 'chat');
 
     loadHistory();
     initializeVoiceInput();
@@ -1784,28 +1784,9 @@ import EditorInterface from '../components/EditorInterface.astro';
   let touchEndY = 0;
   let touchStartElement: HTMLElement | null = null;
 
+  // The chat messages, the header, and the editor's file bar switch tabs on a swipe.
   function isSwipeableArea(element: HTMLElement | null): boolean {
-    if (!element) return false;
-
-    // Check if touch started in chat messages area
-    const chatArea = document.getElementById('chat');
-    if (chatArea && chatArea.contains(element)) {
-      return true;
-    }
-
-    // Check if touch started in editor file selector area (top bar of editor)
-    const editorFileSelector = element.closest('.bg-gray-50.px-4.py-3.border-b');
-    if (editorFileSelector) {
-      return true;
-    }
-
-    // Check if touch is in the header area
-    const header = element.closest('.bg-blue-500.text-white');
-    if (header) {
-      return true;
-    }
-
-    return false;
+    return !!element?.closest('#chat, [data-swipe-tabs]');
   }
 
   // Walk up from the touch target looking for an ancestor that actually
@@ -1853,7 +1834,7 @@ import EditorInterface from '../components/EditorInterface.astro';
   }
 
   // Add touch listeners to content area
-  const contentArea = document.querySelector('#app-container');
+  const contentArea = document.getElementById('app-container');
   if (contentArea) {
     contentArea.addEventListener('touchstart', (e) => {
       touchStartX = e.changedTouches[0].screenX;

@@ -4,7 +4,7 @@
 
 <div id="editor-app" class="hidden flex flex-col h-full">
   <!-- File Selector with Filters -->
-  <div class="bg-gray-50 px-2 sm:px-4 py-2 sm:py-3 border-b">
+  <div class="bg-gray-50 px-2 sm:px-4 py-2 sm:py-3 border-b" data-swipe-tabs>
     <!-- Mobile: Today + Calendar + Disclosure -->
     <div class="flex items-center gap-2 sm:hidden mb-2">
       <button
@@ -357,7 +357,8 @@
 
       allFiles = await res.json();
       buildJournalDates();
-      updateStatus(`Loaded ${allFiles.length} files`);
+      // Once a file is open the status line belongs to it (save state, conflicts).
+      if (!currentFile) updateStatus(`Loaded ${allFiles.length} files`);
       filterAndPopulateFiles();
     } catch (e: any) {
       if (e.name === 'AbortError') return;
@@ -546,6 +547,8 @@
     addGroup('Logseq Journals', logseqJournals);
     addGroup('Logseq Pages', logseqPages);
     addGroup('Logseq Other', logseqOther);
+    // Rebuilding the list drops the selection (and any option added for a filtered-out file).
+    if (currentFile) showInSelector(fileSelector, currentFile);
 
     const countText = `${sorted.length} file${sorted.length !== 1 ? 's' : ''}`;
     fileCount.textContent = countText;

@@ -18,6 +18,7 @@ import {
 import { initCalendar } from './calendar';
 import { createSSEState, connectSSE, setupSSEReconnection } from './sse';
 import { initConflictUI } from '@pkm/editor/conflict-ui';
+import { showInSelector } from '@pkm/editor/file-selector';
 import { journalDateStr, journalPath, journalTemplate, findJournalForDate } from '@pkm/editor/journal';
 import { parseUrlParams, updateUrl, resolveUrlParams } from './url-params';
 
@@ -138,11 +139,12 @@ const debouncedLoadFileList = debounce(loadFileList, 2000);
 async function loadFile(filepath: string): Promise<void> {
   // Unsaved text is never lost on a switch: it is written if autosave is on,
   // and kept as a draft (restored on reopen) either way.
-  saver.flush();
+  const load = saver.beginLoad();
 
   try {
     updateStatus('Loading...');
     const data = await fileApi.load(filepath);
+    if (!saver.isLatestLoad(load)) return;
 
     // The server may resolve the request to a different location (pages/
     // fallback); adopt its canonical path so saves, links, and the selector
@@ -154,31 +156,21 @@ async function loadFile(filepath: string): Promise<void> {
     state.editorView = createEditor(editorContainer, canonical, onDocChanged);
     setEditorContent(state.editorView, data.content, canonical, state.pendingScrollLine);
     state.pendingScrollLine = null;
-
     state.currentFile = canonical;
-
-    updateFileDisplay(canonical);
-    updateUrl(canonical);
-
-    // Ensure file is visible in selector
-    const existing = Array.from(fileSelector.options).find((opt) => opt.value === canonical);
-    if (!existing) {
-      const option = document.createElement('option');
-      option.value = canonical;
-      option.textContent = canonical.split('/').pop() || canonical;
-      fileSelector.insertBefore(option, fileSelector.options[1]);
-    }
-    fileSelector.value = canonical;
 
     const size = (data.size / 1024).toFixed(1);
     const fileType = canonical.endsWith('.org') ? 'Org' : 'Markdown';
     updateStatus(`Loaded ${data.path} (${size} KB, ${fileType})`);
+    // Before any cosmetic update, so a UI error can never leave saving off.
     saver.onLoaded({ ...data, path: canonical });
 
+    updateFileDisplay(canonical);
+    updateUrl(canonical);
+    showInSelector(fileSelector, canonical);
     closeFilterControls();
   } catch (e: unknown) {
     const err = e instanceof Error ? e : new Error(String(e));
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError' || !saver.isLatestLoad(load)) return;
     updateStatus(`Error loading file: ${err.message}`, true);
     updateFileDisplay(null);
     console.error('Failed to load file:', e);

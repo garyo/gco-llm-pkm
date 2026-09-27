@@ -94,6 +94,7 @@ export class SaveController {
   private autosaveTimer: unknown = null;
   private draftTimer: unknown = null;
   private statusTimer: unknown = null;
+  private loadGeneration = 0;
   private readonly clock: Clock;
 
   constructor(private readonly opts: SaveControllerOptions) {
@@ -103,6 +104,20 @@ export class SaveController {
   // -------------------------------------------------------------------------
   // Loading
   // -------------------------------------------------------------------------
+
+  /**
+   * Start opening another file: persist this one and supersede any load still
+   * in flight. Pass the token to `isLatestLoad` once the content arrives.
+   */
+  beginLoad(): number {
+    this.flush();
+    return ++this.loadGeneration;
+  }
+
+  /** False when another load started after the one holding `token`. */
+  isLatestLoad(token: number): boolean {
+    return token === this.loadGeneration;
+  }
 
   /** Adopt freshly loaded content. Restores a persisted draft for the file if one exists. */
   onLoaded(data: FileData): void {
@@ -498,7 +513,9 @@ export class SaveController {
     });
   }
 
+  /** Detach from the current file, keeping (and saving) anything typed since the last flush. */
   dispose(): void {
+    this.flush();
     this.clearTimers();
     this.path = null;
   }

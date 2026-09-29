@@ -1,7 +1,7 @@
-"""Model configuration and catalog for multi-LLM support.
+"""Model configuration for multi-LLM support.
 
-Provides role-based model defaults (configurable via env vars),
-an available models catalog for the frontend, and capability detection.
+Provides role-based model defaults (configurable via env vars), capability
+detection and pricing. The models offered in the UI live in model_catalog.
 """
 
 from __future__ import annotations
@@ -11,123 +11,32 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
+import litellm
+
+from .model_catalog import resolve_model
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Role-based model defaults
 # Each "role" in the system can use a different model, configured via env var.
+# A bare Claude family name ("haiku", "sonnet", ...) follows that family's
+# newest release; a full model ID pins one.
 # ---------------------------------------------------------------------------
 
 MODEL_ROLES: dict[str, str] = {
-    "chat": os.getenv("MODEL_CHAT", os.getenv("MODEL", "claude-haiku-4-5")),
-    "voice": os.getenv("MODEL_VOICE", "claude-haiku-4-5"),
-    "retrospective": os.getenv("MODEL_RETROSPECTIVE", "claude-sonnet-5"),
-    "scheduler": os.getenv("MODEL_SCHEDULER", "claude-sonnet-5"),
-    "self_improvement": os.getenv("MODEL_SELF_IMPROVEMENT", "claude-sonnet-5"),
-    "curation": os.getenv("MODEL_CURATION", "claude-sonnet-5"),
+    "chat": os.getenv("MODEL_CHAT", os.getenv("MODEL", "haiku")),
+    "voice": os.getenv("MODEL_VOICE", "haiku"),
+    "retrospective": os.getenv("MODEL_RETROSPECTIVE", "sonnet"),
+    "scheduler": os.getenv("MODEL_SCHEDULER", "sonnet"),
+    "self_improvement": os.getenv("MODEL_SELF_IMPROVEMENT", "sonnet"),
+    "curation": os.getenv("MODEL_CURATION", "sonnet"),
 }
 
 
 def get_role_model(role: str) -> str:
     """Get the configured model for a given role."""
-    return MODEL_ROLES.get(role, MODEL_ROLES["chat"])
-
-
-# ---------------------------------------------------------------------------
-# Available models catalog — drives the frontend dropdown and /api/models
-# ---------------------------------------------------------------------------
-
-AVAILABLE_MODELS: list[dict[str, Any]] = [
-    # Anthropic (direct)
-    {"id": "claude-haiku-4-5", "name": "Haiku 4.5", "provider": "anthropic", "tier": "fast"},
-    {"id": "claude-sonnet-5", "name": "Sonnet 5", "provider": "anthropic", "tier": "balanced"},
-    {"id": "claude-opus-5", "name": "Opus 5", "provider": "anthropic", "tier": "best"},
-    {"id": "claude-opus-5-5", "name": "Opus 5.5", "provider": "anthropic", "tier": "best"},
-    {"id": "claude-fable-5-1", "name": "Fable 5.1", "provider": "anthropic", "tier": "best"},
-    # OpenAI (direct)
-    {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai", "tier": "balanced"},
-    {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai", "tier": "fast"},
-    # Google (direct)
-    {
-        "id": "gemini/gemini-2.5-flash",
-        "name": "Gemini 2.5 Flash",
-        "provider": "google",
-        "tier": "fast",
-    },
-    {
-        "id": "gemini/gemini-3.5-flash",
-        "name": "Gemini 3.5 Flash",
-        "provider": "google",
-        "tier": "fast",
-    },
-    {
-        "id": "gemini/gemini-2.5-pro",
-        "name": "Gemini 2.5 Pro",
-        "provider": "google",
-        "tier": "balanced",
-    },
-    # OpenRouter (many models behind one key)
-    {
-        "id": "openrouter/deepseek/deepseek-r1",
-        "name": "DeepSeek R1",
-        "provider": "openrouter",
-        "tier": "reasoning",
-    },
-    {
-        "id": "openrouter/deepseek/deepseek-chat-v3",
-        "name": "DeepSeek V3",
-        "provider": "openrouter",
-        "tier": "fast",
-    },
-    {
-        "id": "openrouter/deepseek/deepseek-v4-pro",
-        "name": "DeepSeek V4 Pro",
-        "provider": "openrouter",
-        "tier": "reasoning",
-    },
-    {
-        "id": "openrouter/deepseek/deepseek-v4-flash",
-        "name": "DeepSeek V4 Flash",
-        "provider": "openrouter",
-        "tier": "fast",
-    },
-    {
-        "id": "openrouter/qwen/qwen3.6-max-preview",
-        "name": "Qwen3.6 Max (preview)",
-        "provider": "openrouter",
-        "tier": "best",
-    },
-    {
-        "id": "openrouter/qwen/qwen3.6-plus",
-        "name": "Qwen3.6 Plus",
-        "provider": "openrouter",
-        "tier": "balanced",
-    },
-    {
-        "id": "openrouter/z-ai/glm-5.1",
-        "name": "GLM 5.1",
-        "provider": "openrouter",
-        "tier": "balanced",
-    },
-]
-
-
-def get_available_models() -> list[dict[str, Any]]:
-    """Return models filtered to providers that have keys configured (or are local)."""
-    # Provider → required env var (None = always available)
-    provider_keys: dict[str, str | None] = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "google": "GOOGLE_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-        "ollama": None,  # always available if Ollama is running
-    }
-    available = []
-    for model in AVAILABLE_MODELS:
-        env_var = provider_keys.get(model["provider"])
-        if env_var is None or os.getenv(env_var):
-            available.append(model)
-    return available
+    return resolve_model(MODEL_ROLES.get(role, MODEL_ROLES["chat"]))
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +151,9 @@ def supports_caching(model: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Cost rates for Anthropic models (per million tokens, 5-minute cache writes)
-# Non-Anthropic models use litellm.completion_cost() instead.
+# Models missing from the table are priced from LiteLLM's price map, which it
+# refreshes from upstream at startup. Non-Anthropic models use
+# litellm.completion_cost() instead.
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
 # ---------------------------------------------------------------------------
 
@@ -271,19 +182,35 @@ ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
 # table entry over-reports cost rather than hiding it.
 _FALLBACK_COST_RATES = max(ANTHROPIC_COST_RATES.values(), key=lambda r: r["output"])
 _warned_unpriced_models: set[str] = set()
+_LITELLM_RATE_KEYS = (
+    "input_cost_per_token",
+    "cache_creation_input_token_cost",
+    "cache_read_input_token_cost",
+    "output_cost_per_token",
+)
+
+
+def _litellm_rates(model: str) -> dict[str, float] | None:
+    info = litellm.model_cost.get(model, {})
+    if not all(info.get(key) for key in _LITELLM_RATE_KEYS):
+        return None
+    return _rates(*(info[key] * 1_000_000 for key in _LITELLM_RATE_KEYS))
 
 
 def get_cost_rates(model: str) -> dict[str, float]:
     """Resolve the per-million-token rates for a model.
 
     Matches the model ID exactly or, for dated snapshots such as
-    ``claude-haiku-4-5-20251001``, by its longest known prefix.
+    ``claude-haiku-4-5-20251001``, by its longest known prefix; failing
+    that, uses LiteLLM's price map.
     """
     if model in ANTHROPIC_COST_RATES:
         return ANTHROPIC_COST_RATES[model]
     prefixes = [known for known in ANTHROPIC_COST_RATES if model.startswith(known + "-")]
     if prefixes:
         return ANTHROPIC_COST_RATES[max(prefixes, key=len)]
+    if rates := _litellm_rates(model):
+        return rates
     if model not in _warned_unpriced_models:
         _warned_unpriced_models.add(model)
         logger.warning(

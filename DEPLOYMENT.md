@@ -507,7 +507,7 @@ docker-compose up -d
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | ✅ Yes | - | Your Anthropic API key |
-| `MODEL` | No | `claude-haiku-4-5` | Default model for new sessions |
+| `MODEL` | No | `claude-haiku-4-5` | Default model for new sessions: a model ID, or a Claude family name (`haiku`, `sonnet`, `opus`, `fable`) for its newest model |
 | `ORG_DIR` | ✅ Yes | - | Host path to org-agenda directory |
 | `LOGSEQ_DIR` | No | - | Host path to Logseq directory |
 | `AUTH_ENABLED` | No | `true` | Enable JWT authentication |

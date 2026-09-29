@@ -57,7 +57,7 @@ from anthropic import Anthropic  # noqa: E402
 
 from config.settings import Config  # noqa: E402
 from pkm_bridge.llm import LLMClient  # noqa: E402
-from pkm_bridge.models import get_available_models  # noqa: E402
+from pkm_bridge.model_catalog import get_available_models  # noqa: E402
 from pkm_bridge.tools.base import BaseTool  # noqa: E402
 from pkm_bridge.tools.files import ListFilesTool  # noqa: E402
 from pkm_bridge.tools.find_context import FindContextTool  # noqa: E402

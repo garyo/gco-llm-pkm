@@ -57,8 +57,8 @@ from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from pkm_bridge.llm import LLMClient, refusal_note, response_cost
+from pkm_bridge.model_catalog import get_available_models, resolve_model
 from pkm_bridge.models import (
-    get_available_models,
     is_anthropic,
     thinking_params,
     web_search_tool,
@@ -967,7 +967,7 @@ def query():
                 return
 
             user_message = data["message"]
-            model = data.get("model", config.model)
+            model = resolve_model(data.get("model", config.model))
             # A boolean; older clients sent a thinking config dict, also truthy.
             want_thinking = bool(data.get("thinking"))
             user_timezone = data.get("timezone")  # Optional timezone from client

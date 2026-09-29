@@ -339,8 +339,8 @@ Examples:
     parser.add_argument(
         "--model",
         "-m",
-        help="Claude model to use (overrides server default). Options: claude-haiku-4-5, "
-        "claude-sonnet-5, claude-opus-5, claude-opus-5-5, claude-fable-5-1",
+        help="Model to use (overrides server default): a model ID such as claude-opus-5-5, "
+        "or a Claude family name (haiku, sonnet, opus, fable) for its newest model",
     )
 
     args = parser.parse_args()

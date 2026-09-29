@@ -904,7 +904,7 @@ import EditorInterface from '../components/EditorInterface.astro';
     // Determine provider from the model ID or cached model list
     let colors = providerColors.anthropic; // default
     if (selectedModel.startsWith('claude-')) colors = providerColors.anthropic;
-    else if (selectedModel.startsWith('gpt-') || selectedModel.startsWith('o1') || selectedModel.startsWith('o3')) colors = providerColors.openai;
+    else if (/^(gpt-|o\d)/.test(selectedModel)) colors = providerColors.openai;
     else if (selectedModel.startsWith('gemini/')) colors = providerColors.google;
     else if (selectedModel.startsWith('openrouter/')) colors = providerColors.openrouter;
     else if (selectedModel.startsWith('ollama/')) colors = providerColors.ollama;

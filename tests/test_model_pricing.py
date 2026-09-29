@@ -102,10 +102,25 @@ def test_response_cost_for_litellm_uses_its_price_table():
         assert response_cost("gpt-4o", response) == 0.0
 
 
-def test_latest_claude_models_are_offered_with_adaptive_thinking():
-    from pkm_bridge.models import AVAILABLE_MODELS, thinking_params
+def test_unlisted_model_is_priced_from_litellm():
+    info = {
+        "input_cost_per_token": 2e-06,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "output_cost_per_token": 1e-05,
+    }
+    with patch.dict(models.litellm.model_cost, {"claude-sonnet-9": info}):
+        rates = models.get_cost_rates("claude-sonnet-9")
+    assert rates == pytest.approx(
+        {"input": 2.00, "cache_write": 2.50, "cache_read": 0.20, "output": 10.00}
+    )
 
-    ids = {m["id"] for m in AVAILABLE_MODELS}
+
+def test_latest_claude_models_are_offered_with_adaptive_thinking():
+    from pkm_bridge.model_catalog import STATIC_MODELS
+    from pkm_bridge.models import thinking_params
+
+    ids = {m["id"] for m in STATIC_MODELS}
     for model in ("claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"):
         assert model in ids
         # These reject budget_tokens (and Fable 5.1 / Opus 5.5 reject disabling thinking).

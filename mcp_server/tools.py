@@ -721,7 +721,22 @@ def register_all_tools(server: FastMCP):
             params["days"] = days
         return _execute_tool("ticktick_query", params)
 
-    # --- Google: Gmail drafts, group membership ---
+    # --- Google: Gmail search and drafts, group membership ---
+
+    @mcp.tool()
+    def gmail_search(query: str, max_results: int = 20) -> str:
+        """Search Gmail (read-only) with Gmail search syntax; returns message summaries.
+
+        Drafts are included, so e.g. "to:a@example.com (in:sent OR in:drafts)" checks
+        whether someone was already written to.
+
+        Args:
+            query: Gmail search query, e.g. "from:alice subject:meeting after:2026/01/01"
+            max_results: Maximum messages (default 20, max 50)
+        """
+        return _execute_tool(
+            "google_gmail", {"action": "search", "query": query, "max_results": max_results}
+        )
 
     @mcp.tool()
     def gmail_create_draft(

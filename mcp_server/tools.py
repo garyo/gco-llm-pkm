@@ -128,15 +128,17 @@ def _build_tool_registry() -> None:
 
     # Optional: Google Gmail
     try:
-        from pkm_bridge.google_oauth import GoogleOAuth
+        from pkm_bridge.google_oauth import GMAIL_SCOPES, GoogleOAuth
         from pkm_bridge.tools.google_gmail import GoogleGmailTool
+        from pkm_bridge.tools.google_groups import GoogleGroupsTool
 
         google_gmail_oauth = GoogleOAuth(
-            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            scopes=GMAIL_SCOPES,
             redirect_uri_env="GOOGLE_GMAIL_REDIRECT_URI",
         )
         registry.register(GoogleGmailTool(tool_logger, google_gmail_oauth))
-        logger.info("Google Gmail tool registered")
+        registry.register(GoogleGroupsTool(tool_logger, google_gmail_oauth))
+        logger.info("Google Gmail and Groups tools registered")
     except Exception as e:
         logger.info(f"Google Gmail not available: {e}")
 
@@ -718,6 +720,58 @@ def register_all_tools(server: FastMCP):
         if days is not None:
             params["days"] = days
         return _execute_tool("ticktick_query", params)
+
+    # --- Google: Gmail drafts, group membership ---
+
+    @mcp.tool()
+    def gmail_create_draft(
+        to: list[str],
+        subject: str,
+        html_body: str | None = None,
+        text_body: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> str:
+        """Create a Gmail draft for Gary to review and send. Never sends.
+
+        Links are stored exactly as written, unlike the claude.ai Gmail connector,
+        which rewrites them through google.com/url redirects. Prefer html_body; a
+        plain-text part is derived from it (link targets kept) unless text_body is given.
+
+        Args:
+            to: Recipient addresses
+            subject: Subject line
+            html_body: HTML body
+            text_body: Plain-text body (optional alternative or sole body)
+            cc: Cc addresses
+            bcc: Bcc addresses
+        """
+        params: dict = {"action": "create_draft", "to": to, "subject": subject}
+        for key, value in (
+            ("html_body", html_body),
+            ("text_body", text_body),
+            ("cc", cc),
+            ("bcc", bcc),
+        ):
+            if value is not None:
+                params[key] = value
+        return _execute_tool("google_gmail", params)
+
+    @mcp.tool()
+    def google_group_add_member(group: str, email: str, role: str = "MEMBER") -> str:
+        """Add an email address to a Google Workspace group. Idempotent.
+
+        Only groups on Gary's Workspace domain work (e.g. pelorus-nav@oberbrunner.com,
+        the Play Store beta-tester group), not @googlegroups.com groups.
+
+        Args:
+            group: Group email address
+            email: Address to add
+            role: MEMBER (default), MANAGER, or OWNER
+        """
+        return _execute_tool(
+            "google_groups", {"action": "add_member", "group": group, "email": email, "role": role}
+        )
 
     # --- Skill tools ---
 

@@ -1,21 +1,23 @@
-"""Google Gmail API client for read-only email access."""
+"""Google Gmail API client: read mail and create drafts."""
 
 import base64
+import html as html_lib
 import logging
-import os
 import re
+from email.message import EmailMessage
 from typing import Any, Dict, List, Optional
 
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+from pkm_bridge.google_oauth import google_credentials
 
 # Get logger
 logger = logging.getLogger(__name__)
 
 
 class GoogleGmailClient:
-    """Read-only client for Google Gmail API."""
+    """Client for the Google Gmail API: reads mail and creates (never sends) drafts."""
 
     def __init__(self, access_token: str, refresh_token: Optional[str] = None):
         """Initialize Google Gmail client.
@@ -24,13 +26,7 @@ class GoogleGmailClient:
             access_token: OAuth access token
             refresh_token: Optional OAuth refresh token
         """
-        self.credentials = Credentials(
-            token=access_token,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=os.getenv("GOOGLE_CLIENT_ID"),
-            client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-        )
+        self.credentials = google_credentials(access_token, refresh_token)
 
         self.service = build("gmail", "v1", credentials=self.credentials)
 
@@ -160,6 +156,81 @@ class GoogleGmailClient:
             )
         except HttpError as e:
             raise Exception(f"Failed to get thread {thread_id}: {e}")
+
+    def create_draft(
+        self,
+        to: List[str],
+        subject: str,
+        html_body: Optional[str] = None,
+        text_body: Optional[str] = None,
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Create a draft, stored exactly as built here (links aren't rewritten).
+
+        Returns:
+            Draft dict with 'id' and 'message' ({'id', 'threadId'})
+        """
+        message = self.build_draft_message(to, subject, html_body, text_body, cc, bcc)
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+        try:
+            return (
+                self.service.users()
+                .drafts()
+                .create(userId="me", body={"message": {"raw": raw}})
+                .execute()
+            )
+        except HttpError as e:
+            raise Exception(f"Failed to create draft: {e}")
+
+    @staticmethod
+    def build_draft_message(
+        to: List[str],
+        subject: str,
+        html_body: Optional[str] = None,
+        text_body: Optional[str] = None,
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+    ) -> EmailMessage:
+        """A MIME message: plain text, plus an HTML alternative when given.
+
+        Without `text_body`, the plain-text part is derived from the HTML.
+        """
+        if not to:
+            raise ValueError("at least one recipient is required")
+        if html_body is None and text_body is None:
+            raise ValueError("html_body or text_body is required")
+
+        message = EmailMessage()
+        message["To"] = ", ".join(to)
+        if cc:
+            message["Cc"] = ", ".join(cc)
+        if bcc:
+            message["Bcc"] = ", ".join(bcc)
+        message["Subject"] = subject
+        message.set_content(
+            text_body if text_body is not None else GoogleGmailClient.html_to_text(html_body)
+        )
+        if html_body is not None:
+            message.add_alternative(html_body, subtype="html")
+        return message
+
+    @staticmethod
+    def html_to_text(html: str) -> str:
+        """Plain-text rendering of an HTML body that keeps every link target visible."""
+
+        def link(match: re.Match) -> str:
+            href, label = match.group(1), GoogleGmailClient._strip_html(match.group(2))
+            return href if label in (href, "") else f"{label} ({href})"
+
+        text = re.sub(
+            r"<a\s[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+            link,
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        text = re.sub(r"</div>|</li>", "\n", text, flags=re.IGNORECASE)
+        return html_lib.unescape(GoogleGmailClient._strip_html(text))
 
     @staticmethod
     def extract_header(headers: List[Dict[str, str]], name: str) -> str:

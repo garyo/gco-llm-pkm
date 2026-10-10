@@ -8,6 +8,35 @@ from urllib.parse import urlencode
 
 from .http_session import HttpSession
 
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+# One consent covers reading mail, drafting it, and managing Google Group
+# members (e.g. adding beta testers), all stored as the "google_gmail" token.
+# gmail.compose also permits sending; the tools only ever create drafts.
+GMAIL_SCOPE_READ = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_SCOPE_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
+GROUP_MEMBER_SCOPE = "https://www.googleapis.com/auth/admin.directory.group.member"
+GMAIL_SCOPES = [GMAIL_SCOPE_READ, GMAIL_SCOPE_COMPOSE, GROUP_MEMBER_SCOPE]
+
+
+def google_credentials(access_token: str, refresh_token: Optional[str] = None):
+    """Credentials for googleapiclient, built from a stored OAuth token."""
+    from google.oauth2.credentials import Credentials
+
+    return Credentials(
+        token=access_token,
+        refresh_token=refresh_token,
+        token_uri=TOKEN_URL,
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    )
+
+
+def missing_scopes(granted: Optional[str], required: list[str]) -> list[str]:
+    """Which of `required` aren't in a token's space-delimited `granted` scopes."""
+    have = set((granted or "").split())
+    return [s for s in required if s not in have]
+
 
 class GoogleOAuth:
     """Handle Google OAuth2 authentication flow for Google APIs.
@@ -18,7 +47,6 @@ class GoogleOAuth:
 
     # Google OAuth endpoints
     AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-    TOKEN_URL = "https://oauth2.googleapis.com/token"
 
     # Default scopes (Google Calendar - backward compatible)
     DEFAULT_SCOPES = [
@@ -99,7 +127,7 @@ class GoogleOAuth:
             "grant_type": "authorization_code",
         }
 
-        response = self.http.post(self.TOKEN_URL, data=data)
+        response = self.http.post(TOKEN_URL, data=data)
         response.raise_for_status()
 
         token_data = response.json()
@@ -135,7 +163,7 @@ class GoogleOAuth:
             "grant_type": "refresh_token",
         }
 
-        response = self.http.post(self.TOKEN_URL, data=data)
+        response = self.http.post(TOKEN_URL, data=data)
         response.raise_for_status()
 
         token_data = response.json()

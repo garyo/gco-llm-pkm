@@ -108,7 +108,7 @@ from pkm_bridge.events import event_manager
 from pkm_bridge.feedback_capture import capture_feedback, check_previous_correction
 
 # Import Google Calendar components
-from pkm_bridge.google_oauth import GoogleOAuth
+from pkm_bridge.google_oauth import GMAIL_SCOPES, GoogleOAuth
 from pkm_bridge.job_lock import run_exclusive, start_exclusive
 from pkm_bridge.logging_config import quiet_health_checks, setup_logging
 
@@ -140,6 +140,7 @@ from pkm_bridge.tools.files import ListFilesTool, ReadNoteTool
 from pkm_bridge.tools.find_context import FindContextTool
 from pkm_bridge.tools.google_calendar import GoogleCalendarTool
 from pkm_bridge.tools.google_gmail import GoogleGmailTool
+from pkm_bridge.tools.google_groups import GoogleGroupsTool
 from pkm_bridge.tools.note_proposals import (
     ListNoteProposalsTool,
     ProposeNoteOrganizationTool,
@@ -390,7 +391,7 @@ except ValueError as e:
 google_gmail_oauth = None
 try:
     google_gmail_oauth = GoogleOAuth(
-        scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        scopes=GMAIL_SCOPES,
         redirect_uri_env="GOOGLE_GMAIL_REDIRECT_URI",
     )
     logger.info("Google Gmail OAuth handler initialized")
@@ -468,7 +469,8 @@ if google_oauth:
 # Register Google Gmail tool if configured
 if google_gmail_oauth:
     tool_registry.register(GoogleGmailTool(logger, google_gmail_oauth))
-    logger.info("Google Gmail tool registered")
+    tool_registry.register(GoogleGroupsTool(logger, google_gmail_oauth))
+    logger.info("Google Gmail and Groups tools registered")
 
 # Register semantic search tool if RAG is enabled
 if context_retriever:
@@ -2735,7 +2737,11 @@ def google_gmail_callback():
         )
 
         logger.info("Google Gmail OAuth completed successfully")
-        return _oauth_success_html("Gmail", "Claude can now read your Gmail messages.", return_to)
+        return _oauth_success_html(
+            "Gmail",
+            "Claude can now read Gmail, create drafts, and manage Google Group members.",
+            return_to,
+        )
 
     except Exception as e:
         logger.error(f"Error completing Google Gmail OAuth: {e}")

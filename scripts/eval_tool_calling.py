@@ -322,11 +322,11 @@ def build_registry(config: Config, logger: logging.Logger) -> ToolRegistry:
 
     # Gmail (optional)
     try:
-        from pkm_bridge.google_oauth import GoogleOAuth
+        from pkm_bridge.google_oauth import GMAIL_SCOPES, GoogleOAuth
         from pkm_bridge.tools.google_gmail import GoogleGmailTool
 
         gmail_oauth = GoogleOAuth(
-            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            scopes=GMAIL_SCOPES,
             redirect_uri_env="GOOGLE_GMAIL_REDIRECT_URI",
         )
         registry.register(GoogleGmailTool(logger, gmail_oauth))

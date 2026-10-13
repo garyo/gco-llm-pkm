@@ -153,12 +153,21 @@ function completeTicktickTask(view: EditorView, input: HTMLInputElement): void {
     });
 }
 
+/**
+ * Whether the editor would accept an edit at `pos`. Change filters refuse
+ * some (read-only query results), and a TickTick task shouldn't be completed
+ * when its line can't then be marked done.
+ */
+function canEdit(view: EditorView, pos: number): boolean {
+  return !view.state.update({ changes: { from: pos, to: pos + 1, insert: 'x' } }).changes.empty;
+}
+
 /** Click handler for the checkbox widgets. Uses mousedown (like org links)
  * to act before CodeMirror moves the cursor and unfolds the widget. */
 export const checkboxClickHandler = EditorView.domEventHandlers({
   mousedown(event: MouseEvent, view: EditorView) {
     const input = (event.target as HTMLElement).closest('.tt-checkbox') as HTMLInputElement | null;
-    if (!input || input.disabled) return false;
+    if (!input || input.disabled || !canEdit(view, view.posAtDOM(input))) return false;
     event.preventDefault();
     event.stopPropagation();
     if (input.dataset.taskId) completeTicktickTask(view, input);

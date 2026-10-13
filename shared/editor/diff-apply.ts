@@ -1,8 +1,15 @@
 // Replacing editor text without losing the cursor, folds, or keystrokes typed
 // while a request was in flight.
 
-import { ChangeSet, type ChangeSpec } from '@codemirror/state';
+import { ChangeSet, Transaction, type ChangeSpec } from '@codemirror/state';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
+
+/**
+ * Marks text that comes from the server rather than from typing: it may
+ * rewrite read-only regions, and undo leaves it alone, so Ctrl-Z only ever
+ * takes back the user's own edits (mapped over whatever the server changed).
+ */
+export const serverText = [Transaction.remote.of(true), Transaction.addToHistory.of(false)];
 
 export interface TextChange {
   from: number;
@@ -116,6 +123,6 @@ export class ViewAdapter implements DocAdapter {
     const change = minimalChange(checkpoint.text, text);
     if (!change) return;
     const changes: ChangeSpec = ChangeSet.of([change], checkpoint.text.length).map(checkpoint.since);
-    view.dispatch({ changes });
+    view.dispatch({ changes, annotations: serverText });
   }
 }

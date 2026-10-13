@@ -117,7 +117,7 @@ function openOrgLinkTarget(
     if (resolved) {
       event.preventDefault();
       event.stopPropagation();
-      navigateTo(resolved.path, resolved.line);
+      navigateTo(resolved.path, resolved.line, resolved.fragment);
       return true;
     }
     return false;

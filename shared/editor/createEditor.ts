@@ -13,12 +13,16 @@ import { mdImageField } from './md-images';
 import { createMdLinkClickHandler } from './md-links';
 import { checkboxField, checkboxClickHandler } from './org-checkboxes';
 import { yamlFrontmatter } from './md-frontmatter';
+import { headingLine } from './md-structure';
+import { queryBlocks, type QueryBlockHost } from './query-blocks';
+import { serverText } from './diff-apply';
 
 /** Create and mount a CodeMirror editor for the given file. */
 export function createEditor(
   container: HTMLElement,
   filepath: string,
   onDocChanged: (update: ViewUpdate) => void,
+  host: QueryBlockHost,
 ): EditorView {
   const isOrg = filepath.endsWith('.org');
   // GFM base: task lists, tables and strikethrough, and Enter continues "- [ ] ".
@@ -81,7 +85,7 @@ export function createEditor(
   } else {
     // Markdown gets the same inline images and click-through links org has.
     // Link syntax is readable as-is, so nothing is folded.
-    extensions.push(mdImageField, createMdLinkClickHandler(filepath));
+    extensions.push(mdImageField, createMdLinkClickHandler(filepath), queryBlocks(filepath, host));
   }
 
   const view = new EditorView({
@@ -132,27 +136,39 @@ function keyboardOverlap(): number {
   return Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
 }
 
-/** Set editor content and optionally fold property drawers / scroll to line. */
+/** Set editor content and optionally fold property drawers / scroll to a line or heading anchor. */
 export function setEditorContent(
   view: EditorView,
   content: string,
   filepath: string,
   scrollToLine?: number | null,
+  fragment?: string | null,
 ): void {
   view.dispatch({
     changes: { from: 0, to: 0, insert: content },
+    annotations: serverText,
   });
 
   if (filepath.endsWith('.org')) {
     setTimeout(() => autoFoldPropertyDrawers(view), 50);
   }
 
-  if (scrollToLine != null && scrollToLine >= 1 && scrollToLine <= view.state.doc.lines) {
-    setTimeout(() => {
-      const line = view.state.doc.line(scrollToLine);
-      view.dispatch({
-        effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
-      });
-    }, 100);
+  if (scrollToLine != null || fragment) {
+    setTimeout(() => scrollToTarget(view, scrollToLine ?? null, fragment ?? null), 100);
   }
+}
+
+/** Scroll to the heading whose anchor is `fragment`, else to `line`, else to the top. */
+export function scrollToTarget(view: EditorView, line: number | null, fragment: string | null): void {
+  const doc = view.state.doc;
+  const heading = fragment ? headingLine(doc, fragment) : null;
+  let pos = 0;
+  let y: 'start' | 'center' = 'start';
+  if (heading) {
+    pos = doc.line(heading).from;
+  } else if (line != null && line >= 1 && line <= doc.lines) {
+    pos = doc.line(line).from;
+    y = 'center';
+  }
+  view.dispatch({ effects: EditorView.scrollIntoView(pos, { y }) });
 }

@@ -1,16 +1,24 @@
 import { STORAGE_KEYS } from './types';
 
+export interface LinkTarget {
+  /** Prefixed note path, e.g. "org:pages/x.md". */
+  path: string;
+  line: number | null;
+  /** A heading anchor; see headingLine in md-structure.ts. */
+  fragment: string | null;
+}
+
 /**
- * Resolve a relative link against the current prefixed path
- * ("org:journals/x.org" + "../y.md" -> "org:y.md"). Absolute targets can't be
- * mapped into the org:/logseq: namespaces, so they're skipped. A numeric
- * ::suffix or #Lnn becomes a target line; other fragments are dropped.
+ * Resolve a relative link against the current prefixed path:
+ * "org:journals/x.md" + "../pages/Long%20Now.md#setup" gives the path
+ * "org:pages/Long Now.md" and the fragment "setup". Path segments and the
+ * fragment are percent-decoded, a numeric ::suffix becomes the target line,
+ * and a bare "#fragment" stays in the current note. Absolute targets can't be
+ * mapped into the org:/logseq: namespaces, so they're skipped.
  */
-export function resolveRelativePath(
-  rel: string,
-  currentFilePath: string,
-): { path: string; line: number | null } | null {
+export function resolveRelativePath(rel: string, currentFilePath: string): LinkTarget | null {
   let line: number | null = null;
+  let fragment: string | null = null;
 
   const sep = rel.indexOf('::');
   if (sep >= 0) {
@@ -19,14 +27,18 @@ export function resolveRelativePath(
     if (/^\d+$/.test(suffix)) line = parseInt(suffix, 10);
   }
   const hash = rel.indexOf('#');
-  if (hash >= 0) rel = rel.slice(0, hash);
+  if (hash >= 0) {
+    fragment = decode(rel.slice(hash + 1)) || null;
+    rel = rel.slice(0, hash);
+  }
 
   const colon = currentFilePath.indexOf(':');
-  if (!rel || rel.startsWith('/') || colon < 0) return null;
+  if (rel.startsWith('/') || colon < 0) return null;
+  if (!rel) return fragment || line ? { path: currentFilePath, line, fragment } : null;
 
   const prefix = currentFilePath.slice(0, colon);
   const parts = currentFilePath.slice(colon + 1).split('/').slice(0, -1);
-  for (const seg of rel.split('/')) {
+  for (const seg of rel.split('/').map(decode)) {
     if (seg === '' || seg === '.') continue;
     if (seg === '..') {
       if (parts.length === 0) return null; // escapes the prefix root
@@ -35,13 +47,22 @@ export function resolveRelativePath(
       parts.push(seg);
     }
   }
-  return { path: `${prefix}:${parts.join('/')}`, line };
+  return { path: `${prefix}:${parts.join('/')}`, line, fragment };
 }
 
-/** Ask the host app to open a note, by prefixed path. */
-export function navigateTo(path: string, line: number | null): void {
+/** Percent-decode, keeping text with a malformed escape as written. */
+function decode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+/** Ask the host app to open a note, by prefixed path, at a line or heading anchor. */
+export function navigateTo(path: string, line: number | null, fragment: string | null = null): void {
   window.dispatchEvent(
-    new CustomEvent('editor:navigate', { detail: { path, line } })
+    new CustomEvent('editor:navigate', { detail: { path, line, fragment } })
   );
 }
 

@@ -94,3 +94,20 @@ def test_temp_files_are_ignored(watched):
     (root / "note.org~").write_text("backup")
 
     assert next_event(client, timeout=1.0) is None
+
+
+def test_a_failing_listener_affects_neither_clients_nor_other_listeners():
+    manager = SSEEventManager()
+    client = manager.add_client()
+    seen = []
+
+    def broken(event_type, data):
+        raise RuntimeError("listener bug")
+
+    manager.add_listener(broken)
+    manager.add_listener(lambda event_type, data: seen.append((event_type, data["file"])))
+    manager.broadcast("file_changed", {"file": "org:a.md"})
+    manager.broadcast("file_deleted", {"file": "org:b.md"})
+
+    assert seen == [("file_changed", "org:a.md"), ("file_deleted", "org:b.md")]
+    assert [client.get_nowait()["type"] for _ in range(2)] == ["file_changed", "file_deleted"]

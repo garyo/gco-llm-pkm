@@ -529,9 +529,37 @@ except Exception as e:
 
 # Initialize file editor
 from pkm_bridge.file_editor import FileEditor
+from pkm_bridge.queries import query_result_lines
+from pkm_bridge.queries.refresher import (
+    QueryRefresher,
+    auto_refresh_enabled,
+    handle_preview,
+    handle_refresh,
+)
 from pkm_bridge.save_api import handle_merge, handle_save
 
 file_editor = FileEditor(logger, config.org_dir, config.logseq_dir)
+
+# Query blocks are refreshed on request (/api/queries/*) and, when enabled, automatically:
+# after notes change, shortly after startup and nightly. The MCP server never refreshes them.
+query_refresher = QueryRefresher(file_editor, config.timezone)
+if not config.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    if auto_refresh_enabled(config.debug):
+        query_refresher.start(event_manager)
+        embedding_scheduler.add_job(
+            func=query_refresher.run_pass,
+            trigger="cron",
+            hour=3,
+            minute=30,
+            timezone=config.timezone,
+            id="query_refresh",
+            name="Query block refresh (nightly)",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(f"Automatic query refresh on (nightly pass at 3:30 {config.timezone})")
+    else:
+        logger.info("Automatic query refresh off (QUERY_REFRESH=on turns it on)")
 
 # Initialize history manager for conversation truncation
 from pkm_bridge.history_manager import (
@@ -2067,6 +2095,30 @@ def merge_file(filepath):
 
 
 # -------------------------
+# Query Block Endpoints
+# -------------------------
+
+
+@app.route("/api/queries/refresh", methods=["POST"])
+@require_auth
+@limiter.limit("30 per minute")
+def refresh_queries():
+    """Refresh the query blocks in one note, body {"path": "org:…"}, or in every note when
+    no path is given. Works whether or not automatic refresh is on."""
+    body, status = handle_refresh(query_refresher, request.get_json(silent=True))
+    return jsonify(body), status
+
+
+@app.route("/api/queries/preview", methods=["POST"])
+@require_auth
+@limiter.limit("60 per minute")
+def preview_query():
+    """The results a query would get in a note, without writing: body {"query", "path"}."""
+    body, status = handle_preview(query_refresher, request.get_json(silent=True))
+    return jsonify(body), status
+
+
+# -------------------------
 # Checkbox Toggle Endpoint
 # -------------------------
 
@@ -2135,6 +2187,9 @@ def toggle_checkbox():
             file_data = file_editor.read_file(file_path, max_chars=None)
             content = file_data["content"]
             lines = content.split("\n")
+            # Query results are copies the server regenerates, so never a toggle's target.
+            copied = query_result_lines(content)
+            searchable = ["" if i in copied else line for i, line in enumerate(lines)]
 
             # Search for matching checkbox line, starting from line_hint
             # Line hints are 1-indexed
@@ -2182,19 +2237,19 @@ def toggle_checkbox():
                 """Search for checkbox, optionally requiring text match."""
                 # 1. Check exact line_hint first
                 if 0 <= hint_idx < len(lines):
-                    if is_checkbox_line(lines[hint_idx], checked):
-                        if not match_text or text_matches(lines[hint_idx], item_text):
+                    if is_checkbox_line(searchable[hint_idx], checked):
+                        if not match_text or text_matches(searchable[hint_idx], item_text):
                             return hint_idx
 
                 # 2. Expand search +/- 10 lines from hint
                 for offset in range(1, 11):
                     for idx in [hint_idx + offset, hint_idx - offset]:
-                        if 0 <= idx < len(lines) and is_checkbox_line(lines[idx], checked):
-                            if not match_text or text_matches(lines[idx], item_text):
+                        if 0 <= idx < len(lines) and is_checkbox_line(searchable[idx], checked):
+                            if not match_text or text_matches(searchable[idx], item_text):
                                 return idx
 
                 # 3. Full file scan
-                for idx, line in enumerate(lines):
+                for idx, line in enumerate(searchable):
                     if is_checkbox_line(line, checked):
                         if not match_text or text_matches(line, item_text):
                             return idx
@@ -2223,13 +2278,21 @@ def toggle_checkbox():
                 ]:
                     if (
                         0 <= idx < len(lines)
-                        and is_already_done(lines[idx], checked)
-                        and text_matches(lines[idx], item_text)
+                        and is_already_done(searchable[idx], checked)
+                        and text_matches(searchable[idx], item_text)
                     ):
                         logger.info(
                             f"Checkbox already in desired state at line {idx+1} in {file_path}"
                         )
                         return jsonify({"status": "ok"})
+
+                if item_text and any(text_matches(lines[i], item_text) for i in copied):
+                    return jsonify(
+                        {
+                            "error": "That item is a copy in a query block's results; "
+                            "check it off in the note it came from"
+                        }
+                    ), 409
 
                 # Truly not found
                 start = max(0, hint_idx - 3)

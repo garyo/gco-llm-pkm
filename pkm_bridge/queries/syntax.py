@@ -4,8 +4,13 @@ Egypt                a heading word, or a #Egypt tag in the text
 text:Egypt           the word anywhere, plain mentions included
 heading:Egypt        headings only
 "Long Now"           a phrase
-a b, a OR b, -a, ( )  and, or (binds tighter), not, grouping
-in:journals|pages|all, after:/before:YYYY-MM-DD, last:90d, limit:N, show:full|titles
+a b, a AND b         both
+a OR b               either; binds tighter than AND
+-a, NOT a            not
+( )                  grouping
+is:todo|done         task items instead of sections
+in:journals|pages|all, after:/before: (YYYY-MM-DD, or 30d for 30 days ago), last:90d,
+limit:N, sort:newest|oldest, show:full|titles|list
 """
 
 from __future__ import annotations
@@ -24,10 +29,11 @@ HEADING_STOP_WORDS = frozenset(
 
 _TOKEN_RE = re.compile(r'\s*(?:(?P<paren>[()])|(?P<word>-?(?:[^\s()"]*"[^"]*"?|[^\s()"]+)))')
 _FIELD_RE = re.compile(r"^(?P<name>[a-z]+):(?P<value>.+)$")
-_LAST_RE = re.compile(r"^(\d+)([dwmy])$")
-_LAST_UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
+_AGO_RE = re.compile(r"^(\d+)([dwmy])$")
+_AGO_UNIT_DAYS = {"d": 1, "w": 7, "m": 30, "y": 365}
 _TERM_FIELDS = ("text", "heading")
-_OPTION_FIELDS = ("in", "after", "before", "last", "limit", "show")
+_OPTION_FIELDS = ("in", "after", "before", "last", "limit", "show", "sort", "is")
+_OPERATORS = ("OR", "AND")
 
 
 class QuerySyntaxError(ValueError):
@@ -69,21 +75,25 @@ class Query:
     scope: str = "journals"
     limit: int = DEFAULT_LIMIT
     show: str = "full"
-    after: date | None = None
-    before: date | None = None
+    sort: str = "newest"
+    task: str | None = None  # "todo" or "done": task items instead of sections
+    after: date | timedelta | None = None  # a timedelta counts back from today
+    before: date | timedelta | None = None
     last: timedelta | None = None
 
     def date_range(self, today: date) -> tuple[date | None, date | None]:
-        """Inclusive first and exclusive last journal date, either possibly open."""
-        first = self.after
-        if self.last is not None:
-            since = today - self.last
-            first = max(first, since) if first else since
-        return first, self.before
+        """Inclusive first and exclusive last date, either possibly open."""
+        firsts = [_resolve(self.after, today), _resolve(self.last, today)]
+        first = max((d for d in firsts if d), default=None)
+        return first, _resolve(self.before, today)
 
     @property
     def dated(self) -> bool:
         return any(x is not None for x in (self.after, self.before, self.last))
+
+
+def _resolve(when: date | timedelta | None, today: date) -> date | None:
+    return today - when if isinstance(when, timedelta) else when
 
 
 def word_pattern(text: str) -> re.Pattern:
@@ -102,8 +112,10 @@ def parse_query(source: str) -> Query:
             _set_option(query, m.group("name"), m.group("value").strip('"'))
         else:
             terms.append(tok)
-    if not terms and not query.dated and query.scope == "journals":
-        raise QuerySyntaxError("empty query")
+    if not terms and not query.dated and not query.task and query.scope == "journals":
+        raise QuerySyntaxError("empty query: give a word, or an option such as is:todo or last:7d")
+    if query.show == "list" and not query.task:
+        raise QuerySyntaxError("show:list works with is:todo or is:done")
     if terms:
         parser = _Parser(terms)
         query.expr = parser.sequence()
@@ -118,28 +130,44 @@ def _set_option(query: Query, name: str, value: str) -> None:
             raise QuerySyntaxError(f"in: takes journals, pages or all, not {value!r}")
         query.scope = value
     elif name == "show":
-        if value not in ("full", "titles"):
-            raise QuerySyntaxError(f"show: takes full or titles, not {value!r}")
+        if value not in ("full", "titles", "list"):
+            raise QuerySyntaxError(f"show: takes full, titles or list, not {value!r}")
         query.show = value
+    elif name == "sort":
+        if value not in ("newest", "oldest"):
+            raise QuerySyntaxError(f"sort: takes newest or oldest, not {value!r}")
+        query.sort = value
+    elif name == "is":
+        if value not in ("todo", "done"):
+            raise QuerySyntaxError(f"is: takes todo or done, not {value!r}")
+        query.task = value
     elif name == "limit":
         if not value.isdigit() or int(value) < 1:
             raise QuerySyntaxError(f"limit: takes a positive number, not {value!r}")
         query.limit = int(value)
     elif name == "last":
-        m = _LAST_RE.match(value)
-        if not m:
+        if (ago := _ago(value)) is None:
             raise QuerySyntaxError(f"last: takes a count and d, w, m or y, like 90d, not {value!r}")
-        query.last = timedelta(days=int(m.group(1)) * _LAST_UNIT_DAYS[m.group(2)])
+        query.last = ago
     else:  # after, before
+        ago = _ago(value)
         try:
-            setattr(query, name, date.fromisoformat(value))
+            setattr(query, name, ago if ago is not None else date.fromisoformat(value))
         except ValueError:
-            raise QuerySyntaxError(f"{name}: takes a date like 2026-01-31, not {value!r}") from None
+            raise QuerySyntaxError(
+                f"{name}: takes a date like 2026-01-31 or a time ago like 30d, not {value!r}"
+            ) from None
+
+
+def _ago(value: str) -> timedelta | None:
+    """`90d`, `2w`, `3m` or `1y` as a time span, or None."""
+    m = _AGO_RE.match(value)
+    return timedelta(days=int(m.group(1)) * _AGO_UNIT_DAYS[m.group(2)]) if m else None
 
 
 class _Parser:
-    """sequence := disjunction*;  disjunction := unary (OR unary)*;
-    unary := '-' unary | '(' sequence ')' | term."""
+    """sequence := disjunction ([AND] disjunction)*;  disjunction := unary (OR unary)*;
+    unary := ('-' | NOT) unary | '(' sequence ')' | term."""
 
     def __init__(self, tokens: list[str]):
         self.tokens = tokens
@@ -156,6 +184,11 @@ class _Parser:
     def sequence(self) -> Node:
         args = []
         while self.peek() not in (None, ")"):
+            if self.peek() == "AND":
+                self.take()
+                if not args or self.peek() in (None, ")", *_OPERATORS):
+                    raise QuerySyntaxError("AND needs a term on each side")
+                continue
             args.append(self.disjunction())
         if not args:
             raise QuerySyntaxError("empty group")
@@ -165,15 +198,19 @@ class _Parser:
         args = [self.unary()]
         while self.peek() == "OR":
             self.take()
-            if self.peek() in (None, ")", "OR"):
+            if self.peek() in (None, ")", *_OPERATORS):
                 raise QuerySyntaxError("OR needs a term on each side")
             args.append(self.unary())
         return args[0] if len(args) == 1 else Or(tuple(args))
 
     def unary(self) -> Node:
         tok = self.take()
-        if tok == "OR":
-            raise QuerySyntaxError("OR needs a term on each side")
+        if tok in _OPERATORS:
+            raise QuerySyntaxError(f"{tok} needs a term on each side")
+        if tok == "NOT":
+            if self.peek() in (None, ")", *_OPERATORS):
+                raise QuerySyntaxError("NOT needs a term after it")
+            return Not(self.unary())
         if tok == ")":
             raise QuerySyntaxError("unbalanced ')'")
         if tok == "(":

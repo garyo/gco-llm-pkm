@@ -16,7 +16,7 @@ from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
-from pkm_bridge.queries import Corpus, preview, refresh_text
+from pkm_bridge.queries import Corpus, TaskError, check_task, locate_task, preview, refresh_text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,6 +40,20 @@ def main(argv: list[str] | None = None) -> int:
         "refresh", parents=[common], help="rewrite notes in place (all with queries if none given)"
     )
     files_cmd.add_argument("paths", nargs="*", help="notes, relative to --root")
+    locate_cmd = commands.add_parser(
+        "locate-task", parents=[common], help="print which note a copied task on stdin came from"
+    )
+    check_cmd = commands.add_parser(
+        "check-task",
+        parents=[common],
+        help='tick or untick a copied task and its source; stdin {"page": …, "source": …|null}',
+    )
+    for cmd in (locate_cmd, check_cmd):
+        cmd.add_argument("--path", required=True, help="the page's path under --root")
+        cmd.add_argument("--line", type=int, required=True, help="the copied task's line (1-based)")
+    state = check_cmd.add_mutually_exclusive_group(required=True)
+    state.add_argument("--check", dest="checked", action="store_true")
+    state.add_argument("--uncheck", dest="checked", action="store_false")
     args = parser.parse_args(argv)
 
     root = args.root.expanduser()
@@ -56,6 +70,10 @@ def main(argv: list[str] | None = None) -> int:
             json.dump(report, sys.stdout, ensure_ascii=False)
         else:
             sys.stdout.write(result.text)
+        return 0
+
+    if args.command in ("locate-task", "check-task"):
+        json.dump(_task_command(args, root, today), sys.stdout, ensure_ascii=False)
         return 0
 
     if args.command == "preview":
@@ -79,6 +97,32 @@ def main(argv: list[str] | None = None) -> int:
         counts = ", ".join(str(b.error or b.entries) for b in result.blocks)
         print(f"{rel}: {'written' if result.changed else 'unchanged'} ({counts})")
     return 1 if failed else 0
+
+
+def _task_command(args: argparse.Namespace, root: Path, today: date) -> dict:
+    """The JSON answer to locate-task or check-task; an "error" key when it can't be done."""
+    page_path, line = _relative(root, args.path), args.line - 1
+    try:
+        if args.command == "locate-task":
+            return {"source_path": locate_task(sys.stdin.read(), page_path, line).source_path}
+        request = json.load(sys.stdin)
+        page = request["page"]
+        source = request.get("source")
+        if source is None:
+            source_path = locate_task(page, page_path, line).source_path
+            source = (root / source_path).read_text(encoding="utf-8")
+        change = check_task(page, page_path, line, source, args.checked, today)
+    except TaskError as e:
+        return {"error": str(e)}
+    except OSError as e:
+        return {"error": f"can't read the source note: {e}"}
+    return {
+        "page": change.page_text,
+        "source_path": change.source_path,
+        "source": change.source_text,
+        "source_line": change.source_line + 1,
+        "item": change.item,
+    }
 
 
 def _relative(root: Path, path: str) -> str:

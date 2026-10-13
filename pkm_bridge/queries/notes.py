@@ -1,5 +1,6 @@
 """A Markdown note as query blocks see it: frontmatter, fenced code, headings, sections,
-blocks of text, and the machine-maintained regions that are never matched or copied."""
+blocks of text, task items, and the machine-maintained regions that are never matched or
+copied."""
 
 from __future__ import annotations
 
@@ -26,6 +27,13 @@ _SLUG_DELETE_RE = re.compile(r"[\[\]!\"#$%&'()*+,./:;<=>?@\\^`{|}~]")
 _LINK_TARGET_RE = re.compile(r"\]\([^)]*\)")
 _URL_RE = re.compile(r"<?https?://[^\s>)]+>?")
 _TAG_RE = re.compile(r"(?<!\w)#(\w[\w-]*)")
+
+TASK_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?:[-*+]|[0-9]{1,9}[.)])[ \t]+\[(?P<state>[ xX])\](?=[ \t]|$)"
+)
+# A completion stamp ends a task's first line; in show:list copies a source link follows it.
+_STAMP_RE = re.compile(r"[ \t]+✅[ \t]*(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})(?=[ \t]*$)")
+_ANY_STAMP_RE = re.compile(r"[ \t]+✅[ \t]*[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 # Sections written by scheduled jobs rather than by the user.
 MACHINE_HEADING_RE = re.compile(r"^(heartbeat|ticktick review)\b", re.I)
@@ -54,6 +62,18 @@ class Block:
     tags: frozenset[str]
 
 
+@dataclass(frozen=True)
+class Task:
+    first: int  # the task's line
+    end: int  # end of the task, its continuation lines and sub-items included
+    indent: int
+    done: bool
+    stamp: date | None  # completion date, from its ✅ stamp
+    key: str  # what identifies it between a copy and its source; see task_key
+    text: str  # plain text of the whole task, for matching
+    tags: frozenset[str]
+
+
 @dataclass
 class Section:
     level: int  # 0 for the text before the first heading
@@ -64,6 +84,7 @@ class Section:
     slug: str
     machine: bool
     blocks: tuple[Block, ...] = ()
+    tasks: tuple[Task, ...] = ()  # in the section's own text, nested ones included
 
     @property
     def path_text(self) -> str:
@@ -209,6 +230,51 @@ def tags(text: str) -> frozenset[str]:
     return frozenset(t.lower() for t in _TAG_RE.findall(plain_text(text)))
 
 
+def set_task_state(line: str, checked: bool, today: date) -> str:
+    """Task `line` checked, with today's ✅ stamp, or open, without one."""
+    return with_task_state(line, checked, today if checked else None)
+
+
+def with_task_state(line: str, checked: bool, stamp: date | None) -> str:
+    """Task `line` checked or open, with a ✅ stamp dated `stamp`, or none if that's None."""
+    m = TASK_RE.match(line)
+    if not m:
+        raise ValueError(f"not a task line: {line!r}")
+    i = m.start("state")
+    line = _STAMP_RE.sub("", line[:i] + ("x" if checked else " ") + line[i + 1 :])
+    return line.rstrip(" \t") + f" ✅ {stamp.isoformat()}" if stamp else line
+
+
+def task_state(line: str) -> tuple[bool, date | None]:
+    """Whether task `line` is checked, and the date of its ✅ stamp, if it has a valid one."""
+    m = TASK_RE.match(line)
+    if not m:
+        raise ValueError(f"not a task line: {line!r}")
+    stamp = _STAMP_RE.search(line)
+    try:
+        when = date.fromisoformat(stamp.group("date")) if stamp else None
+    except ValueError:
+        when = None
+    return m.group("state") != " ", when
+
+
+def task_key(line: str) -> str:
+    """What identifies a task line between a copy and its source: its text after the
+    checkbox, without a stamp, link targets or URLs, whitespace collapsed."""
+    m = TASK_RE.match(line)
+    rest = _STAMP_RE.sub("", line[m.end() :] if m else line)
+    return " ".join(plain_text(rest).split())
+
+
+def normalize_task_line(line: str) -> str:
+    """A task line as the results hash sees it: open, without stamps."""
+    m = TASK_RE.match(line)
+    if not m:
+        return line
+    i = m.start("state")
+    return _ANY_STAMP_RE.sub("", line[:i] + " " + line[i + 1 :])
+
+
 def indent(line: str) -> int:
     expanded = line.expandtabs(4)
     return len(expanded) - len(expanded.lstrip())
@@ -244,6 +310,42 @@ def split_blocks(lines: list[str], start: int, end: int) -> list[tuple[int, int,
 
 def _interrupts_paragraph(line: str) -> bool:
     return bool(FENCE_RE.match(line) or (_LIST_ITEM_RE.match(line) and indent(line) < 2))
+
+
+def _tasks(lines: list[str], start: int, end: int) -> tuple[Task, ...]:
+    """Every task item in lines[start:end] outside fenced code, nested ones included."""
+    tasks = []
+    for i in outside_fences(lines, start, end):
+        key = task_key(lines[i]) if TASK_RE.match(lines[i]) else ""
+        if not key:  # not a task, or an empty checkbox
+            continue
+        depth = indent(lines[i])
+        task_end = _task_end(lines, i, end, depth)
+        text = "\n".join(lines[i:task_end])
+        done, done_on = task_state(lines[i])
+        tasks.append(Task(i, task_end, depth, done, done_on, key, plain_text(text), tags(text)))
+    return tuple(tasks)
+
+
+def _task_end(lines: list[str], i: int, end: int, depth: int) -> int:
+    """End of the task at line i: the lines indented deeper than it, blank lines between
+    them included. Unlike a paragraph's lazy continuation, a line no deeper than the task
+    ends it: a note's next line after a task is rarely more of that task."""
+    j = i + 1
+    while j < end:
+        if lines[j].strip():
+            if indent(lines[j]) <= depth:
+                return j
+            j += 1
+            continue
+        k = j + 1
+        while k < end and not lines[k].strip():
+            k += 1
+        if k < end and indent(lines[k]) > depth:
+            j = k
+            continue
+        return j
+    return end
 
 
 def _fence_end(lines: list[str], i: int, end: int, fence: str) -> int:
@@ -310,6 +412,7 @@ def parse_note(rel_path: str, text: str) -> Note:
         s.blocks = tuple(
             _block(lines, *span) for span in split_blocks(lines, s.start + 1, s.body_end)
         )
+        s.tasks = _tasks(lines, s.start + 1, s.body_end)
 
     m = _JOURNAL_RE.match(rel_path)
     note_date = date(int(m[1]), int(m[2]), int(m[3])) if m else None

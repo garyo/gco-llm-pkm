@@ -31,8 +31,10 @@ NOTES
   source. Never edit inside one; edit the source. To add a view to a page, write just the
   query line, usually under its own heading; the server fills it in within about 20 s.
   Delete the whole block to remove one. Syntax: words match headings and #tags; text:word
-  also plain mentions, heading:word only headings; "phrases", OR, -word, (groups);
-  in:pages|all, last:90d, after:/before:YYYY-MM-DD, limit:N (default 50), show:titles.
+  also plain mentions, heading:word only headings; "phrases", AND, OR, -word or NOT word,
+  (groups); is:todo|done for open|checked task items instead of sections; in:pages|all,
+  last:90d, after:/before:YYYY-MM-DD or 30d (days ago), sort:oldest, limit:N (default 50),
+  show:titles, show:list (task items as one flat checklist).
 - `## Heartbeat` and `## TickTick Review` sections are machine-written by scheduled tasks;
   don't treat them as Gary's own notes when looking for what he wrote.
 
@@ -47,6 +49,7 @@ ADDING AND CHANGING NOTES
 - Write notes with shell commands only as a last resort (e.g. one change across many
   files): they bypass the merge with concurrent edits. Never rewrite a file from memory.
 - Significant TODOs go in TickTick; small same-day ones as `- [ ]` in today's journal.
+- Check off a task as `- [x] Item ✅ YYYY-MM-DD` (today); when unchecking, remove the stamp.
 
 SEARCHING
 - semantic_search: meaning plus keywords; best for vague or conceptual questions.

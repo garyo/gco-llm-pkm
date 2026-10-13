@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # dependencies = [
-#   "anthropic>=0.39.0",
+#   "anthropic>=0.99,<1.0",
 #   "flask>=3.0.0",
 #   "python-dotenv>=1.0.0",
 #   "pyyaml>=6.0.2",
@@ -23,6 +23,7 @@
 #   "apscheduler>=3.10.0",
 #   "croniter>=1.3.0",
 #   "litellm>=1.50.0",
+#   "merge3>=0.0.16",
 # ]
 # ///
 """

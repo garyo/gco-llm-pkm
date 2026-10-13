@@ -282,12 +282,23 @@ import EditorInterface from '../components/EditorInterface.astro';
   // Pre-process markdown text to convert pkm-file links before markdown-it rendering.
   // Rewrites [desc](pkm-file:TYPE:PATH) to [desc](#pkm-file:TYPE:PATH) so markdown-it
   // treats it as a fragment link instead of an external URL.
-  // Encodes the path portion so spaces don't break markdown-it's link parser.
+  // Encodes the path portion so spaces don't break markdown-it's link parser. Claude
+  // may already have percent-encoded it (a space as %20), so it is decoded first.
   function preprocessPkmFileLinks(text: string): string {
     return text.replace(
       /\[([^\]]+)\]\(pkm-file:([^:]+):([^)]+)\)/g,
-      (_match, desc, type, path) => `[${desc}](#pkm-file:${type}:${encodeURIComponent(path)})`
+      (_match, desc, type, path) =>
+        `[${desc}](#pkm-file:${type}:${encodeURIComponent(decodePath(path))})`
     );
+  }
+
+  /** Percent-decode `path`, keeping it as written if an escape is malformed. */
+  function decodePath(path: string): string {
+    try {
+      return decodeURIComponent(path);
+    } catch {
+      return path;
+    }
   }
 
   // Post-process HTML to make org-id links clickable

@@ -61,6 +61,10 @@ Then scan for opportunities, focusing on recently modified files
    specific notes that support it. Do NOT file generic advice, summaries of
    what he obviously knows, or observations without evidence in the notes.
 
+Text between `<!-- query: … -->` and `<!-- /query … -->` is a live copy of
+journal sections that the server regenerates: never anchor an edit in it, and
+don't treat it as duplicate content to clean up.
+
 File each proposal with propose_note_organization AS SOON as you have verified
 it (exact, unique anchors) — do not save them up for the end of the run, since
 your budget may cut the run short and unfiled proposals are lost. Each tool

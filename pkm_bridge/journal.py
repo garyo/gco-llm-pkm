@@ -9,6 +9,8 @@ import re
 import uuid
 from datetime import date
 
+from .queries import query_result_lines
+
 _HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 # Trailing block anchors (`^travel`) and inline #tags are not part of a heading's title.
@@ -39,16 +41,20 @@ def parse_heading(line: str) -> tuple[int, str] | None:
 
 
 def _heading_lines(lines: list[str]) -> list[tuple[int, int, str]]:
-    """(index, level, title) of every heading outside frontmatter and code fences."""
+    """(index, level, title) of every heading outside frontmatter, code fences and
+    query-block results, whose headings are copies of other notes' sections."""
     start = 0
     if lines and lines[0].strip() == "---":
         closing = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
         if closing is not None:
             start = closing + 1
 
+    copied = query_result_lines("\n".join(lines))
     headings = []
     in_fence = False
     for i in range(start, len(lines)):
+        if i in copied:
+            continue
         if _FENCE.match(lines[i]):
             in_fence = not in_fence
         elif not in_fence and (h := parse_heading(lines[i])):

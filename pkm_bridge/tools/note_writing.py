@@ -9,7 +9,7 @@ recorded in the version store the editor merges against.
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from ..anchored_edits import FIND_SCHEMA, AnchorError, apply_edits
+from ..anchored_edits import FIND_SCHEMA, AnchorError, QueryBlockError, apply_edits
 from ..file_editor import ConflictError, FileEditor
 from ..journal import append_to_section, journal_rel_path, journal_template
 from .base import BaseTool
@@ -181,6 +181,8 @@ class EditNoteTool(_NoteWriterBase):
             if content is not None:
                 return self._create(path, content)
             result = rewrite_note(self.editor, path, lambda text: apply_edits(text, edits))
+        except QueryBlockError as e:
+            return f"❌ No changes made to {path}:\n" + "\n".join(f"- {p}" for p in e.problems)
         except AnchorError as e:
             problems = "\n".join(f"- {p}" for p in e.problems)
             return (

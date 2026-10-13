@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Callable, Dict, Optional, Set, Tuple
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -25,6 +25,15 @@ class SSEEventManager:
         self.client_sessions: Dict[queue.Queue, Optional[str]] = {}  # Map client to session_id
         self.lock = threading.Lock()
         self.file_watcher: Optional["FileWatcher"] = None
+        self.listeners: Tuple[Callable[[str, Dict], None], ...] = ()
+
+    def add_listener(self, listener: Callable[[str, Dict], None]):
+        """Also pass every broadcast to listener(event_type, data), in the broadcasting thread.
+
+        Unlike a client, a listener is never dropped, so it must return quickly.
+        """
+        with self.lock:
+            self.listeners = (*self.listeners, listener)
 
     def add_client(self, session_id: Optional[str] = None) -> queue.Queue:
         """Add a new SSE client and return its message queue.
@@ -77,6 +86,12 @@ class SSEEventManager:
 
             # Clean up disconnected clients
             self.clients -= disconnected
+
+        for listener in self.listeners:
+            try:
+                listener(event_type, data)
+            except Exception:
+                logger.exception(f"Event listener failed on {event_type}")
 
     def broadcast_to_session(self, session_id: str, event_type: str, data: Dict):
         """Broadcast an event only to clients in a specific session.

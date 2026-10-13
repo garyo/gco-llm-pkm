@@ -2,7 +2,7 @@ import type { MarkdownConfig } from '@lezer/markdown';
 import { tags } from '@lezer/highlight';
 
 const FENCE_RE = /^(---|\.\.\.)\s*$/;
-const YAML_KEY_RE = /^[\w-]+\s*:/;
+export const YAML_KEY_RE = /^[\w-]+\s*:/;
 
 /**
  * A YAML front-matter block (`---` / `key: value` lines / `---`) at the very

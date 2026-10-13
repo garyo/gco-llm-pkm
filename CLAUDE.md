@@ -97,6 +97,7 @@ and runs `docker compose up -d --build` with a 30s log tail.
 | `pkm_bridge/tools/` | Tool registry + implementations (shell, search, calendar, etc.) |
 | `pkm_bridge/embeddings/` | Voyage AI embeddings, incremental pipeline, chunking |
 | `pkm_bridge/self_improvement/` | Self-improvement agent (daily analysis, skills/rules management) |
+| `pkm_bridge/queries/` | Query blocks: live journal views inside pages (stdlib-only engine, also run by Emacs; see `doc/query-blocks-design.md`) |
 | `mcp_server/` | MCP protocol server for Claude.ai integration (port 8001) |
 | `config/` | Settings validation, system prompts (custom app + MCP), user context |
 | `frontend/src/` | Astro pages, components, utils (custom app UI) |

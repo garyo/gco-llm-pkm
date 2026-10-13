@@ -1,15 +1,26 @@
 """Note-searching tool."""
 
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from ..note_paths import RG_NOTE_FILTER, is_journal, note_roots, recency
+from ..queries import query_result_lines
 from .base import BaseTool
 from .utils import run_command_with_error_handling
 
 # One file's worth of output: (sort key, prefixed path, rg lines for that file)
 _Hit = Tuple[tuple, str, str]
+# rg -n starts each line with its number: 'N:match' or 'N-context'
+_RG_NUMBER = re.compile(r"\d+")
+_RG_MATCH = re.compile(r"\d+:")
+
+
+def _line_index(rg_line: str) -> int:
+    """0-based index of the note line that a line of rg -n output shows, or -1."""
+    m = _RG_NUMBER.match(rg_line)
+    return int(m[0]) - 1 if m else -1
 
 
 class SearchNotesTool(BaseTool):
@@ -118,8 +129,10 @@ Directories:
             if returncode not in (0, 1) and not any(stderr.strip() in e for e in errors):
                 errors.append(f"⚠️ rg error (exit {returncode}) in {prefix}: {stderr.strip()}")
             for rel, body in self._parse(stdout, files_only):
-                key = (rank, not is_journal(rel), -recency(root / rel))
-                hits.append((key, f"{prefix}:{rel}", body))
+                body = self._drop_query_results(pattern, root / rel, body, files_only)
+                if body:
+                    key = (rank, not is_journal(rel), -recency(root / rel))
+                    hits.append((key, f"{prefix}:{rel}", body))
 
         hits.sort(key=lambda h: h[0])
         output = self._format(hits, files_only, limit)
@@ -131,6 +144,31 @@ Directories:
         if errors:
             output = "\n".join(errors) + ("\n\n" + output if output else "")
         return output or f"[No matches found for pattern '{pattern}']"
+
+    def _drop_query_results(self, pattern: str, path: Path, body: str, files_only: bool) -> str:
+        """`body` without the matches in query-block results, which copy other notes whose
+        own matches are listed already; "" if none is left."""
+        try:
+            copied = query_result_lines(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return body
+        if not copied:
+            return body
+
+        if files_only:
+            # -o puts each match on a numbered line of its own
+            stdout, _, _ = run_command_with_error_handling(
+                ["rg", "-i", "-n", "-o", "-e", pattern, str(path)], logger=self.logger
+            )
+            count = sum(_line_index(line) not in copied for line in stdout.splitlines())
+            return str(count) if count else ""
+
+        groups = []
+        for group in body.split("\n--\n"):
+            lines = [line for line in group.split("\n") if _line_index(line) not in copied]
+            if any(_RG_MATCH.match(line) for line in lines):
+                groups.append("\n".join(lines))
+        return "\n--\n".join(groups)
 
     @staticmethod
     def _parse(stdout: str, files_only: bool) -> List[Tuple[str, str]]:

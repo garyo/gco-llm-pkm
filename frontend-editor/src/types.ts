@@ -15,6 +15,7 @@ export interface EditorState {
   currentFile: string | null;
   allFiles: FileInfo[];
   pendingScrollLine: number | null;
+  pendingFragment: string | null;
   navHistory: { path: string; line?: number }[];
   journalDates: Map<string, { path: string; dir: string }>;
   calendarMonth: Date;

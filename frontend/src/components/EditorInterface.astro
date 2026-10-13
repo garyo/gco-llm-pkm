@@ -186,9 +186,8 @@
 </style>
 
 <script>
-  import { EditorView, type ViewUpdate } from '@codemirror/view';
-  import { createEditor } from '@pkm/editor/createEditor';
-  import { autoFoldPropertyDrawers } from '@pkm/editor/org-fold';
+  import type { EditorView, ViewUpdate } from '@codemirror/view';
+  import { createEditor, setEditorContent, scrollToTarget } from '@pkm/editor/createEditor';
   import { FileApi } from '@pkm/editor/file-api';
   import { DraftStore } from '@pkm/editor/draft-store';
   import { ViewAdapter } from '@pkm/editor/diff-apply';
@@ -198,8 +197,9 @@
   import { journalDateStr, journalPath, journalTemplate, findJournalForDate } from '@pkm/editor/journal';
 
 
-  // Pending scroll line for cross-component navigation
+  // Pending scroll target (line or heading anchor) for cross-component navigation
   let pendingScrollLine: number | null = null;
+  let pendingFragment: string | null = null;
 
   // Global singleton guard to prevent duplicate SSE connections
   const SSE_GLOBAL_KEY = '__sse_global_connection__';
@@ -243,6 +243,10 @@
     const entry = navHistory.pop();
     updateNavBackBtn();
     if (!entry) return;
+    if (entry.path === currentFile && editorView) {
+      scrollToTarget(editorView, entry.line ?? null, null);
+      return;
+    }
     pendingScrollLine = entry.line ?? null;
     loadFile(entry.path);
   }
@@ -566,6 +570,10 @@
     // Unsaved text is never lost on a switch: it is written if autosave is on,
     // and kept as a draft (restored on reopen) either way.
     const load = saver.beginLoad();
+    const scrollLine = pendingScrollLine;
+    const fragment = pendingFragment;
+    pendingScrollLine = null;
+    pendingFragment = null;
 
     try {
       updateStatus('Loading...');
@@ -582,38 +590,11 @@
       if (editorView) {
         editorView.destroy();
       }
-      editorView = createEditor(editorContainer, canonical, onDocChanged);
-
-      // Set content
-      if (editorView) {
-        editorView.dispatch({
-          changes: {
-            from: 0,
-            to: 0,
-            insert: data.content
-          }
-        });
-
-        // Auto-fold property drawers for .org files
-        if (canonical.endsWith('.org')) {
-          // Use setTimeout to ensure the document is fully parsed
-          setTimeout(() => autoFoldPropertyDrawers(editorView), 50);
-        }
-
-        // Scroll to pending line (from org-id navigation)
-        if (pendingScrollLine !== null && editorView) {
-          const targetLine = pendingScrollLine;
-          pendingScrollLine = null;
-          setTimeout(() => {
-            if (editorView && targetLine >= 1 && targetLine <= editorView.state.doc.lines) {
-              const line = editorView.state.doc.line(targetLine);
-              editorView.dispatch({
-                effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
-              });
-            }
-          }, 100);
-        }
-      }
+      editorView = createEditor(editorContainer, canonical, onDocChanged, {
+        onStatus: updateStatus,
+        save: () => saver.save(),
+      });
+      setEditorContent(editorView, data.content, canonical, scrollLine, fragment);
 
       currentFile = canonical;
 
@@ -875,12 +856,15 @@
   });
 
   window.addEventListener('editor:navigate', ((e: CustomEvent) => {
-    const { path, line } = e.detail || {};
+    const { path, line, fragment } = e.detail || {};
     if (!path) return;
     pushNavHistory();
-    if (line) {
-      pendingScrollLine = line;
+    if (path === currentFile && editorView) {
+      scrollToTarget(editorView, line ?? null, fragment ?? null);
+      return;
     }
+    pendingScrollLine = line || null;
+    pendingFragment = fragment || null;
     fileSelector.value = path;
     loadFile(path);
   }) as EventListener);

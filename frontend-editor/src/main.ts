@@ -4,7 +4,7 @@ import { debounce } from './utils';
 import { checkAuth, handleLogin, handle401, showLogin, showEditor, showAdmin } from './auth';
 import { initAdmin } from './admin/admin-page';
 import * as api from './api';
-import { createEditor, setEditorContent } from '@pkm/editor/createEditor';
+import { createEditor, setEditorContent, scrollToTarget } from '@pkm/editor/createEditor';
 import { FileApi } from '@pkm/editor/file-api';
 import { DraftStore } from '@pkm/editor/draft-store';
 import { ViewAdapter } from '@pkm/editor/diff-apply';
@@ -30,6 +30,7 @@ const state: AppState = {
   currentFile: null,
   allFiles: [],
   pendingScrollLine: null,
+  pendingFragment: null,
   navHistory: [],
   journalDates: new Map(),
   calendarMonth: new Date(),
@@ -143,6 +144,9 @@ async function loadFile(filepath: string): Promise<void> {
   // Unsaved text is never lost on a switch: it is written if autosave is on,
   // and kept as a draft (restored on reopen) either way.
   const load = saver.beginLoad();
+  const { pendingScrollLine, pendingFragment } = state;
+  state.pendingScrollLine = null;
+  state.pendingFragment = null;
 
   try {
     updateStatus('Loading...');
@@ -156,9 +160,11 @@ async function loadFile(filepath: string): Promise<void> {
 
     saver.dispose();
     if (state.editorView) state.editorView.destroy();
-    state.editorView = createEditor(editorContainer, canonical, onDocChanged);
-    setEditorContent(state.editorView, data.content, canonical, state.pendingScrollLine);
-    state.pendingScrollLine = null;
+    state.editorView = createEditor(editorContainer, canonical, onDocChanged, {
+      onStatus: updateStatus,
+      save: () => saver.save(),
+    });
+    setEditorContent(state.editorView, data.content, canonical, pendingScrollLine, pendingFragment);
     state.currentFile = canonical;
 
     const size = (data.size / 1024).toFixed(1);
@@ -257,16 +263,25 @@ function navBack(): void {
   const entry = state.navHistory.pop();
   updateNavBackBtn();
   if (!entry) return;
+  if (entry.path === state.currentFile && state.editorView) {
+    scrollToTarget(state.editorView, entry.line ?? null, null);
+    return;
+  }
   state.pendingScrollLine = entry.line ?? null;
   loadFile(entry.path);
 }
 
-// Listen for editor:navigate events from org-links
+// Listen for editor:navigate events from links in the editor
 window.addEventListener('editor:navigate', ((e: CustomEvent) => {
-  const { path, line } = e.detail || {};
+  const { path, line, fragment } = e.detail || {};
   if (!path) return;
   pushNavHistory();
-  if (line) state.pendingScrollLine = line;
+  if (path === state.currentFile && state.editorView) {
+    scrollToTarget(state.editorView, line ?? null, fragment ?? null);
+    return;
+  }
+  state.pendingScrollLine = line || null;
+  state.pendingFragment = fragment || null;
   fileSelector.value = path;
   loadFile(path);
 }) as EventListener);

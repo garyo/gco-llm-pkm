@@ -26,6 +26,13 @@ NOTES
   checkboxes and [text](path.md) links. A trailing `^anchor` on a heading is a link
   target, and `<!-- backlinks -->` blocks are machine-maintained; leave both alone.
   Logseq files are bullet outlines with TODO/DONE items instead of checkboxes.
+- Query blocks are live views: between `<!-- query: … -->` and `<!-- /query … -->` the
+  server keeps copies of matching journal sections, each under a heading linking to its
+  source. Never edit inside one; edit the source. To add a view to a page, write just the
+  query line, usually under its own heading; the server fills it in within about 20 s.
+  Delete the whole block to remove one. Syntax: words match headings and #tags; text:word
+  also plain mentions, heading:word only headings; "phrases", OR, -word, (groups);
+  in:pages|all, last:90d, after:/before:YYYY-MM-DD, limit:N (default 50), show:titles.
 - `## Heartbeat` and `## TickTick Review` sections are machine-written by scheduled tasks;
   don't treat them as Gary's own notes when looking for what he wrote.
 

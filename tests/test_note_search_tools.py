@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pytest
+import yaml
 
 from pkm_bridge.note_paths import display_path, recency, resolve_note_path
 from pkm_bridge.tools.base import BaseTool
@@ -41,6 +42,25 @@ def notes(tmp_path: Path) -> tuple[Path, Path]:
     _write(logseq / "DSS" / "journals" / "2023_09_26.md", "- haircut at work?\n")
     _write(logseq / "Personal" / "pages" / "Mario.md", "- barber, haircut\n")
     return org, logseq
+
+
+# Pages whose query blocks hold a copy of a journal entry that mentions a haircut
+COPY = (
+    "<!-- query: #salon -->\n\n"
+    "## [2026-09-20 Sun · Misc](../journals/2026-09-20.md#misc)\n"
+    "- booked a haircut #salon\n"
+    "<!-- /query 1234abcd -->\n"
+)
+HAIR_PAGE = "# Hair\n" + COPY + "- haircut every 3 weeks, Mario\n"
+SALON_PAGE = "# Salon\n" + COPY
+
+
+@pytest.fixture
+def pages_with_copies(notes: tuple[Path, Path]) -> tuple[Path, Path]:
+    org, _ = notes
+    _write(org / "pages" / "hair.md", HAIR_PAGE)
+    _write(org / "pages" / "salon.md", SALON_PAGE)
+    return notes
 
 
 # --- note_paths ---------------------------------------------------------------
@@ -135,6 +155,21 @@ def test_search_notes_pattern_starting_with_dash(notes):
     assert _file_headers(out) == ["org:journals/2026-09-20.md"]
 
 
+def test_search_notes_skips_query_results(pages_with_copies):
+    tool = SearchNotesTool(logger, *pages_with_copies)
+    out = tool.execute({"pattern": "haircut", "context": 1})
+    assert "org:pages/hair.md\n7:- haircut every 3 weeks, Mario" in out.split("\n\n")
+    assert "salon" not in out
+    counts = tool.execute({"pattern": "haircut", "files_only": True}).splitlines()
+    assert "org:pages/hair.md: 1" in counts
+    assert not any("salon" in line for line in counts)
+
+
+def test_search_notes_still_finds_query_lines(pages_with_copies):
+    out = SearchNotesTool(logger, *pages_with_copies).execute({"pattern": "query: #salon"})
+    assert out.count("\n2:<!-- query: #salon -->") == 2
+
+
 # --- list_files ---------------------------------------------------------------
 
 
@@ -201,6 +236,17 @@ def test_find_context_confines_paths(notes, tmp_path):
     assert "secret" in out  # named in the error...
     assert "haircut secret" not in out  # ...but never searched
     assert out.startswith("No valid directories to search")
+
+
+def test_find_context_looks_past_query_results(pages_with_copies):
+    out = FindContextTool(logger, *pages_with_copies).execute(
+        {"pattern": "haircut", "paths": ["org:pages"]}
+    )
+    results = {r["filename"]: r for r in yaml.safe_load(out)["results"]}
+    assert set(results) == {"org:pages/haircuts.md", "org:pages/hair.md"}
+    hair = results["org:pages/hair.md"]
+    assert hair["match_line"] == 7
+    assert hair["context"] == "# Hair\n\n- haircut every 3 weeks, Mario"
 
 
 # --- registry -----------------------------------------------------------------

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pkm_bridge.queries import strip_machine_blocks
+
 
 def split_frontmatter(lines: List[str]) -> tuple[Dict[str, str], int]:
     """Split a YAML frontmatter block off the top of a markdown file.
@@ -276,8 +278,10 @@ class NoteChunker:
         """
         chunks = []
 
+        # Backlinks lists are bookkeeping and query blocks hold copies of other
+        # notes; blanking both keeps them out of the index and line numbers valid.
         with open(file_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+            lines = strip_machine_blocks(f.read()).splitlines(keepends=True)
 
         # Frontmatter is metadata, not prose: embedding it would put a UUID in
         # every file's first chunk.  The title is worth keeping as context.
@@ -436,9 +440,10 @@ class NoteChunker:
             Chunk object or None if content too small
         """
         content_text = "".join(content_lines)
-        # Machine-maintained blocks (backlinks, tombstones) are bookkeeping,
-        # not prose; embedding them just adds dates and paths to the index.
-        content_text = re.sub(r"<!--.*?-->", "", content_text, flags=re.S).strip()
+        # HTML comments, such as tombstones, are bookkeeping rather than prose.
+        # Collapse the blank runs left by them and by blanked machine blocks.
+        content_text = re.sub(r"<!--.*?-->", "", content_text, flags=re.S)
+        content_text = re.sub(r"\n{3,}", "\n\n", content_text).strip()
 
         # Skip if too small
         token_count = self.estimate_tokens(content_text)

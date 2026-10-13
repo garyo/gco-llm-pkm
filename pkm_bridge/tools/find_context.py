@@ -23,10 +23,12 @@ if __name__ == "__main__":
     from pkm_bridge.logging_config import setup_logging
     from pkm_bridge.note_paths import RG_NOTE_FILTER, display_path, resolve_note_path
     from pkm_bridge.org_links import rewrite_org_links_to_markdown
+    from pkm_bridge.queries import query_result_lines
     from pkm_bridge.tools.base import BaseTool
 else:
     from ..note_paths import RG_NOTE_FILTER, display_path, resolve_note_path
     from ..org_links import rewrite_org_links_to_markdown
+    from ..queries import query_result_lines
     from .base import BaseTool
 
 
@@ -306,13 +308,14 @@ Default directories searched (if paths not provided):
             return None
 
     def _run_ripgrep(
-        self, pattern: str, paths: List[str]
+        self, pattern: str, paths: List[str], first_only: bool = True
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """Use ripgrep to find all matches efficiently.
 
         Args:
             pattern: Regex pattern to search for
             paths: List of directory paths to search
+            first_only: Only the first match in each file
 
         Returns:
             (match info dicts with file, line number and matched text,
@@ -329,12 +332,10 @@ Default directories searched (if paths not provided):
             "--json",  # JSON output for easy parsing
             "-i",  # Case insensitive
             *RG_NOTE_FILTER,
-            "--max-count",
-            "1",  # Only first match per file
-            "-e",
-            pattern,
         ]
-        cmd.extend(paths)
+        if first_only:
+            cmd += ["--max-count", "1"]
+        cmd += ["-e", pattern, *paths]
 
         try:
             result = subprocess.run(
@@ -378,6 +379,13 @@ Default directories searched (if paths not provided):
         except Exception as e:
             self.logger.error(f"Error running ripgrep: {e}")
             return [], str(e)
+
+    def _first_match_outside(
+        self, pattern: str, file_path: Path, skip: set[int]
+    ) -> Optional[Dict[str, Any]]:
+        """The first match in `file_path` that isn't on one of the 0-based lines in `skip`."""
+        matches, _ = self._run_ripgrep(pattern, [str(file_path)], first_only=False)
+        return next((m for m in matches if m["line_num"] - 1 not in skip), None)
 
     def execute(self, params: Dict[str, Any], context: Dict[str, Any] = None) -> str:
         """Execute context search.
@@ -452,6 +460,18 @@ Default directories searched (if paths not provided):
                 # Read file and extract context
                 with open(file_path, "r", encoding="utf-8") as f:
                     lines = [line.rstrip("\n\r") for line in f.readlines()]
+
+                # Query-block results copy other notes, which are searched in their
+                # own right: look past them for this note's first match, and keep
+                # them out of the context.
+                copied = query_result_lines("\n".join(lines))
+                if line_num in copied:
+                    match = self._first_match_outside(pattern, file_path, copied)
+                    if match is None:
+                        continue
+                    line_num = match["line_num"] - 1
+                for i in copied:
+                    lines[i] = ""
 
                 # Extract date from file
                 file_date = self._extract_date(file_path, lines, file_type)

@@ -48,6 +48,14 @@ class TestValidatePayload:
         problems = validate_payload("add_links", {"edits": [link_edit(find="- ")]}, editor)
         assert any("must be unique" in p for p in problems)
 
+    def test_anchor_in_query_results(self, editor, tmp_path):
+        (tmp_path / "logseq" / "pages" / "Jigs.md").write_text(
+            "<!-- query: jig -->\n- worked on the dovetail jig\n<!-- /query 1234abcd -->\n"
+        )
+        edit = {"file": "logseq:pages/Jigs.md", "find": "dovetail", "replace": "[[dovetail]]"}
+        problems = validate_payload("add_links", {"edits": [edit]}, editor)
+        assert any("query block" in p for p in problems)
+
     def test_identical_find_replace(self, editor):
         problems = validate_payload(
             "add_links", {"edits": [link_edit(replace="worked on the dovetail jig")]}, editor

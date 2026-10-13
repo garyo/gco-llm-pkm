@@ -5,6 +5,7 @@ from typing import Callable
 
 import pytest
 
+from pkm_bridge.anchored_edits import QueryBlockError, apply_edits
 from pkm_bridge.file_editor import FileEditor
 from pkm_bridge.journal import append_to_section, journal_rel_path, journal_template
 from pkm_bridge.tools.note_writing import EditNoteTool, JournalAppendTool
@@ -25,6 +26,31 @@ date: 2026-09-27
 ## Heartbeat (08:00)
 - gig at noon
 """
+
+# A page with two query blocks; between the markers are copies the server regenerates.
+QUERY_PAGE = """# Egypt
+Pyramids.
+
+# Journal
+<!-- query: Egypt -->
+
+## [2026-10-13 Tue · Travel Egypt](../journals/2026-10-13.md#travel-egypt)
+- [ ] Book flights
+
+### [Hotels](../pages/hotels.md)
+- Jolie Ville
+
+## [2026-10-06 Tue · Misc](../journals/2026-10-06.md#misc)
+Passport photos
+<!-- /query 1234abcd -->
+
+# Earlier trips
+<!-- query: Egypt before:2026-01-01 show:titles -->
+
+- [2025-03-02 Sun · Cairo](../journals/2025-03-02.md#cairo)
+<!-- /query 0badcafe -->
+"""
+FIRST_BLOCK = QUERY_PAGE[QUERY_PAGE.index("<!-- query") : QUERY_PAGE.index("\n\n# Earlier")]
 
 
 class RacingEditor(FileEditor):
@@ -100,6 +126,16 @@ class TestJournalHelpers:
 
     def test_crlf_preserved(self):
         assert append_to_section("# A\r\n- x\r\n", "- y", "A") == "# A\r\n- x\r\n- y\r\n"
+
+    def test_headings_copied_into_query_results_are_not_sections(self):
+        text = (
+            "# Travel\n- booked hotel\n<!-- query: Egypt -->\n\n"
+            "## [2026-10-06 Tue · Misc](2026-10-06.md#misc)\n- passport photos\n\n"
+            "### Hotels\n- Jolie Ville\n<!-- /query 1234abcd -->\n\n# Music\n- rehearsed\n"
+        )
+        out = append_to_section(text, "- flights", "Travel")
+        assert "<!-- /query 1234abcd -->\n- flights\n\n# Music" in out
+        assert append_to_section(text, "- 3 nights", "Hotels") == text + "\n# Hotels\n- 3 nights\n"
 
 
 class TestJournalAppend:
@@ -223,3 +259,56 @@ class TestEditNote:
         out = EditNoteTool(LOGGER, org).execute({"path": "org:../evil.md", "content": "x"})
         assert out.startswith("❌")
         assert not (org.parent / "evil.md").exists()
+
+
+class TestQueryBlockGuard:
+    @pytest.mark.parametrize(
+        "find, replace, source",
+        [
+            ("- [ ] Book flights", "- [x] Book flights", "2026-10-13.md#travel-egypt"),
+            ("- Jolie Ville", "- Sofitel", "2026-10-13.md#travel-egypt"),
+            ("Passport photos", "Passport photos taken", "2026-10-06.md#misc"),
+            ("Cairo]", "Giza]", "2025-03-02.md#cairo"),
+            ("<!-- query: Egypt -->", "<!-- query: Egypt -->\nMy note", None),
+            ("<!-- query: Egypt -->\n", "", None),  # would orphan the copies
+        ],
+    )
+    def test_edits_to_results_are_refused(self, find, replace, source):
+        with pytest.raises(QueryBlockError) as refused:
+            apply_edits(QUERY_PAGE, [{"find": find, "replace": replace}])
+        (problem,) = refused.value.problems
+        assert "a copy the server regenerates; edit the source instead" in problem
+        if source:
+            assert problem.endswith(f": ../journals/{source} (relative to this note)")
+        else:
+            assert "relative to this note" not in problem
+
+    @pytest.mark.parametrize(
+        "find, replace",
+        [
+            ("query: Egypt -->", "query: Egypt OR eclipse -->"),
+            (FIRST_BLOCK, ""),
+            ("# Journal\n" + FIRST_BLOCK + "\n\n", ""),
+            ("<!-- /query 1234abcd -->", "<!-- /query 1234abcd -->\nMy own line"),
+            (
+                "photos\n<!-- /query 1234abcd -->\n\n# Earlier",
+                "photos\n<!-- /query 1234abcd -->\n\n# Old",
+            ),
+        ],
+    )
+    def test_query_lines_whole_blocks_and_text_around_them_can_change(self, find, replace):
+        edits = [{"find": find, "replace": replace}]
+        assert apply_edits(QUERY_PAGE, edits) == QUERY_PAGE.replace(find, replace)
+
+    def test_edit_note_points_to_the_source_and_writes_nothing(self, org):
+        page = org / "pages" / "egypt.md"
+        page.write_text(QUERY_PAGE)
+        out = EditNoteTool(LOGGER, org).execute(
+            {"path": "pages/egypt.md", "edits": [{"find": "- [ ] Book", "replace": "- [x] Book"}]}
+        )
+        assert out == (
+            "❌ No changes made to org:pages/egypt.md:\n- edit 1: that would change a query "
+            "block's results, a copy the server regenerates; edit the source instead: "
+            "../journals/2026-10-13.md#travel-egypt (relative to this note)"
+        )
+        assert page.read_text() == QUERY_PAGE

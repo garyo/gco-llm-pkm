@@ -131,8 +131,8 @@ class QueryRefresher:
         ValueError if `path` isn't an existing org note, ConflictError if the note kept
         changing underneath every attempt to write it.
         """
-        current = self.editor.read_file(f"org:{self._relative(path)}", max_chars=None)
-        path, today = current["path"], self._today()
+        current = self.editor.read_file(f"org:{self.relative(path)}", max_chars=None)
+        path, today = current["path"], self.today()
         rel = path.removeprefix("org:")
         result = refresh_text(current["content"], rel, self.corpus, today)
         status = "unchanged"
@@ -152,16 +152,17 @@ class QueryRefresher:
 
     def preview(self, query: str, path: str) -> tuple[list[str], BlockReport]:
         """The result lines `query` would get in note `path`, without writing anything."""
-        return preview_results(query, self._relative(path), self.corpus, self._today())
+        return preview_results(query, self.relative(path), self.corpus, self.today())
 
-    def _relative(self, path: str) -> str:
+    def relative(self, path: str) -> str:
         """`path` ("org:…") relative to the org dir; ValueError unless it lies inside it."""
         if not path.startswith("org:"):
             raise ValueError(f"Expected an org note path such as org:pages/x.md, not {path!r}")
         full = self.editor._resolve_prefixed_path(path)
         return full.relative_to(self.org_dir.resolve()).as_posix()
 
-    def _today(self) -> date:
+    def today(self) -> date:
+        """Today in the notes' time zone: for date windows and completion stamps."""
         return datetime.now(self.tz).date()
 
     def _report_hand_edit(self, rel: str) -> None:

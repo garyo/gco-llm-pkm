@@ -528,8 +528,8 @@ except Exception as e:
     logger.warning(f"Failed to ensure curation task: {e}")
 
 # Initialize file editor
+from pkm_bridge.checkbox_api import handle_toggle
 from pkm_bridge.file_editor import FileEditor
-from pkm_bridge.queries import query_result_lines
 from pkm_bridge.queries.refresher import (
     QueryRefresher,
     auto_refresh_enabled,
@@ -2123,224 +2123,22 @@ def preview_query():
 # -------------------------
 
 
+def _ticktick_client():
+    """The connected TickTick client, or None."""
+    try:
+        return tool_registry.get_tool("ticktick_query").get_client()
+    except KeyError:  # TickTick isn't configured
+        return None
+
+
 @app.route("/api/checkbox/toggle", methods=["POST"])
 @require_auth
 @limiter.limit("30 per minute")
 def toggle_checkbox():
-    """Toggle a checkbox item in TickTick or a file.
-
-    Request body for TickTick:
-        {"type": "ticktick", "task_id": "abc123", "checked": true}
-
-    Request body for file:
-        {"type": "file", "path": "org:journals/2025-01-30.org",
-         "item_text": "Buy groceries", "line_hint": 42, "checked": true}
-
-    Returns:
-        {"status": "ok"} or {"error": "message"}
-    """
-    data = request.json
-    if not data:
-        return jsonify({"error": "Missing request body"}), 400
-
-    toggle_type = data.get("type")
-    checked = data.get("checked", True)
-
-    if toggle_type == "ticktick":
-        task_id = data.get("task_id")
-        if not task_id:
-            return jsonify({"error": "Missing task_id"}), 400
-
-        if not checked:
-            return jsonify({"error": "Unchecking TickTick tasks is not supported yet"}), 400
-
-        try:
-            ticktick_tool = tool_registry.get_tool("ticktick_query")
-            client = ticktick_tool.get_client()
-            if not client:
-                return jsonify({"error": "TickTick not connected"}), 503
-
-            client.complete_task(task_id)
-            logger.info(f"Checkbox toggle: completed TickTick task {task_id}")
-            return jsonify({"status": "ok"})
-        except KeyError:
-            return jsonify({"error": "TickTick tool not available"}), 503
-        except Exception as e:
-            logger.error(f"Checkbox toggle error (ticktick): {e}")
-            return jsonify({"error": str(e)}), 500
-
-    elif toggle_type == "file":
-        file_path = data.get("path")
-        item_text = data.get("item_text", "")
-        line_hint = data.get("line_hint", 0)
-
-        if not file_path:
-            return jsonify({"error": "Missing path"}), 400
-
-        logger.info(
-            f"Checkbox toggle (file): path={file_path!r}, item_text={item_text!r}, "
-            f"line_hint={line_hint}, checked={checked}"
-        )
-
-        try:
-            # Full content required: we rewrite the whole file after toggling.
-            file_data = file_editor.read_file(file_path, max_chars=None)
-            content = file_data["content"]
-            lines = content.split("\n")
-            # Query results are copies the server regenerates, so never a toggle's target.
-            copied = query_result_lines(content)
-            searchable = ["" if i in copied else line for i, line in enumerate(lines)]
-
-            # Search for matching checkbox line, starting from line_hint
-            # Line hints are 1-indexed
-            target_line = None
-            hint_idx = max(0, line_hint - 1)  # Convert to 0-indexed
-
-            def is_checkbox_line(line: str, want_checked: bool) -> bool:
-                """Check if a line is a toggleable item in the desired state."""
-                stripped = line.strip()
-                if want_checked:
-                    # Looking to check: find unchecked boxes or plain list items
-                    if stripped.startswith(("- [ ]", "+ [ ]")):
-                        return True
-                    if "TODO" in stripped and stripped.lstrip("*").strip().startswith("TODO"):
-                        return True
-                    # Plain list items (- text) that aren't already checked
-                    if stripped.startswith("- ") and not stripped.startswith(
-                        ("- [x]", "- [X]", "- [ ]")
-                    ):
-                        return True
-                else:
-                    # Looking to uncheck: find checked boxes
-                    if stripped.startswith(("- [x]", "- [X]", "+ [x]", "+ [X]")):
-                        return True
-                    if "DONE" in stripped and stripped.lstrip("*").strip().startswith("DONE"):
-                        return True
-                return False
-
-            def text_matches(line: str, text: str) -> bool:
-                """Check if item text appears in the line (case-insensitive, partial)."""
-                if not text:
-                    return True  # Empty text matches any checkbox
-                line_lower = line.lower()
-                text_lower = text.lower()
-                # Exact substring match
-                if text_lower in line_lower:
-                    return True
-                # Try matching first few words (Claude may paraphrase)
-                words = text_lower.split()
-                if len(words) >= 2 and words[0] in line_lower and words[1] in line_lower:
-                    return True
-                return False
-
-            def search_lines(match_text: bool) -> int | None:
-                """Search for checkbox, optionally requiring text match."""
-                # 1. Check exact line_hint first
-                if 0 <= hint_idx < len(lines):
-                    if is_checkbox_line(searchable[hint_idx], checked):
-                        if not match_text or text_matches(searchable[hint_idx], item_text):
-                            return hint_idx
-
-                # 2. Expand search +/- 10 lines from hint
-                for offset in range(1, 11):
-                    for idx in [hint_idx + offset, hint_idx - offset]:
-                        if 0 <= idx < len(lines) and is_checkbox_line(searchable[idx], checked):
-                            if not match_text or text_matches(searchable[idx], item_text):
-                                return idx
-
-                # 3. Full file scan
-                for idx, line in enumerate(searchable):
-                    if is_checkbox_line(line, checked):
-                        if not match_text or text_matches(line, item_text):
-                            return idx
-                return None
-
-            target_line = search_lines(match_text=True)
-
-            if target_line is None:
-                # Check if the item is already in the desired state
-                def is_already_done(line: str, want_checked: bool) -> bool:
-                    stripped = line.strip()
-                    if want_checked:
-                        return stripped.startswith(("- [x]", "- [X]", "+ [x]", "+ [X]")) or (
-                            "DONE" in stripped and stripped.lstrip("*").strip().startswith("DONE")
-                        )
-                    else:
-                        return (
-                            stripped.startswith(("- [ ]", "+ [ ]"))
-                            or stripped.startswith("- ")
-                            and not stripped.startswith(("- [x]", "- [X]"))
-                        )
-
-                # Search for already-toggled match using same strategy
-                for idx in [hint_idx] + [
-                    i for off in range(1, 11) for i in (hint_idx + off, hint_idx - off)
-                ]:
-                    if (
-                        0 <= idx < len(lines)
-                        and is_already_done(searchable[idx], checked)
-                        and text_matches(searchable[idx], item_text)
-                    ):
-                        logger.info(
-                            f"Checkbox already in desired state at line {idx+1} in {file_path}"
-                        )
-                        return jsonify({"status": "ok"})
-
-                if item_text and any(text_matches(lines[i], item_text) for i in copied):
-                    return jsonify(
-                        {
-                            "error": "That item is a copy in a query block's results; "
-                            "check it off in the note it came from"
-                        }
-                    ), 409
-
-                # Truly not found
-                start = max(0, hint_idx - 3)
-                end = min(len(lines), hint_idx + 4)
-                nearby = [f"  {i+1}: {lines[i]!r}" for i in range(start, end)]
-                logger.warning(
-                    f"Checkbox not found in {file_path} (hint line {line_hint}, "
-                    f"text={item_text!r}, checked={checked}). "
-                    f"Lines {start+1}-{end} near hint:\n" + "\n".join(nearby)
-                )
-                return jsonify({"error": "Checkbox item not found in file"}), 404
-
-            # Toggle the checkbox/list item
-            line = lines[target_line]
-            stripped = line.strip()
-            if checked:
-                if "- [ ]" in line:
-                    line = line.replace("- [ ]", "- [X]", 1)
-                elif "TODO" in stripped:
-                    line = line.replace("TODO", "DONE", 1)
-                elif stripped.startswith("- ") and not stripped.startswith(("- [", "- *")):
-                    # Plain list item: insert [X] after the dash
-                    line = line.replace("- ", "- [X] ", 1)
-            else:
-                if "- [x]" in line or "- [X]" in line:
-                    line = line.replace("- [x]", "- [ ]", 1)
-                    line = line.replace("- [X]", "- [ ]", 1)
-                elif "DONE" in stripped:
-                    line = line.replace("DONE", "TODO", 1)
-
-            lines[target_line] = line
-            new_content = "\n".join(lines)
-
-            file_editor.write_file(file_path, new_content, base_hash=file_data["hash"])
-            logger.info(
-                f"Checkbox toggle: {'checked' if checked else 'unchecked'} "
-                f"line {target_line + 1} in {file_path}"
-            )
-            return jsonify({"status": "ok"})
-
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
-        except Exception as e:
-            logger.error(f"Checkbox toggle error (file): {e}")
-            return jsonify({"error": str(e)}), 500
-
-    else:
-        return jsonify({"error": f"Unknown toggle type: {toggle_type}"}), 400
+    """Tick or untick a TickTick task or an item in a note, through to its source for a copy
+    in query results. Request bodies are described in pkm_bridge/checkbox_api.py."""
+    body, status = handle_toggle(query_refresher, _ticktick_client, request.get_json(silent=True))
+    return jsonify(body), status
 
 
 # -------------------------

@@ -21,14 +21,15 @@ EDITS_SCHEMA = {
             "file": {
                 "type": "string",
                 "description": (
-                    "Prefixed path, e.g. 'logseq:pages/Foo.md', "
-                    "'org:notes.org' or 'org:notes.md'"
+                    "Prefixed path, e.g. 'logseq:pages/Foo.md', 'org:notes.org' or 'org:notes.md'"
                 ),
             },
             "find": FIND_SCHEMA,
             "replace": {
                 "type": "string",
-                "description": "Replacement text (typically the same text with [[links]] added)",
+                "description": (
+                    "Replacement text (typically the same text with relative markdown links added)"
+                ),
             },
         },
         "required": ["file", "find", "replace"],
@@ -106,7 +107,8 @@ class ProposeNoteOrganizationTool(_ProposalToolBase):
         return (
             "Propose a note-organization change for the user to review later. "
             "Does NOT edit any files — it files a proposal. "
-            "kind='add_links': supply 'edits' adding [[links]] to existing notes. "
+            "kind='add_links': supply 'edits' adding relative markdown links "
+            "([Travel](../pages/Travel.md)) to existing notes. "
             "kind='new_page': supply 'page_file' + 'page_content' (the COMPLETE draft — "
             "the user reviews and publishes it as-is), plus optional 'edits' for backlinks "
             "and for replacing journal content that the new page now covers. "

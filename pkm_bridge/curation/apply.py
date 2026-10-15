@@ -3,12 +3,12 @@
 Payload shapes (stored in NoteProposal.payload):
 
 add_links:
-    {"edits": [{"file": "logseq:pages/Foo.md",
+    {"edits": [{"file": "org:journals/2026-06-03.md",
                 "find": "exact text currently in the file",
-                "replace": "same text with [[links]] added"}, ...]}
+                "replace": "same text with [a link](../pages/Foo.md) added"}, ...]}
 
 new_page:
-    {"page": {"file": "logseq:pages/New Page.md", "content": "full draft"},
+    {"page": {"file": "org:pages/new-page.md", "content": "full draft"},
      "edits": [...]}   # backlinks and journal excisions, same shape as add_links
 
 insight:

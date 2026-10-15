@@ -39,9 +39,25 @@ def test_prompts_carry_the_shared_note_rules(config, name):
     text = config.render_prompt(name)
     for rule in ("journal_append", "edit_note", "note_to_self", "## Heartbeat", "read-only"):
         assert rule in text
-    for syntax in ("<!-- query: … -->", "show:titles", "is:todo", "show:list", "✅ YYYY-MM-DD"):
+    for syntax in (
+        "<!-- query: … -->",
+        "show:titles",
+        "is:todo",
+        "show:list",
+        "✅ YYYY-MM-DD",
+        "../journals/2026-06-04.md",
+        "%20",
+        "[[wiki]]",
+    ):
         assert syntax in text
-    for stale in ("create-org-journal", "add_journal_note", "two months", "PRIMARY"):
+    for stale in (
+        "create-org-journal",
+        "add_journal_note",
+        "two months",
+        "PRIMARY",
+        "at the top level",
+        "adding [[links]]",
+    ):
         assert stale not in text
 
 

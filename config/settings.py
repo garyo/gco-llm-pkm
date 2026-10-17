@@ -84,7 +84,7 @@ class Config:
             raise ValueError("ANTHROPIC_API_KEY environment variable must be set")
 
         # Model Selection
-        self.model = os.getenv("MODEL", "claude-haiku-4-5")
+        self.model = os.getenv("MODEL", "haiku")
 
         # Directory Paths
         self.org_dir = Path(os.getenv("ORG_DIR", "~/Documents/org-agenda")).expanduser()

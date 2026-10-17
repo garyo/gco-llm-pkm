@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -151,8 +152,10 @@ def supports_caching(model: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Cost rates for Anthropic models (per million tokens, 5-minute cache writes)
-# Models missing from the table are priced from LiteLLM's price map, which it
-# refreshes from upstream at startup. Non-Anthropic models use
+# Models missing from the table, including new releases, are priced from
+# LiteLLM's price map, which it refreshes from upstream at startup. The table
+# only needs an edit when a listed model's price changes, or to override
+# LiteLLM where it is wrong. Non-Anthropic models use
 # litellm.completion_cost() instead.
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
 # ---------------------------------------------------------------------------
@@ -165,9 +168,12 @@ def _rates(input_: float, cache_write: float, cache_read: float, output: float) 
 ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
     # _rates(input, cache write, cache read, output)
     "claude-haiku-4-5": _rates(1.00, 1.25, 0.10, 5.00),
+    # Prompts up to 100K tokens; longer ones cost 5x, which this doesn't model.
+    "claude-haiku-5-5": _rates(0.10, 0.125, 0.01, 0.50),
     "claude-sonnet-4-5": _rates(3.00, 3.75, 0.30, 15.00),
     "claude-sonnet-4-6": _rates(3.00, 3.75, 0.30, 15.00),
     "claude-sonnet-5": _rates(2.00, 2.50, 0.20, 10.00),
+    "claude-sonnet-5-5": _rates(2.00, 2.50, 0.10, 10.00),
     "claude-opus-4-5": _rates(5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-6": _rates(5.00, 6.25, 0.50, 25.00),
     "claude-opus-4-7": _rates(5.00, 6.25, 0.50, 25.00),
@@ -182,6 +188,7 @@ ANTHROPIC_COST_RATES: dict[str, dict[str, float]] = {
 # table entry over-reports cost rather than hiding it.
 _FALLBACK_COST_RATES = max(ANTHROPIC_COST_RATES.values(), key=lambda r: r["output"])
 _warned_unpriced_models: set[str] = set()
+_DATE_SUFFIX = re.compile(r"-\d{8}$")
 _LITELLM_RATE_KEYS = (
     "input_cost_per_token",
     "cache_creation_input_token_cost",
@@ -200,15 +207,11 @@ def _litellm_rates(model: str) -> dict[str, float] | None:
 def get_cost_rates(model: str) -> dict[str, float]:
     """Resolve the per-million-token rates for a model.
 
-    Matches the model ID exactly or, for dated snapshots such as
-    ``claude-haiku-4-5-20251001``, by its longest known prefix; failing
-    that, uses LiteLLM's price map.
+    Matches the model ID, less any date suffix (``claude-haiku-4-5-20251001``),
+    against the table; failing that, uses LiteLLM's price map.
     """
-    if model in ANTHROPIC_COST_RATES:
-        return ANTHROPIC_COST_RATES[model]
-    prefixes = [known for known in ANTHROPIC_COST_RATES if model.startswith(known + "-")]
-    if prefixes:
-        return ANTHROPIC_COST_RATES[max(prefixes, key=len)]
+    if rates := ANTHROPIC_COST_RATES.get(_DATE_SUFFIX.sub("", model)):
+        return rates
     if rates := _litellm_rates(model):
         return rates
     if model not in _warned_unpriced_models:

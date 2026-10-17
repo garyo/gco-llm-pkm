@@ -28,7 +28,13 @@ def test_sonnet5_standard_pricing():
 
 @pytest.mark.parametrize(
     "model, cache_read",
-    [("claude-opus-5-5", 0.20), ("claude-fable-5-1", 0.25), ("claude-fable-5", 1.00)],
+    [
+        ("claude-opus-5-5", 0.20),
+        ("claude-sonnet-5-5", 0.10),
+        ("claude-haiku-5-5", 0.01),
+        ("claude-fable-5-1", 0.25),
+        ("claude-fable-5", 1.00),
+    ],
 )
 def test_models_with_nonstandard_cache_reads(model, cache_read):
     assert models.get_cost_rates(model)["cache_read"] == cache_read
@@ -47,11 +53,24 @@ def test_cost_includes_cache_tokens_and_web_searches():
     assert cost == pytest.approx(7.37)
 
 
-def test_dated_snapshot_uses_longest_known_prefix():
+def test_dated_snapshot_uses_its_base_model_rates():
     assert models.get_cost_rates("claude-haiku-4-5-20251001") == models.get_cost_rates(
         "claude-haiku-4-5"
     )
-    assert models.get_cost_rates("claude-opus-5-5") != models.get_cost_rates("claude-opus-5")
+
+
+def test_new_version_is_priced_by_litellm_not_its_predecessor():
+    price_map = {
+        "input_cost_per_token": 1e-6,
+        "cache_creation_input_token_cost": 1.25e-6,
+        "cache_read_input_token_cost": 5e-8,
+        "output_cost_per_token": 4e-6,
+    }
+    with patch.dict(models.litellm.model_cost, {"claude-sonnet-5-9": price_map}):
+        rates = models.get_cost_rates("claude-sonnet-5-9")
+    assert rates == pytest.approx(
+        {"input": 1.00, "cache_write": 1.25, "cache_read": 0.05, "output": 4.00}
+    )
 
 
 def test_unknown_model_is_costed_conservatively_and_warns(caplog):
